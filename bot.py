@@ -77,11 +77,20 @@ DEFAULT_NOTIF_MIN: int = _CFG["notifications"]["default_minutes_before"]
 for _d in (DATA_DIR, LOGS_DIR, GEN_DIR):
     _d.mkdir(parents=True, exist_ok=True)
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
+_LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+_log_file = LOGS_DIR / "bot.log"
+
+# Console handler — always on
+_console_handler = logging.StreamHandler()
+_console_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+
+# File handler — appends across restarts
+_file_handler = logging.FileHandler(_log_file, mode="a", encoding="utf-8")
+_file_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+
+logging.basicConfig(level=logging.INFO, handlers=[_console_handler, _file_handler])
 logger = logging.getLogger(__name__)
+logger.info("---- Bot process started ----")
 
 
 class _GetUpdatesFilter(logging.Filter):
@@ -246,7 +255,7 @@ def user_info(update: Update) -> tuple[int, str | None, str]:
 
 async def get_all_users() -> list[dict[str, Any]]:
     data = await users_cache.get()
-    return data.get("users", []) if data else []
+    return data.get("users") or [] if data else []
 
 
 async def save_users(users: list[dict[str, Any]]) -> None:
@@ -266,7 +275,7 @@ async def save_events_data(data: dict[str, Any]) -> None:
 
 async def get_appointments() -> list[dict[str, Any]]:
     data = await appts_cache.get()
-    return data.get("appointments", []) if data else []
+    return data.get("appointments") or [] if data else []
 
 
 async def save_appointments(appts: list[dict[str, Any]]) -> None:

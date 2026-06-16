@@ -1,8 +1,8 @@
 officials:
-- id: pastor_crowdy
+- chat_id: 516225991
+  id: pastor_crowdy
   name: Pastor Christel Williams Crowdy
   telegram_username: OneMorah
-
 - chat_id: 474108062
   id: bishop_eaves
   name: Bishop Samuel Eaves, II
