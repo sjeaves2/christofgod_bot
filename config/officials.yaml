@@ -1,11 +1,8 @@
-# Officials available for appointment requests.
-# Either telegram_username or phone (or both) may be provided.
-# The bot must receive a /start from the official to capture their chat_id.
 officials:
-  - id: "pastor_crowdy"
-    name: "Pastor Christel Williams Crowdy"
-    phone: "7572863574"
-
-  - id: "bishop_eaves"
-    name: "Bishop Samuel Eaves, II"
-    telegram_username: "sjeaves2"
+- id: pastor_crowdy
+  name: Pastor Christel Williams Crowdy
+  phone: '7572863574'
+- chat_id: 474108062
+  id: bishop_eaves
+  name: Bishop Samuel Eaves, II
+  telegram_username: sjeaves2

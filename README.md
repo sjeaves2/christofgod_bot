@@ -157,7 +157,11 @@ pip install -r requirements.txt
 
 ### Configuration
 
-**1. Set your bot token** in `config/config.yaml`:
+**1. Copy the example config and set your bot token:**
+```bash
+cp config/config.yaml.example config/config.yaml
+```
+Then edit `config/config.yaml`:
 ```yaml
 bot:
   token: "YOUR_BOT_TOKEN_HERE"
@@ -208,7 +212,8 @@ detects file changes and reloads the cache within 60 seconds automatically.
 
 | File | Purpose | Committed to git |
 |---|---|---|
-| `config/config.yaml` | Bot configuration | ✅ (token placeholder only) |
+| `config/config.yaml` | Bot configuration (live token) | ❌ (gitignored) |
+| `config/config.yaml.example` | Safe template for the repo | ✅ (token placeholder only) |
 | `config/admins.yaml` | Admin user list | ✅ |
 | `config/officials.yaml` | Officials list | ✅ |
 | `data/events.yaml` | Special events and announcements | ✅ |

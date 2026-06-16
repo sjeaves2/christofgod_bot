@@ -1,4 +1,4 @@
-# Kingdom Events Bot — Setup Guide
+# Christ of God Ministries Bot — Setup Guide
 
 ## 1. Prerequisites
 
@@ -16,21 +16,21 @@ pip install -r requirements.txt
 
 ## 3. Configure the bot
 
-**`config/config.yaml`** — set your bot token and timezone:
+**`config.yaml`** — set your bot token and timezone:
 ```yaml
 bot:
   token: "12345678:AABBCCaabbcc..."
   timezone: "America/New_York"   # IANA tz name
 ```
 
-**`config/admins.yaml`** — add admin Telegram usernames (without @):
+**`admins.yaml`** — add admin Telegram usernames (without @):
 ```yaml
 admins:
   - username: "sjeaves2"
     display_name: "Bishop Samuel Eaves, II"
 ```
 
-**`config/officials.yaml`** — officials available for appointments.  
+**`officials.yaml`** — officials available for appointments.  
 Each official must send `/start` to the bot at least once so their chat_id is captured.
 
 ## 4. Run
