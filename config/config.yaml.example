@@ -1,0 +1,32 @@
+# ============================================================================
+# config.yaml.example — safe template committed to the repository.
+#
+# To use:
+#   cp config/config.yaml.example config/config.yaml
+#   # then set bot.token to your BotFather token in config/config.yaml
+#
+# config/config.yaml is gitignored.  When you change any non-sensitive setting
+# here (timezone, display_name, notification defaults, etc.), mirror that
+# change in config/config.yaml.example and commit config.yaml.example.
+# Never put the real token in this file.
+# ============================================================================
+
+bot:
+  # Obtain a token from @BotFather on Telegram
+  token: "YOUR_BOT_TOKEN_HERE"
+  # IANA timezone name for all service times
+  timezone: "America/New_York"
+  # Name shown in welcome messages
+  display_name: "Christ of God Bot"
+
+notifications:
+  default_minutes_before: 90
+
+paths:
+  data_dir: "data"
+  logs_dir: "logs"
+  generated_dir: "generated"
+
+log:
+  # Keep log records for this many days (6 months ≈ 180 days)
+  retention_days: 180

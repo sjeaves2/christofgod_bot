@@ -83,6 +83,47 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+class _GetUpdatesFilter(logging.Filter):
+    """Suppress repetitive successful getUpdates log lines from httpx.
+
+    Allows through:
+      - The very first getUpdates request (replaced with a friendlier message)
+      - Any response with an HTTP 4xx or 5xx status code
+    Suppresses everything else that mentions getUpdates.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._seen_first = False
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        if "getUpdates" not in msg:
+            return True  # unrelated record — pass through unchanged
+
+        # Check for error status codes (4xx / 5xx) in the httpx message format:
+        # 'HTTP Request: POST ... getUpdates "HTTP/1.1 4xx ..."'
+        import re
+        status_match = re.search(r'"HTTP/[\d.]+ (\d{3})', msg)
+        if status_match and int(status_match.group(1)) >= 400:
+            return True  # always log errors
+
+        if not self._seen_first:
+            self._seen_first = True
+            # Replace the raw httpx message with a friendlier one-time notice
+            record.msg = (
+                "Long polling started — using getUpdates to check for incoming messages"
+            )
+            record.args = ()
+            return True
+
+        return False  # suppress subsequent successful getUpdates calls
+
+
+_get_updates_filter = _GetUpdatesFilter()
+logging.getLogger("httpx").addFilter(_get_updates_filter)
+
 activity = ActivityLogger(LOGS_DIR, retention_days=LOG_RETENTION, tz=TZ)
 
 # ---------------------------------------------------------------------------
@@ -247,11 +288,17 @@ def _merge_special_events(
     announcements_map: dict[str, list[str]],
     days_ahead: int = 90,
 ) -> list[dict[str, Any]]:
-    """Expand special_events definitions into concrete upcoming event dicts."""
+    """Expand special_events definitions into concrete upcoming event dicts.
+
+    sunday_morning_prayer is excluded here because hebrew_calendar.py already
+    generates it via sunday_prayer_events(), avoiding duplicates.
+    """
     now = now_tz()
     cutoff = now + timedelta(days=days_ahead)
     results: list[dict[str, Any]] = []
     for defn in special_defs:
+        if defn.get("id") == "sunday_morning_prayer":
+            continue
         if not defn.get("active", True):
             continue
         etype = defn.get("type", "once")
@@ -518,6 +565,7 @@ async def cmd_events(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         if ev.get("announcements"):
             for a in ev["announcements"]:
                 lines.append(f"   ⚠️ {a}")
+        lines.append("")
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
 
 

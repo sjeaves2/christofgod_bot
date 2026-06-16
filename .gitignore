@@ -1,9 +1,8 @@
 # Virtual environment
 .venv/
 
-# Bot token — never commit this
-# Edit config.yaml and set bot.token before running
-# config.yaml is committed but token value should be replaced before push
+# Bot configuration — contains the live token, never commit this
+config/config.yaml
 
 # Runtime-generated files
 generated/
