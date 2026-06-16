@@ -1,0 +1,38 @@
+# Special (Gregorian-calendar) events managed by administrators.
+# Convocation events are computed from Hebrew calendar in hebrew_calendar.py
+# and are NOT stored here; however, per-event urgent announcements are stored
+# in convocation_announcements below.
+#
+# weekday values (for type: weekly): 0=Monday … 6=Sunday
+# notification_minutes: how many minutes before the event to send the notification
+
+special_events:
+  - id: "sunday_morning_prayer"
+    name: "Sunday Morning Prayer"
+    type: "weekly"
+    weekday: 6
+    time: "06:00"
+    duration_minutes: 20
+    notification_minutes: 720
+    description: "Weekly Sunday Morning Prayer service — all are welcome."
+    active: true
+
+# One-time and other recurring special events added by admins go here.
+# Example structure (admin-added via /addevent):
+# - id: "revival_2025"
+#   name: "Spring Revival"
+#   type: "once"
+#   date: "2025-04-15"
+#   time: "19:00"
+#   duration_minutes: 120
+#   notification_minutes: 90
+#   description: "Annual spring revival service."
+#   active: true
+
+# Urgent announcements for convocation events (keyed by convocation key).
+# These are included in the outgoing notification for that service.
+# Example:
+# convocation_announcements:
+#   sabbath_eve_2025-04-11:
+#     - "⚠️ Venue change: service will be held at 123 Main St due to repairs."
+convocation_announcements: {}

@@ -1,0 +1,23 @@
+# Virtual environment
+.venv/
+
+# Bot token — never commit this
+# Edit config.yaml and set bot.token before running
+# config.yaml is committed but token value should be replaced before push
+
+# Runtime-generated files
+generated/
+logs/
+
+# User and appointment data (contains personal information)
+data/users.yaml
+data/appointments.yaml
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# macOS
+.DS_Store
