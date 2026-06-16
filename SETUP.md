@@ -16,21 +16,21 @@ pip install -r requirements.txt
 
 ## 3. Configure the bot
 
-**`config.yaml`** — set your bot token and timezone:
+**`config/config.yaml`** — set your bot token and timezone:
 ```yaml
 bot:
   token: "12345678:AABBCCaabbcc..."
   timezone: "America/New_York"   # IANA tz name
 ```
 
-**`admins.yaml`** — add admin Telegram usernames (without @):
+**`config/admins.yaml`** — add admin Telegram usernames (without @):
 ```yaml
 admins:
   - username: "sjeaves2"
     display_name: "Bishop Samuel Eaves, II"
 ```
 
-**`officials.yaml`** — officials available for appointments.  
+**`config/officials.yaml`** — officials available for appointments.  
 Each official must send `/start` to the bot at least once so their chat_id is captured.
 
 ## 4. Run

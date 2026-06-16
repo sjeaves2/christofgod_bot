@@ -6,8 +6,8 @@ manages appointment requests between congregants and officials, and provides
 admin tools for event management.
 
 Usage:
-  1. Copy config.yaml and set bot.token
-  2. Add admin usernames to admins.yaml
+  1. Copy config/config.yaml and set bot.token
+  2. Add admin usernames to config/admins.yaml
   3. pip install -r requirements.txt
   4. python bot.py
 """
@@ -60,8 +60,9 @@ from pdf_generator import generate_user_list_pdf
 # ---------------------------------------------------------------------------
 
 BASE_DIR = Path(__file__).parent
+CONFIG_DIR = BASE_DIR / "config"
 
-with open(BASE_DIR / "config.yaml", encoding="utf-8") as _f:
+with open(CONFIG_DIR / "config.yaml", encoding="utf-8") as _f:
     _CFG = yaml.safe_load(_f)
 
 BOT_TOKEN: str = _CFG["bot"]["token"]
@@ -94,7 +95,7 @@ appts_cache = FileCache(DATA_DIR / "appointments.yaml")
 
 # Admins are loaded once at startup and kept in memory.
 # Each entry may carry a `username`, a `phone`, or both.
-_admins_raw = yaml.safe_load((BASE_DIR / "admins.yaml").read_text()) or {}
+_admins_raw = yaml.safe_load((CONFIG_DIR / "admins.yaml").read_text()) or {}
 ADMIN_USERNAMES: set[str] = {
     a["username"].lstrip("@").lower()
     for a in _admins_raw.get("admins", [])
@@ -109,7 +110,7 @@ ADMIN_PHONES: set[str] = {
 _admin_chat_ids: set[int] = set()
 
 # Officials
-_officials_raw = yaml.safe_load((BASE_DIR / "officials.yaml").read_text()) or {}
+_officials_raw = yaml.safe_load((CONFIG_DIR / "officials.yaml").read_text()) or {}
 OFFICIALS: list[dict[str, Any]] = _officials_raw.get("officials", [])
 
 # ---------------------------------------------------------------------------
@@ -475,7 +476,7 @@ async def _register_official_if_known(
             changed = True
     if changed:
         raw = {"officials": OFFICIALS}
-        with open(BASE_DIR / "officials.yaml", "w", encoding="utf-8") as fh:
+        with open(CONFIG_DIR / "officials.yaml", "w", encoding="utf-8") as fh:
             yaml.dump(raw, fh, default_flow_style=False, allow_unicode=True)
 
 
