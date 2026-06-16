@@ -1,6 +1,6 @@
 # Christ of God Bot
 
-A Telegram bot for the Christ of God congregation that sends automated reminders for
+A Telegram bot for the Christ of God Ministries congregation that sends automated reminders for
 Hebrew-calendar convocations and special services, manages appointment requests between
 congregants and church officials, and provides administrators with tools for calendar
 and member management.
