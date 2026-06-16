@@ -1,6 +1,6 @@
 """
-Kingdom Events Telegram Bot
-===========================
+Christ of God Ministries Telegram Bot
+=====================================
 Sends notifications for Hebrew-calendar convocations and special events,
 manages appointment requests between congregants and officials, and provides
 admin tools for event management.
@@ -1103,7 +1103,7 @@ async def ap_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     await update.message.reply_text(
         f"✅ *Request submitted!* (ID: `{appt_id}`)\n"
-        "You will be notified when your request is accepted, declined, or a new time is suggested.",
+        "I will notified you when your request is accepted, declined, or a new time is suggested.",
         parse_mode=ParseMode.MARKDOWN,
     )
 
