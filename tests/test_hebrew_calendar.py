@@ -12,9 +12,11 @@ from hebrew_calendar import (
     BIBLICAL_MONTH,
     CONVOCATION_DEFS,
     _full_name,
+    _phase_key,
     all_upcoming_events,
     convocations_for_hebrew_year,
     sabbath_events,
+    service_phases,
     sunday_prayer_events,
     upcoming_convocation_events,
 )
@@ -379,3 +381,60 @@ class TestAllUpcomingEvents:
         events_7 = all_upcoming_events(TZ, days_ahead=7)
         events_60 = all_upcoming_events(TZ, days_ahead=60)
         assert len(events_60) > len(events_7)
+
+
+# ---------------------------------------------------------------------------
+# Per-service (per-phase) links
+# ---------------------------------------------------------------------------
+
+class TestPhaseKeys:
+    def test_phase_key_format(self):
+        assert _phase_key("sabbath", "Eve") == "sabbath::Eve"
+
+    def test_sabbath_events_carry_phase_key(self):
+        evs = sabbath_events(TZ, days_ahead=21)
+        keys = {e["phase_key"] for e in evs}
+        assert keys <= {"sabbath::Eve", "sabbath::Morning"}
+        assert keys  # at least one within three weeks
+
+    def test_eve_and_morning_have_distinct_phase_keys(self):
+        evs = sabbath_events(TZ, days_ahead=21)
+        eve = next((e for e in evs if e["label"] == "Eve"), None)
+        morning = next((e for e in evs if e["label"] == "Morning"), None)
+        if eve and morning:
+            assert eve["phase_key"] != morning["phase_key"]
+
+    def test_convocation_events_carry_phase_key(self):
+        # Use a Hebrew year far enough to always produce events.
+        evs = convocations_for_hebrew_year(5786, TZ)
+        assert all("phase_key" in e for e in evs)
+
+    def test_convocation_phase_key_matches_convocation_and_label(self):
+        evs = convocations_for_hebrew_year(5786, TZ)
+        for e in evs:
+            assert e["phase_key"] == f"{e['convocation_key']}::{e['label']}"
+
+
+class TestServicePhases:
+    def test_includes_sabbath_eve_and_morning(self):
+        keys = {p["phase_key"] for p in service_phases()}
+        assert "sabbath::Eve" in keys
+        assert "sabbath::Morning" in keys
+
+    def test_includes_every_convocation_service(self):
+        keys = {p["phase_key"] for p in service_phases()}
+        for defn in CONVOCATION_DEFS:
+            for svc in defn["services"]:
+                assert f"{defn['key']}::{svc['label']}" in keys
+
+    def test_all_phase_keys_unique(self):
+        keys = [p["phase_key"] for p in service_phases()]
+        assert len(keys) == len(set(keys))
+
+    def test_every_phase_has_display(self):
+        assert all(p.get("display") for p in service_phases())
+
+    def test_sabbath_listed_first(self):
+        phases = service_phases()
+        assert phases[0]["phase_key"] == "sabbath::Eve"
+        assert phases[1]["phase_key"] == "sabbath::Morning"

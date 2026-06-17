@@ -125,6 +125,33 @@ def _full_name(name: str, phase: str | None, label: str) -> str:
     return f"God's Holy Convocation--{name}{phase_str} {label}"
 
 
+def _phase_key(convocation_key: str, label: str) -> str:
+    """Stable, date-independent identifier for a single service (phase).
+
+    Used to attach a persistent per-service join link, e.g. "sabbath::Eve".
+    """
+    return f"{convocation_key}::{label}"
+
+
+def service_phases() -> list[dict[str, str]]:
+    """Enumerate every convocation/Sabbath service that can carry a join link.
+
+    Returns dicts with a stable ``phase_key`` and a human-readable ``display``.
+    """
+    phases: list[dict[str, str]] = [
+        {"phase_key": _phase_key("sabbath", "Eve"), "display": "Sabbath — Eve (Friday)"},
+        {"phase_key": _phase_key("sabbath", "Morning"), "display": "Sabbath — Morning (Saturday)"},
+    ]
+    for defn in CONVOCATION_DEFS:
+        phase_str = f" {defn['phase']}" if defn.get("phase") else ""
+        for svc in defn["services"]:
+            phases.append({
+                "phase_key": _phase_key(defn["key"], svc["label"]),
+                "display": f"{defn['name']}{phase_str} — {svc['label']}",
+            })
+    return phases
+
+
 def convocations_for_hebrew_year(
     hebrew_year: int, tz: pytz.BaseTzInfo
 ) -> list[dict[str, Any]]:
@@ -149,6 +176,7 @@ def convocations_for_hebrew_year(
             events.append(
                 {
                     "key": f"{defn['key']}_{svc['label'].lower().replace(' ', '_')}_{svc_date.isoformat()}",
+                    "phase_key": _phase_key(defn["key"], svc["label"]),
                     "name": full,
                     "convocation_key": defn["key"],
                     "convocation_name": defn["name"],
@@ -193,6 +221,7 @@ def sabbath_events(tz: pytz.BaseTzInfo, days_ahead: int = 90) -> list[dict[str, 
             if svc_dt > now:
                 events.append({
                     "key": f"sabbath_eve_{current.isoformat()}",
+                    "phase_key": _phase_key("sabbath", "Eve"),
                     "name": "God's Holy Convocation--Sabbath Eve",
                     "convocation_key": "sabbath",
                     "convocation_name": "Sabbath",
@@ -210,6 +239,7 @@ def sabbath_events(tz: pytz.BaseTzInfo, days_ahead: int = 90) -> list[dict[str, 
             if svc_dt > now:
                 events.append({
                     "key": f"sabbath_morning_{current.isoformat()}",
+                    "phase_key": _phase_key("sabbath", "Morning"),
                     "name": "God's Holy Convocation--Sabbath Morning",
                     "convocation_key": "sabbath",
                     "convocation_name": "Sabbath",
