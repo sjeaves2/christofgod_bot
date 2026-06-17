@@ -418,15 +418,13 @@ def _merge_special_events(
 ) -> list[dict[str, Any]]:
     """Expand special_events definitions into concrete upcoming event dicts.
 
-    sunday_morning_prayer is excluded here because hebrew_calendar.py already
-    generates it via sunday_prayer_events(), avoiding duplicates.
+    All special events (including the weekly Sunday Morning Prayer) are driven
+    from events.yaml here; convocations/Sabbath come from hebrew_calendar.py.
     """
     now = now_tz()
     cutoff = now + timedelta(days=days_ahead)
     results: list[dict[str, Any]] = []
     for defn in special_defs:
-        if defn.get("id") == "sunday_morning_prayer":
-            continue
         if not defn.get("active", True):
             continue
         etype = defn.get("type", "once")
