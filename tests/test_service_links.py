@@ -102,6 +102,68 @@ class TestUrlAttachment:
         assert not events["sabbath::Morning"].get("url")
 
 
+class TestSundayPrayerLink:
+    """Sunday Morning Prayer is a true special event driven by events.yaml;
+    its link comes from the special_events def's url, via _merge_special_events."""
+
+    def _sunday_event(self, url):
+        import bot
+
+        defn = {
+            "id": "sunday_morning_prayer",
+            "name": "Sunday Morning Prayer",
+            "type": "weekly",
+            "weekday": 6,
+            "time": "06:00",
+            "duration_minutes": 20,
+            "notification_minutes": 720,
+            "description": "Weekly Sunday Morning Prayer service — all are welcome.",
+            "url": url,
+            "active": True,
+        }
+        results = bot._merge_special_events([defn], {}, days_ahead=14)
+        return results[0] if results else None
+
+    def test_sunday_is_type_special(self):
+        ev = self._sunday_event("https://zoom.us/sunday")
+        assert ev is not None
+        assert ev["type"] == "special"
+
+    def test_sunday_link_attached_from_special_def(self):
+        ev = self._sunday_event("https://zoom.us/sunday")
+        assert ev["url"] == "https://zoom.us/sunday"
+
+    def test_sunday_no_link_when_url_blank(self):
+        ev = self._sunday_event("")
+        assert not ev.get("url")
+
+    def test_sunday_not_duplicated_in_all_upcoming(self):
+        """Sunday must appear once (via _merge_special_events), not twice."""
+        import bot
+
+        async def _fake_events_data():
+            return {
+                "convocation_urls": {},
+                "convocation_announcements": {},
+                "special_events": [{
+                    "id": "sunday_morning_prayer",
+                    "name": "Sunday Morning Prayer",
+                    "type": "weekly", "weekday": 6, "time": "06:00",
+                    "duration_minutes": 20, "notification_minutes": 720,
+                    "description": "x", "url": "https://zoom.us/sunday", "active": True,
+                }],
+            }
+
+        with patch("bot.get_all_events_data", side_effect=_fake_events_data):
+            events = _run(bot.all_upcoming(days_ahead=14))
+        sundays = [e for e in events if "Sunday Morning Prayer" in e["name"]]
+        assert len(sundays) >= 1
+        assert all(s["url"] == "https://zoom.us/sunday" for s in sundays)
+        # No two share the same service_time (would indicate a duplicate).
+        times = [s["service_time"] for s in sundays]
+        assert len(times) == len(set(times))
+
+
 # ---------------------------------------------------------------------------
 # Notification includes the join link
 # ---------------------------------------------------------------------------

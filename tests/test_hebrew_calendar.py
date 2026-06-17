@@ -17,7 +17,6 @@ from hebrew_calendar import (
     convocations_for_hebrew_year,
     sabbath_events,
     service_phases,
-    sunday_prayer_events,
     upcoming_convocation_events,
 )
 
@@ -315,43 +314,6 @@ class TestSabbathEvents:
 
 
 # ---------------------------------------------------------------------------
-# sunday_prayer_events
-# ---------------------------------------------------------------------------
-
-class TestSundayPrayerEvents:
-    def setup_method(self):
-        self.events = sunday_prayer_events(TZ, days_ahead=14)
-
-    def test_returns_list(self):
-        assert isinstance(self.events, list)
-
-    def test_all_on_sundays(self):
-        for ev in self.events:
-            assert ev["service_time"].astimezone(TZ).weekday() == 6
-
-    def test_service_at_6am(self):
-        for ev in self.events:
-            assert ev["service_time"].astimezone(TZ).hour == 6
-
-    def test_notification_12_hours_before(self):
-        for ev in self.events:
-            delta = (ev["service_time"] - ev["notification_time"]).total_seconds()
-            assert delta == 720 * 60
-
-    def test_duration_is_20_minutes(self):
-        for ev in self.events:
-            assert ev["duration_minutes"] == 20
-
-    def test_event_name(self):
-        for ev in self.events:
-            assert ev["name"] == "Sunday Morning Prayer"
-
-    def test_type_is_special(self):
-        for ev in self.events:
-            assert ev["type"] == "special"
-
-
-# ---------------------------------------------------------------------------
 # all_upcoming_events — integration
 # ---------------------------------------------------------------------------
 
@@ -366,10 +328,11 @@ class TestAllUpcomingEvents:
         names = [e["name"] for e in events]
         assert any("Sabbath" in n for n in names)
 
-    def test_contains_sunday_prayer(self):
-        events = all_upcoming_events(TZ, days_ahead=14)
+    def test_excludes_sunday_prayer(self):
+        # Sunday Morning Prayer is a special event (events.yaml), not a convocation.
+        events = all_upcoming_events(TZ, days_ahead=30)
         names = [e["name"] for e in events]
-        assert any("Sunday Morning Prayer" in n for n in names)
+        assert not any("Sunday Morning Prayer" in n for n in names)
 
     def test_all_events_are_future(self):
         now = datetime.now(TZ)
