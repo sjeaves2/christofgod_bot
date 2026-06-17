@@ -52,7 +52,11 @@ from telegram.ext import (
 from activity_logger import ActivityLogger
 from cache import FileCache
 from hebrew_calendar import all_upcoming_events, upcoming_convocation_events, sabbath_events
-from ics_generator import appointment_to_ics, events_to_ics
+from ics_generator import (
+    appointment_cancellation_to_ics,
+    appointment_to_ics,
+    events_to_ics,
+)
 from pdf_generator import generate_user_list_pdf
 
 # ---------------------------------------------------------------------------
@@ -330,6 +334,7 @@ def _merge_special_events(
                             "notification_time": notif_dt,
                             "duration_minutes": defn.get("duration_minutes", 60),
                             "description": defn.get("description", ""),
+                            "url": defn.get("url", ""),
                             "announcements": announcements_map.get(key, []),
                         })
                 current += timedelta(days=1)
@@ -351,6 +356,7 @@ def _merge_special_events(
                     "notification_time": notif_dt,
                     "duration_minutes": defn.get("duration_minutes", 60),
                     "description": defn.get("description", ""),
+                    "url": defn.get("url", ""),
                     "announcements": announcements_map.get(defn["id"], []),
                 })
     return results
@@ -447,6 +453,7 @@ USER_COMMANDS_TEXT = """\
 /events — upcoming events (next 30 days)
 /exportcalendar — download an ICS calendar file
 /appointment — request a meeting with a church official
+/cancelappointment — cancel a pending or confirmed appointment
 /stop — unsubscribe from notifications"""
 
 ADMIN_COMMANDS_TEXT = """\
@@ -571,6 +578,8 @@ async def cmd_events(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     for ev in events:
         dt_str = format_dt(ev["service_time"])
         lines.append(f"📅 *{ev['name']}*\n   {dt_str}")
+        if ev.get("url"):
+            lines.append(f"   🔗 {ev['url']}")
         if ev.get("announcements"):
             for a in ev["announcements"]:
                 lines.append(f"   ⚠️ {a}")
@@ -683,9 +692,10 @@ async def cmd_listevents(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     AE_TIME,
     AE_DURATION,
     AE_DESC,
+    AE_URL,
     AE_NOTIF,
     AE_CONFIRM,
-) = range(7)
+) = range(8)
 
 
 @admin_only
@@ -732,6 +742,13 @@ async def ae_duration(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 async def ae_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = update.message.text.strip()
     context.user_data["ae_desc"] = "" if text == "-" else text
+    await update.message.reply_text("Zoom / join URL (or '-' to skip):")
+    return AE_URL
+
+
+async def ae_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text.strip()
+    context.user_data["ae_url"] = "" if text == "-" else text
     await update.message.reply_text(
         f"Notification minutes before event (default {DEFAULT_NOTIF_MIN}):"
     )
@@ -749,6 +766,7 @@ async def ae_notif(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         f"Schedule: {d['ae_date']} at {d['ae_time']}\n"
         f"Duration: {d['ae_duration']} min\n"
         f"Description: {d.get('ae_desc') or '—'}\n"
+        f"URL: {d.get('ae_url') or '—'}\n"
         f"Notify: {notif} min before\n\n"
         f"Confirm? (yes/no)"
     )
@@ -776,6 +794,7 @@ async def ae_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             "duration_minutes": d["ae_duration"],
             "notification_minutes": d["ae_notif"],
             "description": d.get("ae_desc", ""),
+            "url": d.get("ae_url", ""),
             "active": True,
         }
     else:
@@ -788,6 +807,7 @@ async def ae_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             "duration_minutes": d["ae_duration"],
             "notification_minutes": d["ae_notif"],
             "description": d.get("ae_desc", ""),
+            "url": d.get("ae_url", ""),
             "active": True,
         }
 
@@ -851,7 +871,7 @@ async def me_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text(
         f"Modifying: *{ev['name']}*\n\n"
         "Which field to change?\n"
-        "date | time | duration | description | notification | name | active",
+        "date | time | duration | description | url | notification | name | active",
         parse_mode=ParseMode.MARKDOWN,
     )
     return ME_FIELD
@@ -859,7 +879,7 @@ async def me_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def me_field(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     field = update.message.text.strip().lower()
-    valid = {"date", "time", "duration", "description", "notification", "name", "active"}
+    valid = {"date", "time", "duration", "description", "notification", "name", "active", "url"}
     if field not in valid:
         await update.message.reply_text(f"Invalid field. Choose from: {', '.join(sorted(valid))}:")
         return ME_FIELD
@@ -875,7 +895,7 @@ async def me_value(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     field_map = {
         "date": "date", "time": "time", "duration": "duration_minutes",
         "description": "description", "notification": "notification_minutes",
-        "name": "name", "active": "active",
+        "name": "name", "active": "active", "url": "url",
     }
     yaml_field = field_map[field]
     if field in ("duration", "notification"):
@@ -1058,10 +1078,14 @@ async def ap_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["ap_desc"] = text
     off = context.user_data["ap_official"]
     d = context.user_data
+    parts_d = [int(x) for x in d["ap_date"].split("-")]
+    parts_t = [int(x) for x in d["ap_time"].split(":")]
+    req_dt = TZ.localize(datetime(parts_d[0], parts_d[1], parts_d[2], parts_t[0], parts_t[1]))
+    dt_str = format_dt(req_dt)
     summary = (
         f"*Appointment Request Summary:*\n"
         f"With: {off['name']}\n"
-        f"Date: {d['ap_date']} at {d['ap_time']}\n"
+        f"When: {dt_str}\n"
         f"Description: {text}\n\n"
         f"Submit? (yes/no)"
     )
@@ -1249,7 +1273,7 @@ async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def _finalize_appointment(
     context: ContextTypes.DEFAULT_TYPE, appt: dict, appts: list
 ) -> None:
-    """Save confirmed appointment and send ICS to user."""
+    """Save confirmed appointment and send ICS to both the user and the official."""
     for i, a in enumerate(appts):
         if a["id"] == appt["id"]:
             appts[i] = appt
@@ -1259,25 +1283,47 @@ async def _finalize_appointment(
     if confirmed_dt.tzinfo is None:
         confirmed_dt = TZ.localize(confirmed_dt)
 
-    ics_bytes = appointment_to_ics(
-        {**appt, "confirmed_datetime": confirmed_dt},
-        TZ,
-    )
-    bio = io.BytesIO(ics_bytes)
-    bio.name = "appointment.ics"
+    appt_with_dt = {**appt, "confirmed_datetime": confirmed_dt}
+    dt_str = format_dt(confirmed_dt)
+
+    # --- Notify and send ICS to the user ---
+    ics_bytes = appointment_to_ics(appt_with_dt, TZ)
+    user_bio = io.BytesIO(ics_bytes)
     await context.bot.send_message(
         appt["user_chat_id"],
         f"✅ *Your appointment (ID: `{appt['id']}`) has been confirmed!*\n"
         f"With: {appt['official_name']}\n"
-        f"When: {format_dt(confirmed_dt)}\n\n"
+        f"When: {dt_str}\n\n"
         "An ICS calendar file is attached.",
         parse_mode=ParseMode.MARKDOWN,
     )
     await context.bot.send_document(
         appt["user_chat_id"],
-        document=InputFile(bio, filename="appointment.ics"),
+        document=InputFile(user_bio, filename="appointment.ics"),
         caption="Import this file into your calendar app.",
     )
+
+    # --- Notify and send ICS to the official ---
+    off = next((o for o in OFFICIALS if o["id"] == appt["official_id"]), None)
+    if off and off.get("chat_id"):
+        user_display = appt.get("user_display_name") or appt.get("user_username") or "The requester"
+        ics_bytes_off = appointment_to_ics(appt_with_dt, TZ)
+        off_bio = io.BytesIO(ics_bytes_off)
+        await context.bot.send_message(
+            off["chat_id"],
+            f"✅ *Appointment confirmed (ID: `{appt['id']}`)*\n"
+            f"With: {user_display}"
+            + (f" (@{appt['user_username']})" if appt.get("user_username") else "") + "\n"
+            f"When: {dt_str}\n"
+            f"Purpose: {appt.get('description', '')}\n\n"
+            "An ICS calendar file is attached.",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        await context.bot.send_document(
+            off["chat_id"],
+            document=InputFile(off_bio, filename="appointment.ics"),
+            caption="Import this file into your calendar app.",
+        )
 
 
 async def handle_counter_propose_message(
@@ -1376,6 +1422,166 @@ async def handle_counter_propose_message(
 
 
 # ---------------------------------------------------------------------------
+# /cancelappointment — either party can cancel a pending or confirmed appointment
+# ---------------------------------------------------------------------------
+
+CA_SELECT, CA_CONFIRM = range(2)
+
+CB_CANCEL_PREFIX = "ca:"
+
+
+async def cmd_cancelappointment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    uid, uname, dname = user_info(update)
+    activity.log_command("cancelappointment", uid, uname, dname)
+    context.user_data.clear()
+
+    appts = await get_appointments()
+    is_off = _is_known_official(uid, uname)
+
+    # Build list of appointments this user is party to that are still active
+    active = []
+    for a in appts:
+        if a.get("status") not in ("pending", "confirmed", "counter_proposed"):
+            continue
+        if is_off:
+            off_match = next((o for o in OFFICIALS if o.get("chat_id") == uid or
+                              (uname and o.get("username", "").lstrip("@") == uname.lstrip("@"))), None)
+            if off_match and a.get("official_id") == off_match.get("id"):
+                active.append(a)
+        if a.get("user_chat_id") == uid:
+            # Avoid duplicates if official is also the requester (edge case)
+            if not any(x["id"] == a["id"] for x in active):
+                active.append(a)
+
+    if not active:
+        await update.message.reply_text("You have no active appointments to cancel.")
+        return ConversationHandler.END
+
+    context.user_data["ca_appts"] = active
+    lines = ["*Your Active Appointments:*\n"]
+    for i, a in enumerate(active, 1):
+        dt_raw = a.get("confirmed_datetime") or a.get("requested_datetime", "")
+        try:
+            dt_obj = datetime.fromisoformat(dt_raw)
+            if dt_obj.tzinfo is None:
+                dt_obj = TZ.localize(dt_obj)
+            dt_label = format_dt(dt_obj)
+        except (ValueError, TypeError):
+            dt_label = dt_raw
+        lines.append(
+            f"{i}. [{a['id']}] {a['official_name']}\n"
+            f"   {dt_label} — *{a.get('status', '?')}*"
+        )
+    lines.append("\nEnter the number to cancel (or /cancel to abort):")
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+    return CA_SELECT
+
+
+async def ca_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text.strip()
+    active: list[dict] = context.user_data.get("ca_appts", [])
+    if not text.isdigit() or not (1 <= int(text) <= len(active)):
+        await update.message.reply_text(f"Please enter a number between 1 and {len(active)}:")
+        return CA_SELECT
+
+    appt = active[int(text) - 1]
+    context.user_data["ca_appt"] = appt
+    dt_raw = appt.get("confirmed_datetime") or appt.get("requested_datetime", "")
+    try:
+        dt_obj = datetime.fromisoformat(dt_raw)
+        if dt_obj.tzinfo is None:
+            dt_obj = TZ.localize(dt_obj)
+        dt_label = format_dt(dt_obj)
+    except (ValueError, TypeError):
+        dt_label = dt_raw
+    await update.message.reply_text(
+        f"Cancel appointment with *{appt['official_name']}* on {dt_label}?\n\n"
+        "Type *yes* to confirm cancellation, or anything else to abort.",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return CA_CONFIRM
+
+
+async def ca_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    uid, uname, dname = user_info(update)
+    if update.message.text.strip().lower() not in ("yes", "y"):
+        await update.message.reply_text("Cancellation aborted.")
+        return ConversationHandler.END
+
+    appt: dict = context.user_data["ca_appt"]
+    appts = await get_appointments()
+    for i, a in enumerate(appts):
+        if a["id"] == appt["id"]:
+            appts[i]["status"] = "cancelled"
+            break
+    await save_appointments(appts)
+
+    activity.log_command(
+        "cancelappointment", uid, uname, dname,
+        details=f"Cancelled appointment {appt['id']}"
+    )
+
+    # Determine who cancelled so we can notify the other party
+    is_off = _is_known_official(uid, uname)
+    off = next((o for o in OFFICIALS if o.get("id") == appt.get("official_id")), None)
+    user_chat_id = appt.get("user_chat_id")
+
+    if is_off:
+        # Official cancelled → notify the requester
+        if user_chat_id:
+            await context.bot.send_message(
+                user_chat_id,
+                f"❌ Your appointment (ID: `{appt['id']}`) with *{appt['official_name']}* "
+                f"has been cancelled by the official.",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            await _send_cancellation_ics(context, user_chat_id, appt)
+        await update.message.reply_text(
+            f"✅ Appointment `{appt['id']}` cancelled. The requester has been notified.",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        # Also remove it from the official's own calendar
+        if off and off.get("chat_id"):
+            await _send_cancellation_ics(context, off["chat_id"], appt)
+    else:
+        # Requester cancelled → notify the official if we know their chat_id
+        if off and off.get("chat_id"):
+            user_display = appt.get("user_display_name") or appt.get("user_username") or "The requester"
+            await context.bot.send_message(
+                off["chat_id"],
+                f"❌ Appointment (ID: `{appt['id']}`) with "
+                + (f"*{user_display}*" if user_display else "a congregant")
+                + (f" (@{appt['user_username']})" if appt.get("user_username") else "")
+                + " has been cancelled by the requester.",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            await _send_cancellation_ics(context, off["chat_id"], appt)
+        await update.message.reply_text(
+            f"✅ Appointment `{appt['id']}` cancelled."
+            + (" The official has been notified." if off and off.get("chat_id") else ""),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        # Also remove it from the requester's own calendar
+        if user_chat_id:
+            await _send_cancellation_ics(context, user_chat_id, appt)
+
+    return ConversationHandler.END
+
+
+async def _send_cancellation_ics(
+    context: ContextTypes.DEFAULT_TYPE, chat_id: int, appt: dict
+) -> None:
+    """Send a METHOD:CANCEL ICS so the recipient's calendar removes the event."""
+    ics_bytes = appointment_cancellation_to_ics(appt, TZ)
+    bio = io.BytesIO(ics_bytes)
+    await context.bot.send_document(
+        chat_id,
+        document=InputFile(bio, filename="appointment-cancelled.ics"),
+        caption="Import this file to remove the appointment from your calendar.",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Error handler
 # ---------------------------------------------------------------------------
 
@@ -1398,6 +1604,7 @@ async def post_init(app: Application) -> None:
         BotCommand("events", "Upcoming events (next 30 days)"),
         BotCommand("exportcalendar", "Download ICS calendar file"),
         BotCommand("appointment", "Request a meeting with an official"),
+        BotCommand("cancelappointment", "Cancel a pending or confirmed appointment"),
         BotCommand("stop", "Unsubscribe from notifications"),
     ])
 
@@ -1436,6 +1643,7 @@ def main() -> None:
             AE_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ae_time)],
             AE_DURATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, ae_duration)],
             AE_DESC: [MessageHandler(filters.TEXT & ~filters.COMMAND, ae_desc)],
+            AE_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, ae_url)],
             AE_NOTIF: [MessageHandler(filters.TEXT & ~filters.COMMAND, ae_notif)],
             AE_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, ae_confirm)],
         },
@@ -1474,6 +1682,15 @@ def main() -> None:
         fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
     )
 
+    cancel_appt_conv = ConversationHandler(
+        entry_points=[CommandHandler("cancelappointment", cmd_cancelappointment)],
+        states={
+            CA_SELECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, ca_select)],
+            CA_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, ca_confirm)],
+        },
+        fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
+    )
+
     # --- Register handlers ---
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(MessageHandler(filters.CONTACT, handle_contact))
@@ -1490,6 +1707,7 @@ def main() -> None:
     app.add_handler(modify_event_conv)
     app.add_handler(delete_event_conv)
     app.add_handler(appointment_conv)
+    app.add_handler(cancel_appt_conv)
 
     app.add_handler(CallbackQueryHandler(appt_callback, pattern=f"^{re.escape(CB_APPT_PREFIX)}"))
 
