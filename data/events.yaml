@@ -15,6 +15,7 @@ special_events:
     duration_minutes: 20
     notification_minutes: 720
     description: "Weekly Sunday Morning Prayer service — all are welcome."
+    url: ""
     active: true
 
 # One-time and other recurring special events added by admins go here.
@@ -27,6 +28,7 @@ special_events:
 #   duration_minutes: 120
 #   notification_minutes: 90
 #   description: "Annual spring revival service."
+#   url: "https://zoom.us/j/123456789"
 #   active: true
 
 # Urgent announcements for convocation events (keyed by convocation key).

@@ -1058,16 +1058,10 @@ async def ap_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["ap_desc"] = text
     off = context.user_data["ap_official"]
     d = context.user_data
-
-    # Build a localised datetime for display
-    parts_d = [int(x) for x in d["ap_date"].split("-")]
-    parts_t = [int(x) for x in d["ap_time"].split(":")]
-    req_dt = TZ.localize(datetime(parts_d[0], parts_d[1], parts_d[2], parts_t[0], parts_t[1]))
-
     summary = (
         f"*Appointment Request Summary:*\n"
         f"With: {off['name']}\n"
-        f"When: {format_dt(req_dt)}\n"
+        f"Date: {d['ap_date']} at {d['ap_time']}\n"
         f"Description: {text}\n\n"
         f"Submit? (yes/no)"
     )
@@ -1255,7 +1249,7 @@ async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def _finalize_appointment(
     context: ContextTypes.DEFAULT_TYPE, appt: dict, appts: list
 ) -> None:
-    """Save confirmed appointment and send ICS to both the user and the official."""
+    """Save confirmed appointment and send ICS to user."""
     for i, a in enumerate(appts):
         if a["id"] == appt["id"]:
             appts[i] = appt
@@ -1265,47 +1259,25 @@ async def _finalize_appointment(
     if confirmed_dt.tzinfo is None:
         confirmed_dt = TZ.localize(confirmed_dt)
 
-    appt_with_dt = {**appt, "confirmed_datetime": confirmed_dt}
-    dt_str = format_dt(confirmed_dt)
-
-    # --- Notify and send ICS to the user ---
-    ics_bytes = appointment_to_ics(appt_with_dt, TZ)
-    user_bio = io.BytesIO(ics_bytes)
+    ics_bytes = appointment_to_ics(
+        {**appt, "confirmed_datetime": confirmed_dt},
+        TZ,
+    )
+    bio = io.BytesIO(ics_bytes)
+    bio.name = "appointment.ics"
     await context.bot.send_message(
         appt["user_chat_id"],
         f"✅ *Your appointment (ID: `{appt['id']}`) has been confirmed!*\n"
         f"With: {appt['official_name']}\n"
-        f"When: {dt_str}\n\n"
+        f"When: {format_dt(confirmed_dt)}\n\n"
         "An ICS calendar file is attached.",
         parse_mode=ParseMode.MARKDOWN,
     )
     await context.bot.send_document(
         appt["user_chat_id"],
-        document=InputFile(user_bio, filename="appointment.ics"),
+        document=InputFile(bio, filename="appointment.ics"),
         caption="Import this file into your calendar app.",
     )
-
-    # --- Notify and send ICS to the official ---
-    off = next((o for o in OFFICIALS if o["id"] == appt["official_id"]), None)
-    if off and off.get("chat_id"):
-        user_display = appt.get("user_display_name") or appt.get("user_username") or "The requester"
-        ics_bytes_off = appointment_to_ics(appt_with_dt, TZ)
-        off_bio = io.BytesIO(ics_bytes_off)
-        await context.bot.send_message(
-            off["chat_id"],
-            f"✅ *Appointment confirmed (ID: `{appt['id']}`)*\n"
-            f"With: {user_display}"
-            + (f" (@{appt['user_username']})" if appt.get("user_username") else "") + "\n"
-            f"When: {dt_str}\n"
-            f"Purpose: {appt.get('description', '')}\n\n"
-            "An ICS calendar file is attached.",
-            parse_mode=ParseMode.MARKDOWN,
-        )
-        await context.bot.send_document(
-            off["chat_id"],
-            document=InputFile(off_bio, filename="appointment.ics"),
-            caption="Import this file into your calendar app.",
-        )
 
 
 async def handle_counter_propose_message(
