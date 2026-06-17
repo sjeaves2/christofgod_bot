@@ -15,6 +15,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import calendar
 import io
 import logging
 import os
@@ -296,6 +297,115 @@ def now_tz() -> datetime:
     return datetime.now(TZ)
 
 
+def _appt_datetime(appt: dict[str, Any]) -> "datetime | None":
+    """Best-effort tz-aware datetime for an appointment (confirmed, else requested)."""
+    dt_raw = appt.get("confirmed_datetime") or appt.get("requested_datetime", "")
+    try:
+        dt_obj = datetime.fromisoformat(dt_raw)
+    except (ValueError, TypeError):
+        return None
+    if dt_obj.tzinfo is None:
+        dt_obj = TZ.localize(dt_obj)
+    return dt_obj
+
+
+def _appt_dt_label(appt: dict[str, Any]) -> str:
+    """Human-readable date/time for an appointment, falling back to the raw value."""
+    dt_obj = _appt_datetime(appt)
+    if dt_obj is None:
+        return appt.get("confirmed_datetime") or appt.get("requested_datetime") or "—"
+    return format_dt(dt_obj)
+
+
+def _user_is_appt_official(appt: dict[str, Any], user_id: int, username: "str | None") -> bool:
+    """True if this user is the official assigned to the given appointment."""
+    off = next((o for o in OFFICIALS if o.get("id") == appt.get("official_id")), None)
+    if not off:
+        return False
+    if off.get("chat_id") == user_id:
+        return True
+    uname_lower = (username or "").lstrip("@").lower()
+    oname = (off.get("telegram_username") or "").lstrip("@").lower()
+    return bool(uname_lower) and oname == uname_lower
+
+
+# Statuses that count as an appointment still "in play".
+ACTIVE_APPT_STATUSES = ("pending", "confirmed", "counter_proposed")
+
+# How far ahead an appointment may be requested.
+APPOINTMENT_HORIZON_MONTHS = 6
+
+# Default length of an appointment, used for overlap checks and new requests.
+DEFAULT_APPT_DURATION_MIN = 30
+
+
+def _overlapping_appt(
+    appts: list[dict[str, Any]],
+    user_id: int,
+    start: datetime,
+    duration_minutes: int,
+    exclude_id: "str | None" = None,
+) -> "dict | None":
+    """Return the user's active appointment whose time overlaps [start, start+duration)."""
+    end = start + timedelta(minutes=duration_minutes)
+    for a in appts:
+        if a.get("user_chat_id") != user_id:
+            continue
+        if a.get("status") not in ACTIVE_APPT_STATUSES:
+            continue
+        if exclude_id and a.get("id") == exclude_id:
+            continue
+        a_start = _appt_datetime(a)
+        if a_start is None:
+            continue
+        a_end = a_start + timedelta(minutes=int(a.get("duration_minutes", DEFAULT_APPT_DURATION_MIN)))
+        # Half-open intervals overlap when each starts before the other ends.
+        if start < a_end and a_start < end:
+            return a
+    return None
+
+
+def _confirmed_overlap(
+    appts: list[dict[str, Any]], appt: dict[str, Any], confirmed_iso: str
+) -> "dict | None":
+    """Check a to-be-confirmed time against the requester's *other* active appointments."""
+    start = datetime.fromisoformat(confirmed_iso)
+    if start.tzinfo is None:
+        start = TZ.localize(start)
+    return _overlapping_appt(
+        appts,
+        appt["user_chat_id"],
+        start,
+        int(appt.get("duration_minutes", DEFAULT_APPT_DURATION_MIN)),
+        exclude_id=appt["id"],
+    )
+
+
+def _max_request_datetime() -> datetime:
+    """Latest datetime an appointment may be requested for (6 calendar months out)."""
+    now = now_tz()
+    month_index = now.month - 1 + APPOINTMENT_HORIZON_MONTHS
+    year = now.year + month_index // 12
+    month = month_index % 12 + 1
+    day = min(now.day, calendar.monthrange(year, month)[1])
+    naive = datetime(year, month, day, now.hour, now.minute, now.second)
+    return TZ.localize(naive)
+
+
+def _active_appt_with_official(
+    appts: list[dict[str, Any]], user_id: int, official_id: str
+) -> "dict | None":
+    """Return the user's existing active appointment with this official, if any."""
+    for a in appts:
+        if (
+            a.get("user_chat_id") == user_id
+            and a.get("official_id") == official_id
+            and a.get("status") in ACTIVE_APPT_STATUSES
+        ):
+            return a
+    return None
+
+
 def _merge_special_events(
     special_defs: list[dict[str, Any]],
     announcements_map: dict[str, list[str]],
@@ -453,6 +563,7 @@ USER_COMMANDS_TEXT = """\
 /events — upcoming events (next 30 days)
 /exportcalendar — download an ICS calendar file
 /appointment — request a meeting with a church official
+/myappointments — list your appointments
 /cancelappointment — cancel a pending or confirmed appointment
 /stop — unsubscribe from notifications"""
 
@@ -1046,7 +1157,23 @@ async def ap_official(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     if not text.isdigit() or not (1 <= int(text) <= len(OFFICIALS)):
         await update.message.reply_text("Please enter a valid number:")
         return AP_OFFICIAL
-    context.user_data["ap_official"] = OFFICIALS[int(text) - 1]
+    off = OFFICIALS[int(text) - 1]
+
+    # One active appointment per official at a time.
+    uid, _, _ = user_info(update)
+    appts = await get_appointments()
+    existing = _active_appt_with_official(appts, uid, off["id"])
+    if existing:
+        await update.message.reply_text(
+            f"You already have an appointment with {off['name']} "
+            f"(ID: `{existing['id']}`, {existing.get('status', '?')}).\n\n"
+            "Please cancel it with /cancelappointment before requesting another, "
+            "or use /myappointments to review it.",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return ConversationHandler.END
+
+    context.user_data["ap_official"] = off
     await update.message.reply_text("Desired date (YYYY-MM-DD):")
     return AP_DATE
 
@@ -1066,6 +1193,46 @@ async def ap_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not re.match(r"^\d{1,2}:\d{2}$", text):
         await update.message.reply_text("Please use HH:MM format:")
         return AP_TIME
+
+    # Build the full datetime now that we have both date and time, and validate it.
+    parts_d = [int(x) for x in context.user_data["ap_date"].split("-")]
+    parts_t = [int(x) for x in text.split(":")]
+    try:
+        req_dt = TZ.localize(datetime(parts_d[0], parts_d[1], parts_d[2], parts_t[0], parts_t[1]))
+    except ValueError:
+        await update.message.reply_text(
+            "That date/time isn't valid. Please re-enter the date (YYYY-MM-DD):"
+        )
+        return AP_DATE
+
+    now = now_tz()
+    if req_dt <= now:
+        await update.message.reply_text(
+            "That date/time is in the past. Please enter a future date (YYYY-MM-DD):"
+        )
+        return AP_DATE
+
+    max_dt = _max_request_datetime()
+    if req_dt > max_dt:
+        await update.message.reply_text(
+            f"Appointments can be booked at most {APPOINTMENT_HORIZON_MONTHS} months ahead "
+            f"(through {max_dt.strftime('%B %d, %Y')}). Please enter an earlier date (YYYY-MM-DD):"
+        )
+        return AP_DATE
+
+    # No overlap with the user's other active appointments.
+    uid, _, _ = user_info(update)
+    appts = await get_appointments()
+    clash = _overlapping_appt(appts, uid, req_dt, DEFAULT_APPT_DURATION_MIN)
+    if clash:
+        await update.message.reply_text(
+            f"That time overlaps your existing appointment with {clash['official_name']} "
+            f"on {_appt_dt_label(clash)} (ID: `{clash['id']}`).\n\n"
+            "Please choose a different date/time (YYYY-MM-DD):",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return AP_DATE
+
     context.user_data["ap_time"] = text
     await update.message.reply_text(
         "Brief description of the meeting purpose (128 characters max):"
@@ -1108,6 +1275,28 @@ async def ap_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     parts_t = [int(x) for x in d["ap_time"].split(":")]
     req_dt = TZ.localize(datetime(parts_d[0], parts_d[1], parts_d[2], parts_t[0], parts_t[1]))
 
+    appts = await get_appointments()
+
+    # Final guard: ensure no active appointment with this official slipped in.
+    existing = _active_appt_with_official(appts, uid, off["id"])
+    if existing:
+        await update.message.reply_text(
+            f"You already have an appointment with {off['name']} "
+            f"(ID: `{existing['id']}`). Request not submitted.",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return ConversationHandler.END
+
+    # Final guard: ensure the requested time doesn't overlap another appointment.
+    clash = _overlapping_appt(appts, uid, req_dt, DEFAULT_APPT_DURATION_MIN)
+    if clash:
+        await update.message.reply_text(
+            f"That time overlaps your appointment with {clash['official_name']} "
+            f"(ID: `{clash['id']}`). Request not submitted.",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return ConversationHandler.END
+
     appt = {
         "id": appt_id,
         "user_chat_id": uid,
@@ -1119,9 +1308,8 @@ async def ap_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "confirmed_datetime": None,
         "description": d["ap_desc"],
         "status": "pending",
-        "duration_minutes": 30,
+        "duration_minutes": DEFAULT_APPT_DURATION_MIN,
     }
-    appts = await get_appointments()
     appts.append(appt)
     await save_appointments(appts)
 
@@ -1204,6 +1392,14 @@ async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     user_chat_id = appt["user_chat_id"]
 
     if action == "confirm":
+        clash = _confirmed_overlap(appts, appt, appt["requested_datetime"])
+        if clash:
+            await query.edit_message_text(
+                f"⚠️ That time overlaps the requester's appointment with "
+                f"{clash['official_name']} (ID: {clash['id']}). Not confirmed — "
+                "suggest a different time instead."
+            )
+            return
         appt["status"] = "confirmed"
         appt["confirmed_datetime"] = appt["requested_datetime"]
         await _finalize_appointment(context, appt, appts)
@@ -1235,8 +1431,16 @@ async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     elif action == "accept_counter":
         # User accepts counter-proposed time
+        proposed = appt.get("counter_datetime", appt["requested_datetime"])
+        clash = _confirmed_overlap(appts, appt, proposed)
+        if clash:
+            await query.edit_message_text(
+                f"⚠️ That time overlaps your appointment with {clash['official_name']} "
+                f"(ID: {clash['id']}). It was not confirmed — please suggest a different time."
+            )
+            return
         appt["status"] = "confirmed"
-        appt["confirmed_datetime"] = appt.get("counter_datetime", appt["requested_datetime"])
+        appt["confirmed_datetime"] = proposed
         await _finalize_appointment(context, appt, appts)
         await query.edit_message_text(f"✅ You accepted the suggested time (ID: {appt_id}).")
 
@@ -1253,8 +1457,16 @@ async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     elif action == "accept_user_counter":
         # Official accepts user's counter-proposed time
+        proposed = appt.get("user_counter_datetime", appt["requested_datetime"])
+        clash = _confirmed_overlap(appts, appt, proposed)
+        if clash:
+            await query.edit_message_text(
+                f"⚠️ That time overlaps the requester's appointment with "
+                f"{clash['official_name']} (ID: {clash['id']}). Not confirmed."
+            )
+            return
         appt["status"] = "confirmed"
-        appt["confirmed_datetime"] = appt.get("user_counter_datetime", appt["requested_datetime"])
+        appt["confirmed_datetime"] = proposed
         await _finalize_appointment(context, appt, appts)
         await query.edit_message_text(f"✅ You confirmed the appointment with the user's suggested time.")
 
@@ -1422,6 +1634,60 @@ async def handle_counter_propose_message(
 
 
 # ---------------------------------------------------------------------------
+# /myappointments — list the appointments the user is a party to
+# ---------------------------------------------------------------------------
+
+def _counterparty_label(appt: dict, viewer_is_official: bool) -> str:
+    """Who the appointment is *with*, from the viewer's perspective."""
+    if viewer_is_official:
+        name = appt.get("user_display_name") or appt.get("user_username") or "Unknown requester"
+        if appt.get("user_username"):
+            return f"{name} (@{appt['user_username']})"
+        return name
+    return appt.get("official_name", "Unknown official")
+
+
+async def cmd_myappointments(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    uid, uname, dname = user_info(update)
+    activity.log_command("myappointments", uid, uname, dname)
+
+    appts = await get_appointments()
+    mine: list[tuple[dict, bool]] = []  # (appointment, viewer_is_official)
+    for a in appts:
+        as_official = _user_is_appt_official(a, uid, uname)
+        as_requester = a.get("user_chat_id") == uid
+        if as_official or as_requester:
+            # Prefer the official view when the viewer is the assigned official.
+            mine.append((a, as_official))
+
+    if not mine:
+        await update.message.reply_text("You have no appointments on record.")
+        return
+
+    now = now_tz()
+    upcoming = [t for t in mine if (_appt_datetime(t[0]) or now) >= now]
+    past = [t for t in mine if (_appt_datetime(t[0]) or now) < now]
+    upcoming.sort(key=lambda t: _appt_datetime(t[0]) or now)
+    past.sort(key=lambda t: _appt_datetime(t[0]) or now, reverse=True)
+
+    def _render(appt: dict, viewer_is_official: bool) -> str:
+        return (
+            f"• [{appt['id']}] With: {_counterparty_label(appt, viewer_is_official)}\n"
+            f"   {_appt_dt_label(appt)} — *{appt.get('status', '?')}*"
+        )
+
+    lines = ["*Your Appointments:*"]
+    if upcoming:
+        lines.append("\n*Upcoming:*")
+        lines.extend(_render(a, is_off) for a, is_off in upcoming)
+    if past:
+        lines.append("\n*Past:*")
+        lines.extend(_render(a, is_off) for a, is_off in past)
+
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+
+
+# ---------------------------------------------------------------------------
 # /cancelappointment — either party can cancel a pending or confirmed appointment
 # ---------------------------------------------------------------------------
 
@@ -1441,13 +1707,10 @@ async def cmd_cancelappointment(update: Update, context: ContextTypes.DEFAULT_TY
     # Build list of appointments this user is party to that are still active
     active = []
     for a in appts:
-        if a.get("status") not in ("pending", "confirmed", "counter_proposed"):
+        if a.get("status") not in ACTIVE_APPT_STATUSES:
             continue
-        if is_off:
-            off_match = next((o for o in OFFICIALS if o.get("chat_id") == uid or
-                              (uname and o.get("username", "").lstrip("@") == uname.lstrip("@"))), None)
-            if off_match and a.get("official_id") == off_match.get("id"):
-                active.append(a)
+        if is_off and _user_is_appt_official(a, uid, uname):
+            active.append(a)
         if a.get("user_chat_id") == uid:
             # Avoid duplicates if official is also the requester (edge case)
             if not any(x["id"] == a["id"] for x in active):
@@ -1604,6 +1867,7 @@ async def post_init(app: Application) -> None:
         BotCommand("events", "Upcoming events (next 30 days)"),
         BotCommand("exportcalendar", "Download ICS calendar file"),
         BotCommand("appointment", "Request a meeting with an official"),
+        BotCommand("myappointments", "List your appointments"),
         BotCommand("cancelappointment", "Cancel a pending or confirmed appointment"),
         BotCommand("stop", "Unsubscribe from notifications"),
     ])
@@ -1706,6 +1970,7 @@ def main() -> None:
     app.add_handler(add_event_conv)
     app.add_handler(modify_event_conv)
     app.add_handler(delete_event_conv)
+    app.add_handler(CommandHandler("myappointments", cmd_myappointments))
     app.add_handler(appointment_conv)
     app.add_handler(cancel_appt_conv)
 
