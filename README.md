@@ -64,6 +64,8 @@ Convocation events follow the Hebrew calendar. Service times and notification wi
 
 | Convocation | Hebrew Date | Service | Time | Notification |
 |---|---|---|---|---|
+| Sabbath | Every Friday | Eve | 6:00 PM | 90 min before |
+| Sabbath | Every Saturday | Morning | 11:00 AM | 90 min before |
 | Passover | Abib 14 | at Even | 3:00 PM | 90 min before |
 | Feast of Unleavened Bread | Abib 15 | Opening Day | 11:00 AM | 90 min before |
 | Feast of Unleavened Bread | Abib 21 | Closing Eve | 6:00 PM | 90 min before |
@@ -78,8 +80,6 @@ Convocation events follow the Hebrew calendar. Service times and notification wi
 | Succoth | Ethanim 15 | Opening Day | 11:00 AM | 90 min before |
 | Succoth | Ethanim 22 | Closing Eve | 6:00 PM | 90 min before |
 | Succoth | Ethanim 22 | Closing Day | 11:00 AM | 90 min before |
-| Sabbath | Every Friday | Eve | 6:00 PM | 90 min before |
-| Sabbath | Every Saturday | Morning | 11:00 AM | 90 min before |
 | Sunday Morning Prayer | Every Sunday | — | 6:00 AM | 12 hours before |
 
 > Biblical month names are used in announcements (Abib, Ethanim) while modern Hebrew
