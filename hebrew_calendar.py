@@ -255,36 +255,14 @@ def sabbath_events(tz: pytz.BaseTzInfo, days_ahead: int = 90) -> list[dict[str, 
     return events
 
 
-def sunday_prayer_events(tz: pytz.BaseTzInfo, days_ahead: int = 90) -> list[dict[str, Any]]:
-    """Generate weekly Sunday Morning Prayer events (Sat 6pm notification)."""
-    now = datetime.now(tz)
-    events: list[dict[str, Any]] = []
-    current = now.date()
-    end = current + timedelta(days=days_ahead)
-    while current <= end:
-        if current.weekday() == 6:  # Sunday
-            svc_dt = tz.localize(datetime(current.year, current.month, current.day, 6, 0))
-            notif_dt = svc_dt - timedelta(minutes=720)
-            if svc_dt > now:
-                events.append({
-                    "key": f"sunday_prayer_{current.isoformat()}",
-                    "name": "Sunday Morning Prayer",
-                    "type": "special",
-                    "service_time": svc_dt,
-                    "notification_time": notif_dt,
-                    "duration_minutes": 20,
-                    "description": "Weekly Sunday Morning Prayer service — all are welcome.",
-                    "announcements": [],
-                })
-        current += timedelta(days=1)
-    return events
-
-
 def all_upcoming_events(tz: pytz.BaseTzInfo, days_ahead: int = 90) -> list[dict[str, Any]]:
-    """Merge and sort all event types."""
+    """Merge and sort Hebrew-calendar event types (Sabbath + convocations).
+
+    Sunday Morning Prayer is NOT here: it is a special event configured in
+    events.yaml and expanded by the application layer.
+    """
     events: list[dict[str, Any]] = []
     events.extend(sabbath_events(tz, days_ahead))
     events.extend(upcoming_convocation_events(tz, days_ahead))
-    events.extend(sunday_prayer_events(tz, days_ahead))
     events.sort(key=lambda e: e["service_time"])
     return events

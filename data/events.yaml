@@ -1,50 +1,15 @@
-# Special (Gregorian-calendar) events managed by administrators.
-# Convocation events are computed from Hebrew calendar in hebrew_calendar.py
-# and are NOT stored here; however, per-event urgent announcements are stored
-# in convocation_announcements below.
-#
-# weekday values (for type: weekly): 0=Monday … 6=Sunday
-# notification_minutes: how many minutes before the event to send the notification
-
 special_events:
-  - id: "sunday_morning_prayer"
-    name: "Sunday Morning Prayer"
-    type: "weekly"
-    weekday: 6
-    time: "06:00"
-    duration_minutes: 20
-    notification_minutes: 720
-    description: "Weekly Sunday Morning Prayer service — all are welcome."
-    url: ""
-    active: true
-
-# One-time and other recurring special events added by admins go here.
-# Example structure (admin-added via /addevent):
-# - id: "revival_2025"
-#   name: "Spring Revival"
-#   type: "once"
-#   date: "2025-04-15"
-#   time: "19:00"
-#   duration_minutes: 120
-#   notification_minutes: 90
-#   description: "Annual spring revival service."
-#   url: "https://zoom.us/j/123456789"
-#   active: true
-
-# Urgent announcements for convocation events (keyed by convocation key).
-# These are included in the outgoing notification for that service.
-# Example:
-# convocation_announcements:
-#   sabbath_eve_2025-04-11:
-#     - "⚠️ Venue change: service will be held at 123 Main St due to repairs."
+- id: sunday_morning_prayer
+  name: Sunday Morning Prayer
+  type: weekly
+  weekday: 6
+  time: 06:00
+  duration_minutes: 20
+  notification_minutes: 720
+  description: Weekly Sunday Morning Prayer service — all are welcome.
+  url: https://us06web.zoom.us/j/83741547036?pwd=kttfvC4BKnmS6fQwvb7mqawRiCXCjH.1
+  active: true
 convocation_announcements: {}
-
-# Per-service (per-phase) join links for convocations and the weekly Sabbath.
-# Keyed by phase_key = "<convocation_key>::<label>" so a single event with
-# multiple services (e.g. Sabbath Eve and Sabbath Morning) can have a distinct
-# link for each. Managed by admins via /setservicelink.
-# Example:
-# convocation_urls:
-#   "sabbath::Eve": "https://zoom.us/j/111"
-#   "sabbath::Morning": "https://zoom.us/j/222"
-convocation_urls: {}
+convocation_urls:
+  sabbath::Eve: https://us06web.zoom.us/j/81594253541?pwd=e3BzF98vLF2t2biXwRGbCVaRUUOrVN.1
+  sabbath::Morning: https://us06web.zoom.us/j/81977710637?pwd=7n8cMom08dSCWhBxMMtTWYf7KGkXMb
