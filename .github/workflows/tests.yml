@@ -1,0 +1,41 @@
+name: Tests
+
+# Run the test suite on every push and pull request.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.9 is the project's runtime; 3.12 guards against future drift.
+        python-version: ["3.9", "3.12"]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Provide a config file for import
+        # config/config.yaml is gitignored (holds the live token); the bot module
+        # reads it at import time, so tests need a stand-in. The example template
+        # carries a placeholder token, which is all the tests require.
+        run: cp config/config.yaml.example config/config.yaml
+
+      - name: Run tests
+        run: pytest -v
