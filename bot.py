@@ -52,7 +52,12 @@ from telegram.ext import (
 
 from activity_logger import ActivityLogger
 from cache import FileCache
-from hebrew_calendar import all_upcoming_events, upcoming_convocation_events, sabbath_events
+from hebrew_calendar import (
+    all_upcoming_events,
+    upcoming_convocation_events,
+    sabbath_events,
+    service_phases,
+)
 from ics_generator import (
     appointment_cancellation_to_ics,
     appointment_to_ics,
@@ -476,12 +481,16 @@ async def all_upcoming(days_ahead: int = 90) -> list[dict[str, Any]]:
     """Return all events (convocations + special) sorted by service_time."""
     evdata = await get_all_events_data()
     announcements_map: dict[str, list[str]] = evdata.get("convocation_announcements", {})
+    urls_map: dict[str, str] = evdata.get("convocation_urls", {})
     special_defs: list[dict[str, Any]] = evdata.get("special_events", [])
 
     convocations = all_upcoming_events(TZ, days_ahead)
-    # Attach any urgent announcements to convocations
+    # Attach urgent announcements and any per-service (per-phase) join link.
     for ev in convocations:
         ev["announcements"] = announcements_map.get(ev["key"], [])
+        phase_key = ev.get("phase_key")
+        if phase_key and urls_map.get(phase_key):
+            ev["url"] = urls_map[phase_key]
 
     specials = _merge_special_events(special_defs, announcements_map, days_ahead)
 
@@ -501,6 +510,8 @@ async def send_notification(context: ContextTypes.DEFAULT_TYPE) -> None:
     lines = [f"🔔 *Reminder: {name}*", f"Service begins: {svc_time}"]
     if event.get("description"):
         lines.append(f"\n_{event['description']}_")
+    if event.get("url"):
+        lines.append(f"\n🔗 Join: {event['url']}")
     if event.get("announcements"):
         lines.append("\n⚠️ *Announcements:*")
         lines.extend(f"• {a}" for a in event["announcements"])
@@ -572,6 +583,7 @@ ADMIN_COMMANDS_TEXT = """\
 /addevent — add a special event
 /modifyevent — modify an event
 /deleteevent — remove or annotate an event
+/setservicelink — set the join link for a convocation/Sabbath service
 /listevents — events in the next 30 days (admin view)
 /usercount — number of registered users
 /userlist — list registered users
@@ -1114,6 +1126,75 @@ async def de_annot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         details=f"Added announcement to '{ev['name']}': {text}"
     )
     await update.message.reply_text("⚠️ Announcement added to the convocation notification.", parse_mode=ParseMode.MARKDOWN)
+    return ConversationHandler.END
+
+
+# ---------------------------------------------------------------------------
+# /setservicelink — set a per-service (per-phase) join link for convocations
+# ---------------------------------------------------------------------------
+
+SL_SELECT, SL_URL = range(2)
+
+
+@admin_only
+async def cmd_setservicelink(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    uid, uname, dname = user_info(update)
+    activity.log_command("setservicelink", uid, uname, dname)
+    context.user_data.clear()
+
+    evdata = await get_all_events_data()
+    urls_map: dict[str, str] = evdata.get("convocation_urls", {})
+    phases = service_phases()
+    context.user_data["sl_phases"] = phases
+
+    lines = ["*Set a Service Join Link*\n", "Each service (phase) can have its own link.\n"]
+    for i, ph in enumerate(phases, 1):
+        current = urls_map.get(ph["phase_key"])
+        suffix = f"  🔗 {current}" if current else ""
+        lines.append(f"{i}. {ph['display']}{suffix}")
+    lines.append("\nEnter the number of the service to set (or /cancel):")
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+    return SL_SELECT
+
+
+async def sl_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text.strip()
+    phases: list[dict] = context.user_data.get("sl_phases", [])
+    if not text.isdigit() or not (1 <= int(text) <= len(phases)):
+        await update.message.reply_text(f"Please enter a number between 1 and {len(phases)}:")
+        return SL_SELECT
+    ph = phases[int(text) - 1]
+    context.user_data["sl_phase"] = ph
+    await update.message.reply_text(
+        f"Enter the join link (URL) for *{ph['display']}*,\n"
+        "or '-' to clear the existing link:",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return SL_URL
+
+
+async def sl_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text.strip()
+    ph: dict = context.user_data["sl_phase"]
+    uid, uname, dname = user_info(update)
+
+    evdata = await get_all_events_data()
+    urls_map: dict[str, str] = evdata.setdefault("convocation_urls", {})
+    if text == "-":
+        urls_map.pop(ph["phase_key"], None)
+        action_msg = f"🔗 Cleared the link for *{ph['display']}*."
+        detail = f"Cleared link for {ph['phase_key']}"
+    else:
+        urls_map[ph["phase_key"]] = text
+        action_msg = f"🔗 Link set for *{ph['display']}*."
+        detail = f"Set link for {ph['phase_key']}"
+    await save_events_data(evdata)
+
+    # Reschedule upcoming notifications so they carry the updated link.
+    await schedule_all_upcoming(context.application)
+
+    activity.log_command("setservicelink", uid, uname, dname, details=detail)
+    await update.message.reply_text(action_msg, parse_mode=ParseMode.MARKDOWN)
     return ConversationHandler.END
 
 
@@ -1934,6 +2015,15 @@ def main() -> None:
         fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
     )
 
+    set_service_link_conv = ConversationHandler(
+        entry_points=[CommandHandler("setservicelink", cmd_setservicelink)],
+        states={
+            SL_SELECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, sl_select)],
+            SL_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, sl_url)],
+        },
+        fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
+    )
+
     appointment_conv = ConversationHandler(
         entry_points=[CommandHandler("appointment", cmd_appointment)],
         states={
@@ -1970,6 +2060,7 @@ def main() -> None:
     app.add_handler(add_event_conv)
     app.add_handler(modify_event_conv)
     app.add_handler(delete_event_conv)
+    app.add_handler(set_service_link_conv)
     app.add_handler(CommandHandler("myappointments", cmd_myappointments))
     app.add_handler(appointment_conv)
     app.add_handler(cancel_appt_conv)

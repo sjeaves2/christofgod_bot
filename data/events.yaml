@@ -38,3 +38,13 @@ special_events:
 #   sabbath_eve_2025-04-11:
 #     - "⚠️ Venue change: service will be held at 123 Main St due to repairs."
 convocation_announcements: {}
+
+# Per-service (per-phase) join links for convocations and the weekly Sabbath.
+# Keyed by phase_key = "<convocation_key>::<label>" so a single event with
+# multiple services (e.g. Sabbath Eve and Sabbath Morning) can have a distinct
+# link for each. Managed by admins via /setservicelink.
+# Example:
+# convocation_urls:
+#   "sabbath::Eve": "https://zoom.us/j/111"
+#   "sabbath::Morning": "https://zoom.us/j/222"
+convocation_urls: {}
