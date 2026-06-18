@@ -57,7 +57,7 @@ class TestUrlAttachment:
         sabbath_eve = {
             "key": "sabbath_eve_2099-01-02",
             "phase_key": "sabbath::Eve",
-            "name": "God's Holy Convocation--Sabbath Eve",
+            "name": "God's Holy Convocation—Sabbath Eve",
             "service_time": TZ.localize(datetime(2099, 1, 2, 18, 0)),
             "notification_time": TZ.localize(datetime(2099, 1, 2, 16, 30)),
             "duration_minutes": 90,
@@ -67,7 +67,7 @@ class TestUrlAttachment:
         sabbath_morning = {
             "key": "sabbath_morning_2099-01-03",
             "phase_key": "sabbath::Morning",
-            "name": "God's Holy Convocation--Sabbath Morning",
+            "name": "God's Holy Convocation—Sabbath Morning",
             "service_time": TZ.localize(datetime(2099, 1, 3, 11, 0)),
             "notification_time": TZ.localize(datetime(2099, 1, 3, 9, 30)),
             "duration_minutes": 90,
@@ -189,7 +189,7 @@ class TestNotificationLink:
 
     def _event(self, **extra):
         ev = {
-            "name": "God's Holy Convocation--Sabbath Eve",
+            "name": "God's Holy Convocation—Sabbath Eve",
             "service_time": TZ.localize(datetime(2099, 1, 2, 18, 0)),
             "announcements": [],
         }

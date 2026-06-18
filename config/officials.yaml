@@ -3,7 +3,13 @@ officials:
   id: pastor_crowdy
   name: Pastor Christel Williams Crowdy
   telegram_username: OneMorah
+
 - chat_id: 474108062
   id: bishop_eaves
   name: Bishop Samuel Eaves, II
   telegram_username: sjeaves2
+
+- id: eal_adair
+  name: Evangelist-at-Large Curtis Adair, Jr.
+  telegram_username: curtisadairjr
+  

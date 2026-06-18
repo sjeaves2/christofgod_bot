@@ -1753,7 +1753,7 @@ async def cmd_myappointments(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return (
             f"• With: {_counterparty_label(appt, viewer_is_official)}\n"
             f"   {_appt_dt_label(appt)} — *{appt.get('status', '?')}*\n"
-            f"   _[{appt['id']}]_ 
+            f"   _[{appt['id']}]_"
         )
 
     lines = ["*Your Appointments:*"]
