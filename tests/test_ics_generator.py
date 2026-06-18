@@ -63,9 +63,9 @@ class TestEventsToIcs:
         assert len(vevents) == 1
 
     def test_event_summary_matches_name(self):
-        ev = _make_event("God's Holy Convocation--Sabbath Eve")
+        ev = _make_event("God's Holy Convocation—Sabbath Eve")
         vevents = _events_from_cal(_parse(events_to_ics([ev])))
-        assert str(vevents[0]["SUMMARY"]) == "God's Holy Convocation--Sabbath Eve"
+        assert str(vevents[0]["SUMMARY"]) == "God's Holy Convocation—Sabbath Eve"
 
     def test_multiple_events_all_included(self):
         evs = [_make_event(f"Event {i}", offset_days=i + 1) for i in range(5)]

@@ -3,8 +3,12 @@
 # phone:    Phone number as registered with Telegram (digits only, no + or spaces)
 # Both may be supplied; the bot will match on either.
 admins:
+  - username: "OneMorah"
+    display_name: "Pastor Christel Williams Crowdy"
+
   - username: "sjeaves2"
     display_name: "Bishop Samuel Eaves, II"
 
-  - username: "OneMorah"
-    display_name: "Pastor Christel Williams Crowdy"
+  - username: "curtisadairjr"
+    display_name: "Evangelist-at-Large Curtis Adair, Jr"
+    
