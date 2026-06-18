@@ -47,33 +47,33 @@ class TestBiblicalMonthNames:
 
 class TestFullName:
     def test_sabbath_eve(self):
-        assert _full_name("Sabbath", None, "Eve") == "God's Holy Convocation--Sabbath Eve"
+        assert _full_name("Sabbath", None, "Eve") == "God's Holy Convocation—Sabbath Eve"
 
     def test_sabbath_morning(self):
-        assert _full_name("Sabbath", None, "Morning") == "God's Holy Convocation--Sabbath Morning"
+        assert _full_name("Sabbath", None, "Morning") == "God's Holy Convocation—Sabbath Morning"
 
     def test_passover_at_even(self):
-        assert _full_name("Passover", None, "at Even") == "God's Holy Convocation--Passover at Even"
+        assert _full_name("Passover", None, "at Even") == "God's Holy Convocation—Passover at Even"
 
     def test_unleavened_bread_opening_day(self):
         result = _full_name("Feast of Unleavened Bread", "Opening", "Day")
-        assert result == "God's Holy Convocation--Feast of Unleavened Bread Opening Day"
+        assert result == "God's Holy Convocation—Feast of Unleavened Bread Opening Day"
 
     def test_unleavened_bread_closing_eve(self):
         result = _full_name("Feast of Unleavened Bread", "Closing", "Eve")
-        assert result == "God's Holy Convocation--Feast of Unleavened Bread Closing Eve"
+        assert result == "God's Holy Convocation—Feast of Unleavened Bread Closing Eve"
 
     def test_succoth_opening_eve(self):
         result = _full_name("Succoth", "Opening", "Eve")
-        assert result == "God's Holy Convocation--Succoth Opening Eve"
+        assert result == "God's Holy Convocation—Succoth Opening Eve"
 
     def test_succoth_closing_day(self):
         result = _full_name("Succoth", "Closing", "Day")
-        assert result == "God's Holy Convocation--Succoth Closing Day"
+        assert result == "God's Holy Convocation—Succoth Closing Day"
 
     def test_rosh_hashanah_morning(self):
         result = _full_name("Rosh Hashanah", None, "Morning")
-        assert result == "God's Holy Convocation--Rosh Hashanah Morning"
+        assert result == "God's Holy Convocation—Rosh Hashanah Morning"
 
 
 # ---------------------------------------------------------------------------
@@ -239,7 +239,7 @@ class TestConvocationsForHebrewYear:
 
     def test_event_names_start_with_gods_holy_convocation(self):
         for ev in self.events:
-            assert ev["name"].startswith("God's Holy Convocation--"), \
+            assert ev["name"].startswith("God's Holy Convocation—"), \
                 f"Unexpected name: {ev['name']}"
 
     def test_unleavened_bread_has_opening_and_closing(self):

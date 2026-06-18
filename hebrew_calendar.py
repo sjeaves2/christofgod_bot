@@ -122,7 +122,7 @@ CONVOCATION_DEFS: list[dict[str, Any]] = [
 
 def _full_name(name: str, phase: str | None, label: str) -> str:
     phase_str = f" {phase}" if phase else ""
-    return f"God's Holy Convocation--{name}{phase_str} {label}"
+    return f"God's Holy Convocation—{name}{phase_str} {label}"
 
 
 def _phase_key(convocation_key: str, label: str) -> str:
@@ -222,7 +222,7 @@ def sabbath_events(tz: pytz.BaseTzInfo, days_ahead: int = 90) -> list[dict[str, 
                 events.append({
                     "key": f"sabbath_eve_{current.isoformat()}",
                     "phase_key": _phase_key("sabbath", "Eve"),
-                    "name": "God's Holy Convocation--Sabbath Eve",
+                    "name": "God's Holy Convocation—Sabbath Eve",
                     "convocation_key": "sabbath",
                     "convocation_name": "Sabbath",
                     "phase": None,
@@ -240,7 +240,7 @@ def sabbath_events(tz: pytz.BaseTzInfo, days_ahead: int = 90) -> list[dict[str, 
                 events.append({
                     "key": f"sabbath_morning_{current.isoformat()}",
                     "phase_key": _phase_key("sabbath", "Morning"),
-                    "name": "God's Holy Convocation--Sabbath Morning",
+                    "name": "God's Holy Convocation—Sabbath Morning",
                     "convocation_key": "sabbath",
                     "convocation_name": "Sabbath",
                     "phase": None,
