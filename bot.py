@@ -83,6 +83,9 @@ DATA_DIR = BASE_DIR / _CFG["paths"]["data_dir"]
 LOGS_DIR = BASE_DIR / _CFG["paths"]["logs_dir"]
 GEN_DIR = BASE_DIR / _CFG["paths"]["generated_dir"]
 LOG_RETENTION = _CFG["log"]["retention_days"]
+# Console/file log verbosity. INFO shows command execution + notification
+# broadcasts; DEBUG additionally shows the underlying Telegram API calls.
+LOG_LEVEL = getattr(logging, str(_CFG["log"].get("level", "INFO")).upper(), logging.INFO)
 DEFAULT_NOTIF_MIN: int = _CFG["notifications"]["default_minutes_before"]
 
 for _d in (DATA_DIR, LOGS_DIR, GEN_DIR):
@@ -94,23 +97,30 @@ _log_file = LOGS_DIR / "bot.log"
 # Console handler — always on
 _console_handler = logging.StreamHandler()
 _console_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+_console_handler.setLevel(LOG_LEVEL)
 
 # File handler — appends across restarts
 _file_handler = logging.FileHandler(_log_file, mode="a", encoding="utf-8")
 _file_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+_file_handler.setLevel(LOG_LEVEL)
 
-logging.basicConfig(level=logging.INFO, handlers=[_console_handler, _file_handler])
+# Root at DEBUG so demoted-to-DEBUG records can reach handlers; the handlers'
+# own levels (LOG_LEVEL) decide what is actually emitted.
+logging.basicConfig(level=logging.DEBUG, handlers=[_console_handler, _file_handler])
 logger = logging.getLogger(__name__)
 logger.info("---- Bot process started ----")
 
 
-class _GetUpdatesFilter(logging.Filter):
-    """Suppress repetitive successful getUpdates log lines from httpx.
+class _HttpxApiLogFilter(logging.Filter):
+    """Keep the Telegram API call logs out of the way at INFO level.
 
-    Allows through:
-      - The very first getUpdates request (replaced with a friendlier message)
-      - Any response with an HTTP 4xx or 5xx status code
-    Suppresses everything else that mentions getUpdates.
+    - The very first getUpdates poll is replaced with a friendly INFO notice.
+    - Any HTTP 4xx/5xx response is left at its original level so API errors
+      always surface.
+    - Every other successful API request line (getUpdates polls, sendMessage,
+      etc.) is demoted to DEBUG, so it only appears when LOG_LEVEL=DEBUG.
+      This also keeps the bot token (embedded in request URLs) out of the
+      INFO-level logs.
     """
 
     def __init__(self) -> None:
@@ -119,30 +129,29 @@ class _GetUpdatesFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         msg = record.getMessage()
-        if "getUpdates" not in msg:
+        if "HTTP Request" not in msg and "getUpdates" not in msg:
             return True  # unrelated record — pass through unchanged
 
-        # Check for error status codes (4xx / 5xx) in the httpx message format:
-        # 'HTTP Request: POST ... getUpdates "HTTP/1.1 4xx ..."'
-        import re
         status_match = re.search(r'"HTTP/[\d.]+ (\d{3})', msg)
         if status_match and int(status_match.group(1)) >= 400:
-            return True  # always log errors
+            return True  # always surface API errors at their original level
 
-        if not self._seen_first:
+        if "getUpdates" in msg and not self._seen_first:
             self._seen_first = True
-            # Replace the raw httpx message with a friendlier one-time notice
             record.msg = (
                 "Long polling started — using getUpdates to check for incoming messages"
             )
             record.args = ()
-            return True
+            return True  # friendly one-time INFO notice
 
-        return False  # suppress subsequent successful getUpdates calls
+        # Successful API calls → DEBUG (hidden unless LOG_LEVEL=DEBUG)
+        record.levelno = logging.DEBUG
+        record.levelname = "DEBUG"
+        return True
 
 
-_get_updates_filter = _GetUpdatesFilter()
-logging.getLogger("httpx").addFilter(_get_updates_filter)
+_httpx_api_filter = _HttpxApiLogFilter()
+logging.getLogger("httpx").addFilter(_httpx_api_filter)
 
 activity = ActivityLogger(LOGS_DIR, retention_days=LOG_RETENTION, tz=TZ)
 
@@ -153,6 +162,9 @@ activity = ActivityLogger(LOGS_DIR, retention_days=LOG_RETENTION, tz=TZ)
 events_cache = FileCache(DATA_DIR / "events.yaml")
 users_cache = FileCache(DATA_DIR / "users.yaml")
 appts_cache = FileCache(DATA_DIR / "appointments.yaml")
+# Tracks which recipients have already been notified for each event, so a
+# missed/partial broadcast can be retried later without duplicate sends.
+notif_state_cache = FileCache(DATA_DIR / "notification_state.yaml")
 
 # Admins are loaded once at startup and kept in memory.
 # Each entry may carry a `username`, a `phone`, or both.
@@ -545,31 +557,100 @@ def _render_notification(event: dict[str, Any], tz: "pytz.BaseTzInfo", lang: str
     return "\n".join(lines)
 
 
-async def send_notification(context: ContextTypes.DEFAULT_TYPE) -> None:
-    event: dict[str, Any] = context.job.data  # type: ignore[attr-defined]
-    name = event["name"]
+async def _load_notif_state() -> dict[str, Any]:
+    data = await notif_state_cache.get()
+    return (data or {}).get("states") or {}
+
+
+async def _save_notif_state(states: dict[str, Any]) -> None:
+    await notif_state_cache.save({"states": states})
+
+
+async def deliver_event_notifications(bot, event: dict[str, Any]) -> int:
+    """Send an event reminder to every subscriber who hasn't received it yet.
+
+    Idempotent: tracks per-event delivery in notification_state so a missed or
+    partially-failed broadcast can be retried later without duplicate sends.
+    Does nothing once the event's service time has passed. Returns the number
+    of messages sent on this call.
+    """
+    key = event["key"]
+    service_time = event["service_time"]
+    now = now_tz()
+    if now >= service_time:
+        return 0  # too late — the event has already started
 
     users = await get_all_users()
+    states = await _load_notif_state()
+    state = states.setdefault(
+        key,
+        {"name": event["name"], "service_time": service_time.isoformat(), "notified": []},
+    )
+    notified: set[int] = set(state["notified"])
+    pending = [u for u in users if u["chat_id"] not in notified]
+    if not pending:
+        return 0
+
     sent = 0
     blocked: list[int] = []
-    for u in users:
+    failed = 0
+    for u in pending:
         text = _render_notification(event, user_tz_of(u), user_lang_of(u))
         try:
-            await context.bot.send_message(u["chat_id"], text, parse_mode=ParseMode.MARKDOWN)
+            await bot.send_message(u["chat_id"], text, parse_mode=ParseMode.MARKDOWN)
+            notified.add(u["chat_id"])
             sent += 1
         except Forbidden:
             blocked.append(u["chat_id"])
         except TelegramError as exc:
+            failed += 1
             logger.warning("Notification send error for %s: %s", u.get("chat_id"), exc)
 
-    activity.log_notification_sent(name, sent)
+    state["notified"] = sorted(notified)
+    states[key] = state
+    await _save_notif_state(states)
 
     if blocked:
-        # Remove users who have blocked the bot
         remaining = [u for u in users if u["chat_id"] not in blocked]
         await save_users(remaining)
         for cid in blocked:
             activity.log_user_left(cid, None, None)
+
+    if sent:
+        activity.log_notification_sent(event["name"], sent)
+    logger.info(
+        "Notification broadcast %r: sent=%d, will_retry=%d, blocked=%d",
+        event["name"], sent, failed, len(blocked),
+    )
+    return sent
+
+
+async def send_notification(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Scheduled one-shot job at an event's notification time."""
+    event: dict[str, Any] = context.job.data  # type: ignore[attr-defined]
+    await deliver_event_notifications(context.bot, event)
+
+
+async def notification_catchup_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Safety net: retry any due-but-undelivered notifications.
+
+    Covers reminders missed entirely (process asleep/offline at fire time) and
+    partial failures (network errors). Retries every recipient still pending
+    for any event currently inside its [notification_time, service_time) window,
+    then prunes state for events whose service time has passed.
+    """
+    now = now_tz()
+    events = await all_upcoming(days_ahead=3)
+    for ev in events:
+        if ev["notification_time"] <= now < ev["service_time"]:
+            await deliver_event_notifications(context.bot, ev)
+
+    # Prune state for events that have started or fallen out of the window.
+    states = await _load_notif_state()
+    live_keys = {ev["key"] for ev in events if now < ev["service_time"]}
+    pruned = {k: v for k, v in states.items() if k in live_keys}
+    if len(pruned) != len(states):
+        await _save_notif_state(pruned)
 
 
 def schedule_event_notification(app: Application, event: dict[str, Any]) -> None:
@@ -2034,6 +2115,22 @@ async def lang_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
 
 # ---------------------------------------------------------------------------
+# Command-execution logging (INFO)
+# ---------------------------------------------------------------------------
+
+async def _log_command_invocation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log every command at INFO level. Runs in group -1 before real handlers."""
+    msg = update.effective_message
+    if not msg or not msg.text:
+        return
+    command = msg.text.split()[0]
+    u = update.effective_user
+    who = (u.full_name if u else None) or "unknown"
+    uid = u.id if u else "?"
+    logger.info("Command %s executed by %s (id=%s)", command, who, uid)
+
+
+# ---------------------------------------------------------------------------
 # Error handler
 # ---------------------------------------------------------------------------
 
@@ -2069,6 +2166,15 @@ async def post_init(app: Application) -> None:
         interval=timedelta(days=7),
         first=timedelta(seconds=10),
         name="weekly_reschedule",
+    )
+
+    # Catch-up job — retries any due-but-undelivered notifications (missed while
+    # offline/asleep, or partially failed) until delivered or the event starts.
+    app.job_queue.run_repeating(
+        notification_catchup_job,
+        interval=timedelta(minutes=2),
+        first=timedelta(seconds=20),
+        name="notification_catchup",
     )
 
 
@@ -2168,6 +2274,10 @@ def main() -> None:
     )
 
     # --- Register handlers ---
+    # Group -1 runs first for every command and logs its execution at INFO,
+    # then normal handlers in group 0 process it.
+    app.add_handler(MessageHandler(filters.COMMAND, _log_command_invocation), group=-1)
+
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(MessageHandler(filters.CONTACT, handle_contact))
     app.add_handler(CommandHandler("stop", cmd_stop))

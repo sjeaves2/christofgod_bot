@@ -169,23 +169,10 @@ class TestSundayPrayerLink:
 # ---------------------------------------------------------------------------
 
 class TestNotificationLink:
-    def _run_notify(self, event):
+    def _render(self, event):
         import bot
 
-        ctx = _make_context()
-        ctx.job = MagicMock()
-        ctx.job.data = event
-
-        async def _fake_users():
-            return [{"chat_id": 111}]
-
-        async def _fake_save(u):
-            pass
-
-        with patch("bot.get_all_users", side_effect=_fake_users), \
-             patch("bot.save_users", side_effect=_fake_save):
-            _run(bot.send_notification(ctx))
-        return ctx.bot.send_message.call_args[0][1]
+        return bot._render_notification(event, TZ, "en")
 
     def _event(self, **extra):
         ev = {
@@ -197,11 +184,11 @@ class TestNotificationLink:
         return ev
 
     def test_link_included_when_present(self):
-        msg = self._run_notify(self._event(url="https://zoom.us/eve"))
+        msg = self._render(self._event(url="https://zoom.us/eve"))
         assert "https://zoom.us/eve" in msg
 
     def test_no_link_line_when_absent(self):
-        msg = self._run_notify(self._event())
+        msg = self._render(self._event())
         assert "Join" not in msg
 
 
