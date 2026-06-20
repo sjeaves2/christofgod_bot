@@ -30,3 +30,6 @@ paths:
 log:
   # Keep log records for this many days (6 months ≈ 180 days)
   retention_days: 180
+  # Console/file verbosity. INFO shows command execution and notification
+  # broadcasts; DEBUG additionally shows the underlying Telegram API calls.
+  level: INFO
