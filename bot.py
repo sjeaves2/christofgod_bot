@@ -38,11 +38,13 @@ from telegram import (
     ReplyKeyboardRemove,
     Update,
 )
-from telegram.constants import ParseMode
+from telegram.constants import ChatType, ParseMode
 from telegram.error import Forbidden, TelegramError
 from telegram.ext import (
     Application,
+    ApplicationHandlerStop,
     CallbackQueryHandler,
+    ChatMemberHandler,
     CommandHandler,
     ContextTypes,
     ConversationHandler,
@@ -488,6 +490,7 @@ def _merge_special_events(
                             "duration_minutes": defn.get("duration_minutes", 60),
                             "description": defn.get("description", ""),
                             "url": defn.get("url", ""),
+                            "targets": defn.get("targets", []),
                             "announcements": announcements_map.get(key, []),
                         })
                 current += timedelta(days=1)
@@ -510,9 +513,35 @@ def _merge_special_events(
                     "duration_minutes": defn.get("duration_minutes", 60),
                     "description": defn.get("description", ""),
                     "url": defn.get("url", ""),
+                    "targets": defn.get("targets", []),
                     "announcements": announcements_map.get(defn["id"], []),
                 })
     return results
+
+
+def _resolve_targets(names: "list", registry: dict) -> list[int]:
+    """Map target names to chat_ids via the registry; pass through raw ids.
+
+    Accepts a list of registry names and/or literal chat ids (int, or a string
+    like a "@channelusername" / numeric id). Unknown names are dropped.
+    """
+    resolved: list = []
+    for n in names or []:
+        if isinstance(n, int):
+            resolved.append(n)
+        elif n in registry:
+            resolved.append(registry[n])
+        elif isinstance(n, str) and (n.startswith("@") or n.lstrip("-").isdigit()):
+            resolved.append(int(n) if n.lstrip("-").isdigit() else n)
+        # else: unknown name with no registry entry — skip
+    # De-duplicate, preserving order
+    seen = set()
+    out = []
+    for c in resolved:
+        if c not in seen:
+            seen.add(c)
+            out.append(c)
+    return out
 
 
 async def all_upcoming(days_ahead: int = 90) -> list[dict[str, Any]]:
@@ -522,15 +551,26 @@ async def all_upcoming(days_ahead: int = 90) -> list[dict[str, Any]]:
     urls_map: dict[str, str] = evdata.get("convocation_urls", {})
     special_defs: list[dict[str, Any]] = evdata.get("special_events", [])
 
+    # Notification target registry + convocation target assignments
+    registry: dict = evdata.get("notification_targets", {}) or {}
+    convo_targets: dict = evdata.get("convocation_targets", {}) or {}
+    convo_targets_default: list = evdata.get("convocation_targets_default", []) or []
+
     convocations = all_upcoming_events(TZ, days_ahead)
-    # Attach urgent announcements and any per-service (per-phase) join link.
+    # Attach announcements, per-service join link, and notification target chats.
     for ev in convocations:
         ev["announcements"] = announcements_map.get(ev["key"], [])
         phase_key = ev.get("phase_key")
         if phase_key and urls_map.get(phase_key):
             ev["url"] = urls_map[phase_key]
+        names = convo_targets.get(phase_key) if phase_key else None
+        if names is None:
+            names = convo_targets_default
+        ev["target_chat_ids"] = _resolve_targets(names, registry)
 
     specials = _merge_special_events(special_defs, announcements_map, days_ahead)
+    for ev in specials:
+        ev["target_chat_ids"] = _resolve_targets(ev.get("targets", []), registry)
 
     merged = convocations + specials
     merged.sort(key=lambda e: e["service_time"])
@@ -567,12 +607,13 @@ async def _save_notif_state(states: dict[str, Any]) -> None:
 
 
 async def deliver_event_notifications(bot, event: dict[str, Any]) -> int:
-    """Send an event reminder to every subscriber who hasn't received it yet.
+    """Post an event reminder to each configured group/channel not yet notified.
 
-    Idempotent: tracks per-event delivery in notification_state so a missed or
-    partially-failed broadcast can be retried later without duplicate sends.
-    Does nothing once the event's service time has passed. Returns the number
-    of messages sent on this call.
+    Notifications are broadcast once per target chat (not per individual user).
+    Idempotent: tracks delivered target chats in notification_state so a missed
+    or partially-failed broadcast can be retried later without duplicate posts.
+    Does nothing once the event's service time has passed. Returns the number of
+    messages posted on this call.
     """
     key = event["key"]
     service_time = event["service_time"]
@@ -580,47 +621,44 @@ async def deliver_event_notifications(bot, event: dict[str, Any]) -> int:
     if now >= service_time:
         return 0  # too late — the event has already started
 
-    users = await get_all_users()
+    targets = event.get("target_chat_ids") or []
+    if not targets:
+        return 0  # no group/channel configured for this event
+
     states = await _load_notif_state()
     state = states.setdefault(
         key,
         {"name": event["name"], "service_time": service_time.isoformat(), "notified": []},
     )
-    notified: set[int] = set(state["notified"])
-    pending = [u for u in users if u["chat_id"] not in notified]
+    notified = set(state["notified"])
+    pending = [c for c in targets if c not in notified]
     if not pending:
         return 0
 
-    sent = 0
-    blocked: list[int] = []
-    failed = 0
-    for u in pending:
-        text = _render_notification(event, user_tz_of(u), user_lang_of(u))
-        try:
-            await bot.send_message(u["chat_id"], text, parse_mode=ParseMode.MARKDOWN)
-            notified.add(u["chat_id"])
-            sent += 1
-        except Forbidden:
-            blocked.append(u["chat_id"])
-        except TelegramError as exc:
-            failed += 1
-            logger.warning("Notification send error for %s: %s", u.get("chat_id"), exc)
+    # Groups/channels get a single rendering in the church's default tz/language.
+    text = _render_notification(event, TZ, DEFAULT_LANG)
 
-    state["notified"] = sorted(notified)
+    sent = 0
+    failed = 0
+    for chat_id in pending:
+        try:
+            await bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN)
+            notified.add(chat_id)
+            sent += 1
+        except TelegramError as exc:
+            # Includes Forbidden (bot not in group) — leave pending for retry.
+            failed += 1
+            logger.warning("Notification post error for chat %s: %s", chat_id, exc)
+
+    state["notified"] = sorted(notified, key=lambda c: str(c))
     states[key] = state
     await _save_notif_state(states)
-
-    if blocked:
-        remaining = [u for u in users if u["chat_id"] not in blocked]
-        await save_users(remaining)
-        for cid in blocked:
-            activity.log_user_left(cid, None, None)
 
     if sent:
         activity.log_notification_sent(event["name"], sent)
     logger.info(
-        "Notification broadcast %r: sent=%d, will_retry=%d, blocked=%d",
-        event["name"], sent, failed, len(blocked),
+        "Notification broadcast %r: posted=%d, will_retry=%d",
+        event["name"], sent, failed,
     )
     return sent
 
@@ -2118,8 +2156,17 @@ async def lang_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 # Command-execution logging (INFO)
 # ---------------------------------------------------------------------------
 
+async def _ignore_group_messages(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Drop any message from a group/channel — the bot only serves private chats.
+
+    Raising ApplicationHandlerStop prevents all later handlers (commands,
+    conversations, free-text) from acting on group/channel messages.
+    """
+    raise ApplicationHandlerStop
+
+
 async def _log_command_invocation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Log every command at INFO level. Runs in group -1 before real handlers."""
+    """Log every private command at INFO. Runs in group -1 before real handlers."""
     msg = update.effective_message
     if not msg or not msg.text:
         return
@@ -2128,6 +2175,25 @@ async def _log_command_invocation(update: Update, context: ContextTypes.DEFAULT_
     who = (u.full_name if u else None) or "unknown"
     uid = u.id if u else "?"
     logger.info("Command %s executed by %s (id=%s)", command, who, uid)
+
+
+async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log when the bot is added to / removed from a group or channel.
+
+    Surfaces the chat_id at INFO so an admin can add it to the
+    notification_targets registry in events.yaml.
+    """
+    cmu = update.my_chat_member
+    if not cmu:
+        return
+    chat = cmu.chat
+    new_status = cmu.new_chat_member.status
+    if chat.type in (ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL):
+        logger.info(
+            "Bot membership change in %s '%s' (chat_id=%s): status=%s "
+            "— add this chat_id to notification_targets to broadcast here.",
+            chat.type, chat.title, chat.id, new_status,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -2274,9 +2340,21 @@ def main() -> None:
     )
 
     # --- Register handlers ---
-    # Group -1 runs first for every command and logs its execution at INFO,
-    # then normal handlers in group 0 process it.
-    app.add_handler(MessageHandler(filters.COMMAND, _log_command_invocation), group=-1)
+    # Log/observe the bot being added to or removed from groups/channels.
+    app.add_handler(ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
+
+    # Group -1 runs before the real handlers in group 0:
+    #   1. Drop anything sent from a group/channel (bot serves private chats only)
+    #   2. Log private command execution at INFO
+    app.add_handler(
+        MessageHandler(~filters.ChatType.PRIVATE, _ignore_group_messages), group=-1
+    )
+    app.add_handler(
+        MessageHandler(
+            filters.ChatType.PRIVATE & filters.COMMAND, _log_command_invocation
+        ),
+        group=-1,
+    )
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(MessageHandler(filters.CONTACT, handle_contact))
