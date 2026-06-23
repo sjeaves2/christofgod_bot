@@ -1,3 +1,26 @@
+# Notification target registry: friendly name -> Telegram chat_id of a group or
+# channel the bot has been added to. Groups/supergroups use negative numeric ids
+# (e.g. -1001234567890); public channels may use "@channelusername".
+# When the bot is added to a group/channel it logs the chat_id at INFO.
+notification_targets:
+  cogm_members: -1001178984510
+# Example:
+# notification_targets:
+#   main_group: -1001234567890
+#   announcements: "@cogm_announcements"
+
+# Default target(s) for every convocation/Sabbath service (by registry name or
+# raw chat_id). Used when a phase is not listed in convocation_targets below.
+convocation_targets_default:
+  - cogm_members
+# Per-service override of broadcast targets, keyed by phase_key
+# ("<convocation_key>::<label>", e.g. "sabbath::Eve").
+convocation_targets: {}
+# Example:
+# convocation_targets:
+#   "sabbath::Eve": [main_group]
+#   "sabbath::Morning": [main_group, announcements]
+
 special_events:
 - id: sunday_morning_prayer
   name: Sunday Morning Prayer
@@ -8,7 +31,11 @@ special_events:
   notification_minutes: 720
   description: Weekly Sunday Morning Prayer service — all are welcome.
   url: https://us06web.zoom.us/j/83741547036?pwd=kttfvC4BKnmS6fQwvb7mqawRiCXCjH.1
+  # Group(s)/channel(s) to post this reminder to (registry names or chat_ids).
+  targets:
+    - cogm_members
   active: true
+
 convocation_announcements: {}
 convocation_urls:
   sabbath::Eve: https://us06web.zoom.us/j/81594253541?pwd=e3BzF98vLF2t2biXwRGbCVaRUUOrVN.1
