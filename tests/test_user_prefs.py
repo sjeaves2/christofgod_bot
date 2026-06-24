@@ -102,7 +102,7 @@ class TestFormatDt:
         import bot
         dt = pytz.utc.localize(datetime(2030, 7, 1, 14, 0))  # 07:00 PDT
         out = bot.format_dt(dt, pytz.timezone("America/Los_Angeles"))
-        assert "07:00 AM" in out
+        assert "7:00 AM" in out
 
 
 # ---------------------------------------------------------------------------
@@ -156,11 +156,18 @@ class TestSetTimezone:
 # ---------------------------------------------------------------------------
 
 class TestLanguage:
-    def _run_select(self, text):
+    def _run_select(self, data):
         import bot
         ctx = _make_context()
-        ctx.user_data["lang_codes"] = list(bot.AVAILABLE_LANGUAGES.keys())
-        upd = _make_update(text=text)
+        upd = MagicMock()
+        upd.effective_user.id = 111
+        upd.effective_user.username = "u"
+        upd.effective_user.full_name = "U"
+        q = MagicMock()
+        q.answer = AsyncMock()
+        q.edit_message_text = AsyncMock()
+        q.data = data
+        upd.callback_query = q
         saved = {}
 
         async def _fake_get():
@@ -172,18 +179,18 @@ class TestLanguage:
         with patch("bot.get_all_users", side_effect=_fake_get), \
              patch("bot.save_users", side_effect=_fake_save):
             result = _run(bot.lang_select(upd, ctx))
-        return result, upd, saved
+        return result, q, saved
 
     def test_select_english(self):
         import bot
-        result, upd, saved = self._run_select("1")
+        result, q, saved = self._run_select("lang:en")
         assert result == bot.ConversationHandler.END
         assert saved["users"][0]["language"] == "en"
 
-    def test_invalid_selection_stays(self):
+    def test_unknown_code_ends_without_saving(self):
         import bot
-        result, upd, saved = self._run_select("9")
-        assert result == bot.LANG_SELECT
+        result, q, saved = self._run_select("lang:xx")
+        assert result == bot.ConversationHandler.END
         assert "users" not in saved
 
 
@@ -221,7 +228,7 @@ class TestEventsRespectUserTz:
 
     def test_pacific_user_sees_pacific_time(self):
         msg = self._run_events({"chat_id": 111, "timezone": "America/Los_Angeles"})
-        assert "07:00 AM" in msg
+        assert "7:00 AM" in msg
 
 
 # ---------------------------------------------------------------------------
@@ -239,4 +246,4 @@ class TestNotificationPerUserTz:
         eastern = bot._render_notification(event, pytz.timezone("America/New_York"), "en")
         pacific = bot._render_notification(event, pytz.timezone("America/Los_Angeles"), "en")
         assert "10:00 AM" in eastern
-        assert "07:00 AM" in pacific
+        assert "7:00 AM" in pacific

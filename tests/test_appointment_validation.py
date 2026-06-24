@@ -273,10 +273,20 @@ class TestDateWindow:
 # ---------------------------------------------------------------------------
 
 class TestOnePerOfficial:
-    def _run_ap_official(self, appts, selection="1"):
+    def _run_ap_official(self, appts, data="apsel:0"):
         from bot import ap_official
         ctx = _make_context()
-        upd = _make_update(text=selection, chat_id=111, username="requester")
+        upd = MagicMock()
+        upd.effective_chat.id = 111
+        upd.effective_user.id = 111
+        upd.effective_user.username = "requester"
+        upd.effective_user.full_name = "Test User"
+        q = MagicMock()
+        q.answer = AsyncMock()
+        q.edit_message_text = AsyncMock()
+        q.data = data
+        q.from_user.id = 111
+        upd.callback_query = q
 
         async def _fake_get():
             return appts
@@ -284,7 +294,7 @@ class TestOnePerOfficial:
         with patch("bot.get_appointments", side_effect=_fake_get), \
              patch("bot.OFFICIALS", _officials()):
             result = _run(ap_official(upd, ctx))
-        return result, upd, ctx
+        return result, q, ctx
 
     def test_no_existing_appointment_proceeds(self):
         from bot import AP_DATE
@@ -294,13 +304,13 @@ class TestOnePerOfficial:
 
     def test_existing_active_appointment_blocks(self):
         from bot import ConversationHandler
-        result, upd, ctx = self._run_ap_official([_make_appt(status="pending")])
+        result, q, ctx = self._run_ap_official([_make_appt(status="pending")])
         assert result == ConversationHandler.END
         assert "ap_official" not in ctx.user_data
 
     def test_block_message_mentions_cancel(self):
-        result, upd, _ = self._run_ap_official([_make_appt(status="confirmed")])
-        msg = upd.message.reply_text.call_args[0][0].lower()
+        result, q, _ = self._run_ap_official([_make_appt(status="confirmed")])
+        msg = q.edit_message_text.call_args[0][0].lower()
         assert "cancelappointment" in msg
 
     def test_cancelled_appointment_does_not_block(self):
@@ -313,10 +323,15 @@ class TestOnePerOfficial:
         result, _, _ = self._run_ap_official([_make_appt(official_id="off2")])
         assert result == AP_DATE
 
-    def test_invalid_selection_stays(self):
-        from bot import AP_OFFICIAL
-        result, _, _ = self._run_ap_official([], selection="9")
-        assert result == AP_OFFICIAL
+    def test_invalid_selection_ends(self):
+        from bot import ConversationHandler
+        result, _, _ = self._run_ap_official([], data="apsel:9")
+        assert result == ConversationHandler.END
+
+    def test_cancel_button_ends(self):
+        from bot import ConversationHandler
+        result, q, _ = self._run_ap_official([], data="apsel:cancel")
+        assert result == ConversationHandler.END
 
 
 # ---------------------------------------------------------------------------

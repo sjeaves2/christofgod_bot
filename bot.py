@@ -39,7 +39,7 @@ from telegram import (
     Update,
 )
 from telegram.constants import ChatType, ParseMode
-from telegram.error import Forbidden, TelegramError
+from telegram.error import BadRequest, Forbidden, TelegramError
 from telegram.ext import (
     Application,
     ApplicationHandlerStop,
@@ -60,7 +60,14 @@ from hebrew_calendar import (
     sabbath_events,
     service_phases,
 )
-from localization import AVAILABLE_LANGUAGES, CATALOG, DEFAULT_LANG, t
+from localization import (
+    AVAILABLE_LANGUAGES,
+    CATALOG,
+    DEFAULT_LANG,
+    localized_datetime,
+    status_label,
+    t,
+)
 from ics_generator import (
     appointment_cancellation_to_ics,
     appointment_to_ics,
@@ -167,6 +174,9 @@ appts_cache = FileCache(DATA_DIR / "appointments.yaml")
 # Tracks which recipients have already been notified for each event, so a
 # missed/partial broadcast can be retried later without duplicate sends.
 notif_state_cache = FileCache(DATA_DIR / "notification_state.yaml")
+# Groups/channels the bot has been added to (discovered via membership events),
+# used to populate the /broadcast target list.
+groups_cache = FileCache(DATA_DIR / "known_groups.yaml")
 
 # Admins are loaded once at startup and kept in memory.
 # Each entry may carry a `username`, a `phone`, or both.
@@ -308,8 +318,8 @@ async def save_appointments(appts: list[dict[str, Any]]) -> None:
     await appts_cache.save(data)
 
 
-def format_dt(dt: datetime, tz: "pytz.BaseTzInfo | None" = None) -> str:
-    return dt.astimezone(tz or TZ).strftime("%A, %B %d, %Y at %I:%M %p %Z")
+def format_dt(dt: datetime, tz: "pytz.BaseTzInfo | None" = None, lang: "str | None" = None) -> str:
+    return localized_datetime(dt.astimezone(tz or TZ), lang or DEFAULT_LANG)
 
 
 def _coerce_tz(name: "str | None") -> "pytz.BaseTzInfo":
@@ -356,12 +366,13 @@ def _appt_datetime(appt: dict[str, Any]) -> "datetime | None":
     return dt_obj
 
 
-def _appt_dt_label(appt: dict[str, Any], tz: "pytz.BaseTzInfo | None" = None) -> str:
+def _appt_dt_label(appt: dict[str, Any], tz: "pytz.BaseTzInfo | None" = None,
+                   lang: "str | None" = None) -> str:
     """Human-readable date/time for an appointment, falling back to the raw value."""
     dt_obj = _appt_datetime(appt)
     if dt_obj is None:
         return appt.get("confirmed_datetime") or appt.get("requested_datetime") or "—"
-    return format_dt(dt_obj, tz)
+    return format_dt(dt_obj, tz, lang)
 
 
 def _user_is_appt_official(appt: dict[str, Any], user_id: int, username: "str | None") -> bool:
@@ -374,6 +385,14 @@ def _user_is_appt_official(appt: dict[str, Any], user_id: int, username: "str | 
     uname_lower = (username or "").lstrip("@").lower()
     oname = (off.get("telegram_username") or "").lstrip("@").lower()
     return bool(uname_lower) and oname == uname_lower
+
+
+# Affirmative replies accepted for typed yes/no prompts, across supported languages.
+_AFFIRMATIVE_WORDS = {"yes", "y", "sí", "si", "s", "oui", "o"}
+
+
+def _is_affirmative(text: "str | None") -> bool:
+    return (text or "").strip().lower() in _AFFIRMATIVE_WORDS
 
 
 # Statuses that count as an appointment still "in play".
@@ -585,7 +604,7 @@ def _render_notification(event: dict[str, Any], tz: "pytz.BaseTzInfo", lang: str
     """Build a reminder message localized and time-zoned for one recipient."""
     lines = [
         t("notif_reminder_title", lang, name=event["name"]),
-        t("notif_service_begins", lang, when=format_dt(event["service_time"], tz)),
+        t("notif_service_begins", lang, when=format_dt(event["service_time"], tz, lang)),
     ]
     if event.get("description"):
         lines.append(f"\n_{event['description']}_")
@@ -720,6 +739,7 @@ ADMIN_COMMANDS_TEXT = """\
 /modifyevent — modify an event
 /deleteevent — remove or annotate an event
 /setservicelink — set the join link for a convocation/Sabbath service
+/broadcast — send a message to groups and/or all subscribers
 /listevents — events in the next 30 days (admin view)
 /usercount — number of registered users
 /userlist — list registered users
@@ -842,7 +862,7 @@ async def cmd_events(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     lines = [t("events_header", lang)]
     for ev in events:
-        dt_str = format_dt(ev["service_time"], tz)
+        dt_str = format_dt(ev["service_time"], tz, lang)
         lines.append(f"📅 *{ev['name']}*\n   {dt_str}")
         if ev.get("url"):
             lines.append(f"   🔗 {ev['url']}")
@@ -1342,6 +1362,244 @@ async def sl_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 # ---------------------------------------------------------------------------
+# /broadcast — admin sends an ad-hoc message to groups and/or all subscribers
+# ---------------------------------------------------------------------------
+
+BC_MESSAGE, BC_SELECT, BC_RETRY = range(3)
+
+CB_BC_PREFIX = "bc:"
+BC_MAX_RETRIES = 3
+
+
+async def _broadcast_target_options() -> list[dict[str, Any]]:
+    """Build the selectable target list: tracked groups ∪ registry, plus 'All'.
+
+    Each option: {"key": str, "kind": "all"|"group", "chat_id": ..., "label": str}.
+    """
+    options: list[dict[str, Any]] = [
+        {"key": "all", "kind": "all", "chat_id": None, "label": "All subscribers"}
+    ]
+    seen: set[str] = set()
+
+    groups = await _load_known_groups()
+    for g in groups.values():
+        cid = g.get("chat_id")
+        k = str(cid)
+        if k in seen:
+            continue
+        seen.add(k)
+        options.append({"key": k, "kind": "group", "chat_id": cid,
+                        "label": g.get("title") or k})
+
+    evdata = await get_all_events_data()
+    registry: dict = evdata.get("notification_targets", {}) or {}
+    for name, cid in registry.items():
+        k = str(cid)
+        if k in seen:
+            continue
+        seen.add(k)
+        options.append({"key": k, "kind": "group", "chat_id": cid, "label": name})
+
+    return options
+
+
+def _bc_keyboard(options: list[dict], selected: set[str]) -> InlineKeyboardMarkup:
+    rows = []
+    for opt in options:
+        mark = "✅ " if opt["key"] in selected else "▫️ "
+        rows.append([InlineKeyboardButton(
+            f"{mark}{opt['label']}", callback_data=f"{CB_BC_PREFIX}toggle:{opt['key']}"
+        )])
+    rows.append([InlineKeyboardButton("📤 Send", callback_data=f"{CB_BC_PREFIX}send")])
+    rows.append([InlineKeyboardButton("✖️ Cancel", callback_data=f"{CB_BC_PREFIX}cancel")])
+    return InlineKeyboardMarkup(rows)
+
+
+@admin_only
+async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    uid, uname, dname = user_info(update)
+    activity.log_command("broadcast", uid, uname, dname)
+    context.user_data.clear()
+    await update.message.reply_text(
+        "📣 *Broadcast*\n\nSend me the message to broadcast. "
+        "Markdown formatting is supported; I'll show you a preview before sending.",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return BC_MESSAGE
+
+
+async def bc_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text
+    # Validate Markdown by rendering a preview back to the admin.
+    try:
+        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+    except BadRequest as exc:
+        await update.message.reply_text(
+            f"⚠️ I couldn't render that as Markdown ({exc.message}). "
+            "Please edit and re-send your message."
+        )
+        return BC_MESSAGE
+
+    context.user_data["bc_message"] = text
+    options = await _broadcast_target_options()
+    context.user_data["bc_options"] = options
+    context.user_data["bc_selected"] = set()
+    await update.message.reply_text(
+        "👆 *Preview above.* Choose where to send it, then tap *Send*:",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=_bc_keyboard(options, set()),
+    )
+    return BC_SELECT
+
+
+async def bc_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    action = query.data[len(CB_BC_PREFIX):]
+    options: list[dict] = context.user_data.get("bc_options", [])
+    selected: set[str] = context.user_data.get("bc_selected", set())
+
+    if action == "cancel":
+        await query.edit_message_text("Broadcast cancelled.")
+        return ConversationHandler.END
+
+    if action.startswith("toggle:"):
+        key = action.split(":", 1)[1]
+        if key in selected:
+            selected.discard(key)
+        else:
+            selected.add(key)
+        context.user_data["bc_selected"] = selected
+        await query.edit_message_reply_markup(reply_markup=_bc_keyboard(options, selected))
+        return BC_SELECT
+
+    if action == "send":
+        if not selected:
+            await query.answer("Select at least one target first.", show_alert=True)
+            return BC_SELECT
+        # Expand selection into a concrete recipient list.
+        recipients = await _bc_expand_recipients(options, selected)
+        context.user_data["bc_recipients"] = recipients
+        context.user_data["bc_done"] = set()
+        context.user_data["bc_retries"] = 0
+        await query.edit_message_text(f"Sending to {len(recipients)} recipient(s)…")
+        return await _bc_attempt_and_prompt(update, context)
+
+    return BC_SELECT
+
+
+async def _bc_expand_recipients(options: list[dict], selected: set[str]) -> list[dict]:
+    """Turn the selected option keys into concrete (kind, chat_id, label) recipients."""
+    recipients: list[dict] = []
+    seen: set = set()
+    opt_by_key = {o["key"]: o for o in options}
+    for key in selected:
+        opt = opt_by_key.get(key)
+        if not opt:
+            continue
+        if opt["kind"] == "all":
+            for u in await get_all_users():
+                cid = u["chat_id"]
+                if cid in seen:
+                    continue
+                seen.add(cid)
+                recipients.append({"kind": "user", "chat_id": cid,
+                                   "label": u.get("display_name") or str(cid)})
+        else:
+            cid = opt["chat_id"]
+            if cid in seen:
+                continue
+            seen.add(cid)
+            recipients.append({"kind": "group", "chat_id": cid, "label": opt["label"]})
+    return recipients
+
+
+async def _bc_send_pending(bot, context) -> list[dict]:
+    """Send the message to all recipients not yet delivered. Returns failures."""
+    message: str = context.user_data["bc_message"]
+    recipients: list[dict] = context.user_data["bc_recipients"]
+    done: set = context.user_data["bc_done"]
+    failures: list[dict] = []
+    for r in recipients:
+        if r["chat_id"] in done:
+            continue
+        try:
+            await bot.send_message(r["chat_id"], message, parse_mode=ParseMode.MARKDOWN)
+            done.add(r["chat_id"])
+        except TelegramError as exc:
+            failures.append(r)
+            logger.warning("Broadcast send failed for %s (%s): %s",
+                           r["label"], r["chat_id"], exc)
+    context.user_data["bc_done"] = done
+    return failures
+
+
+async def _bc_attempt_and_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Send the pending recipients once, then report / prompt for retry."""
+    bot = context.application.bot
+    failures = await _bc_send_pending(bot, context)
+    total = len(context.user_data["bc_recipients"])
+    sent = len(context.user_data["bc_done"])
+    chat_id = update.effective_chat.id
+
+    uid, uname, dname = user_info(update)
+    activity.log_command(
+        "broadcast", uid, uname, dname,
+        details=f"sent={sent}/{total}, failures={len(failures)}",
+    )
+    logger.info("Broadcast: delivered=%d/%d, failures=%d", sent, total, len(failures))
+
+    if not failures:
+        await bot.send_message(chat_id, f"✅ Broadcast delivered to all {total} recipient(s).")
+        return ConversationHandler.END
+
+    retries = context.user_data["bc_retries"]
+    failed_labels = ", ".join(f["label"] for f in failures[:10])
+    more = "" if len(failures) <= 10 else f" (+{len(failures) - 10} more)"
+    summary = (
+        f"⚠️ Delivered to {sent}/{total}. "
+        f"{len(failures)} failed: {failed_labels}{more}."
+    )
+    if retries >= BC_MAX_RETRIES:
+        await bot.send_message(
+            chat_id, summary + f"\n\nRetry limit ({BC_MAX_RETRIES}) reached. Stopping."
+        )
+        return ConversationHandler.END
+
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🔁 Retry", callback_data=f"{CB_BC_PREFIX}retry:yes"),
+        InlineKeyboardButton("🛑 Stop", callback_data=f"{CB_BC_PREFIX}retry:no"),
+    ]])
+    await bot.send_message(
+        chat_id,
+        summary + f"\n\nRetry the {len(failures)} failed recipient(s)? "
+        f"(attempt {retries + 1} of {BC_MAX_RETRIES})",
+        reply_markup=kb,
+    )
+    return BC_RETRY
+
+
+async def bc_retry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    action = query.data[len(CB_BC_PREFIX):]
+    if action == "retry:no":
+        sent = len(context.user_data["bc_done"])
+        total = len(context.user_data["bc_recipients"])
+        await query.edit_message_text(
+            f"Stopped. Broadcast delivered to {sent}/{total} recipient(s)."
+        )
+        return ConversationHandler.END
+
+    # retry:yes
+    context.user_data["bc_retries"] += 1
+    await query.edit_message_text(
+        f"Retrying… (attempt {context.user_data['bc_retries']} of {BC_MAX_RETRIES})"
+    )
+    return await _bc_attempt_and_prompt(update, context)
+
+
+# ---------------------------------------------------------------------------
 # /appointment — multi-step user flow
 # ---------------------------------------------------------------------------
 
@@ -1355,6 +1613,8 @@ async def sl_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 # Official response states (handled via callback queries)
 CB_APPT_PREFIX = "appt:"
+# Official picker for the /appointment request flow (distinct from CB_APPT_PREFIX).
+CB_APSEL_PREFIX = "apsel:"
 
 
 @admin_only
@@ -1369,36 +1629,53 @@ async def cmd_appointment(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     context.user_data.clear()
     _, lang = await get_user_prefs(uid)
 
-    lines = [t("appt_choose_official", lang)]
-    for i, off in enumerate(OFFICIALS, 1):
-        lines.append(f"{i}. {off['name']}")
-    lines.append(t("appt_enter_number", lang))
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+    rows = [
+        [InlineKeyboardButton(off["name"], callback_data=f"{CB_APSEL_PREFIX}{i}")]
+        for i, off in enumerate(OFFICIALS)
+    ]
+    rows.append([InlineKeyboardButton(
+        "✖️ " + t("appt_request_cancelled", lang).rstrip("."),
+        callback_data=f"{CB_APSEL_PREFIX}cancel",
+    )])
+    await update.message.reply_text(
+        t("appt_choose_official", lang),
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=InlineKeyboardMarkup(rows),
+    )
     return AP_OFFICIAL
 
 
 async def ap_official(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    uid, _, _ = user_info(update)
+    query = update.callback_query
+    await query.answer()
+    uid = query.from_user.id
     _, lang = await get_user_prefs(uid)
-    text = update.message.text.strip()
-    if not text.isdigit() or not (1 <= int(text) <= len(OFFICIALS)):
-        await update.message.reply_text(t("appt_invalid_number", lang))
-        return AP_OFFICIAL
-    off = OFFICIALS[int(text) - 1]
+    data = query.data[len(CB_APSEL_PREFIX):]
+
+    if data == "cancel":
+        await query.edit_message_text(t("appt_request_cancelled", lang))
+        return ConversationHandler.END
+    if not data.isdigit() or not (0 <= int(data) < len(OFFICIALS)):
+        await query.edit_message_text(t("appt_invalid_number", lang))
+        return ConversationHandler.END
+    off = OFFICIALS[int(data)]
 
     # One active appointment per official at a time.
     appts = await get_appointments()
     existing = _active_appt_with_official(appts, uid, off["id"])
     if existing:
-        await update.message.reply_text(
+        await query.edit_message_text(
             t("appt_already_with_official", lang, official=off["name"],
-              id=existing["id"], status=existing.get("status", "?")),
+              id=existing["id"], status=status_label(existing.get("status"), lang)),
             parse_mode=ParseMode.MARKDOWN,
         )
         return ConversationHandler.END
 
     context.user_data["ap_official"] = off
-    await update.message.reply_text(t("appt_ask_date", lang))
+    await query.edit_message_text(
+        f"*{off['name']}*\n\n" + t("appt_ask_date", lang),
+        parse_mode=ParseMode.MARKDOWN,
+    )
     return AP_DATE
 
 
@@ -1450,7 +1727,7 @@ async def ap_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if clash:
         await update.message.reply_text(
             t("appt_overlap", lang, official=clash["official_name"],
-              when=_appt_dt_label(clash, tz), id=clash["id"]),
+              when=_appt_dt_label(clash, tz, lang), id=clash["id"]),
             parse_mode=ParseMode.MARKDOWN,
         )
         return AP_DATE
@@ -1471,7 +1748,7 @@ async def ap_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     parts_t = [int(x) for x in d["ap_time"].split(":")]
     req_dt = TZ.localize(datetime(parts_d[0], parts_d[1], parts_d[2], parts_t[0], parts_t[1]))
     summary = t("appt_summary", lang, official=off["name"],
-                when=format_dt(req_dt, tz), desc=text)
+                when=format_dt(req_dt, tz, lang), desc=text)
     await update.message.reply_text(summary, parse_mode=ParseMode.MARKDOWN)
     return AP_CONFIRM
 
@@ -1479,7 +1756,7 @@ async def ap_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def ap_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     uid, uname, dname = user_info(update)
     _, lang = await get_user_prefs(uid)
-    if update.message.text.strip().lower() not in ("yes", "y"):
+    if not _is_affirmative(update.message.text):
         await update.message.reply_text(t("appt_request_cancelled", lang))
         return ConversationHandler.END
 
@@ -1718,7 +1995,7 @@ async def _finalize_appointment(
     await context.bot.send_message(
         appt["user_chat_id"],
         t("appt_confirmed_user", user_lang, id=appt["id"],
-          official=appt["official_name"], when=format_dt(confirmed_dt, user_tz)),
+          official=appt["official_name"], when=format_dt(confirmed_dt, user_tz, user_lang)),
         parse_mode=ParseMode.MARKDOWN,
     )
     await context.bot.send_document(
@@ -1889,8 +2166,8 @@ async def cmd_myappointments(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return t(
             "appt_line", lang,
             counterparty=_counterparty_label(appt, viewer_is_official),
-            when=_appt_dt_label(appt, tz),
-            status=appt.get("status", "?"),
+            when=_appt_dt_label(appt, tz, lang),
+            status=status_label(appt.get("status"), lang),
             id=appt["id"],
         )
 
@@ -1940,40 +2217,61 @@ async def cmd_cancelappointment(update: Update, context: ContextTypes.DEFAULT_TY
         return ConversationHandler.END
 
     context.user_data["ca_appts"] = active
-    lines = [t("cancel_list_header", lang)]
-    for i, a in enumerate(active, 1):
-        lines.append(t("cancel_list_line", lang, n=i, id=a["id"],
-                       official=a["official_name"], when=_appt_dt_label(a, tz),
-                       status=a.get("status", "?")))
-    lines.append(t("cancel_select_prompt", lang))
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+    rows = []
+    for i, a in enumerate(active):
+        label = f"{a['official_name']} — {_appt_dt_label(a, tz, lang)}"
+        rows.append([InlineKeyboardButton(label, callback_data=f"{CB_CANCEL_PREFIX}sel:{i}")])
+    rows.append([InlineKeyboardButton(
+        "✖️ " + t("cancel_aborted", lang).rstrip("."),
+        callback_data=f"{CB_CANCEL_PREFIX}abort",
+    )])
+    await update.message.reply_text(
+        t("cancel_list_header", lang),
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=InlineKeyboardMarkup(rows),
+    )
     return CA_SELECT
 
 
 async def ca_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    uid, _, _ = user_info(update)
+    query = update.callback_query
+    await query.answer()
+    uid = query.from_user.id
     tz, lang = await get_user_prefs(uid)
-    text = update.message.text.strip()
+    data = query.data[len(CB_CANCEL_PREFIX):]
     active: list[dict] = context.user_data.get("ca_appts", [])
-    if not text.isdigit() or not (1 <= int(text) <= len(active)):
-        await update.message.reply_text(t("cancel_pick_number", lang, max=len(active)))
-        return CA_SELECT
 
-    appt = active[int(text) - 1]
+    if data == "abort":
+        await query.edit_message_text(t("cancel_aborted", lang))
+        return ConversationHandler.END
+
+    idx = data.split(":", 1)[1] if data.startswith("sel:") else ""
+    if not idx.isdigit() or not (0 <= int(idx) < len(active)):
+        await query.edit_message_text(t("cancel_aborted", lang))
+        return ConversationHandler.END
+
+    appt = active[int(idx)]
     context.user_data["ca_appt"] = appt
-    await update.message.reply_text(
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Yes", callback_data=f"{CB_CANCEL_PREFIX}yes"),
+        InlineKeyboardButton("✖️ No", callback_data=f"{CB_CANCEL_PREFIX}no"),
+    ]])
+    await query.edit_message_text(
         t("cancel_confirm_prompt", lang, official=appt["official_name"],
-          when=_appt_dt_label(appt, tz)),
+          when=_appt_dt_label(appt, tz, lang)),
         parse_mode=ParseMode.MARKDOWN,
+        reply_markup=kb,
     )
     return CA_CONFIRM
 
 
 async def ca_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
     uid, uname, dname = user_info(update)
     _, lang = await get_user_prefs(uid)
-    if update.message.text.strip().lower() not in ("yes", "y"):
-        await update.message.reply_text(t("cancel_aborted", lang))
+    if query.data != f"{CB_CANCEL_PREFIX}yes":
+        await query.edit_message_text(t("cancel_aborted", lang))
         return ConversationHandler.END
 
     appt: dict = context.user_data["ca_appt"]
@@ -2005,7 +2303,7 @@ async def ca_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                 parse_mode=ParseMode.MARKDOWN,
             )
             await _send_cancellation_ics(context, user_chat_id, appt)
-        await update.message.reply_text(
+        await query.edit_message_text(
             t("cancel_done_official_ack", lang, id=appt["id"]),
             parse_mode=ParseMode.MARKDOWN,
         )
@@ -2026,7 +2324,7 @@ async def ca_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             )
             await _send_cancellation_ics(context, off["chat_id"], appt)
         notified = bool(off and off.get("chat_id"))
-        await update.message.reply_text(
+        await query.edit_message_text(
             t("cancel_done_requester_ack_notified" if notified else "cancel_done_requester_ack",
               lang, id=appt["id"]),
             parse_mode=ParseMode.MARKDOWN,
@@ -2108,7 +2406,7 @@ async def tz_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await _set_user_field(uid, "timezone", tz_name)
     activity.log_command("settimezone", uid, uname, dname, details=f"tz={tz_name}")
     await update.message.reply_text(
-        t("tz_set", lang, tz=tz_name, now=format_dt(now_tz(), tz)),
+        t("tz_set", lang, tz=tz_name, now=format_dt(now_tz(), tz, lang)),
         parse_mode=ParseMode.MARKDOWN,
     )
     return ConversationHandler.END
@@ -2120,32 +2418,37 @@ async def tz_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 LANG_SELECT = 0
 
+CB_LANG_PREFIX = "lang:"
+
 
 async def cmd_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     uid, uname, dname = user_info(update)
     activity.log_command("language", uid, uname, dname)
     _, lang = await get_user_prefs(uid)
-    codes = list(AVAILABLE_LANGUAGES.keys())
-    context.user_data["lang_codes"] = codes
-    lines = [t("lang_prompt", lang)]
-    for i, code in enumerate(codes, 1):
-        lines.append(f"{i}. {AVAILABLE_LANGUAGES[code]}")
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+    rows = [
+        [InlineKeyboardButton(name, callback_data=f"{CB_LANG_PREFIX}{code}")]
+        for code, name in AVAILABLE_LANGUAGES.items()
+    ]
+    await update.message.reply_text(
+        t("lang_prompt", lang),
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=InlineKeyboardMarkup(rows),
+    )
     return LANG_SELECT
 
 
 async def lang_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
     uid, uname, dname = user_info(update)
-    _, lang = await get_user_prefs(uid)
-    codes: list[str] = context.user_data.get("lang_codes", list(AVAILABLE_LANGUAGES.keys()))
-    text = update.message.text.strip()
-    if not text.isdigit() or not (1 <= int(text) <= len(codes)):
-        await update.message.reply_text(t("lang_pick_number", lang, max=len(codes)))
-        return LANG_SELECT
-    code = codes[int(text) - 1]
+    code = query.data[len(CB_LANG_PREFIX):]
+    if code not in AVAILABLE_LANGUAGES:
+        await query.edit_message_text(t("lang_set", DEFAULT_LANG,
+                                        language=AVAILABLE_LANGUAGES[DEFAULT_LANG]))
+        return ConversationHandler.END
     await _set_user_field(uid, "language", code)
     activity.log_command("language", uid, uname, dname, details=f"lang={code}")
-    await update.message.reply_text(
+    await query.edit_message_text(
         t("lang_set", code, language=AVAILABLE_LANGUAGES[code]),
         parse_mode=ParseMode.MARKDOWN,
     )
@@ -2177,23 +2480,50 @@ async def _log_command_invocation(update: Update, context: ContextTypes.DEFAULT_
     logger.info("Command %s executed by %s (id=%s)", command, who, uid)
 
 
-async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Log when the bot is added to / removed from a group or channel.
+_ACTIVE_MEMBER_STATUSES = ("member", "administrator", "creator")
 
-    Surfaces the chat_id at INFO so an admin can add it to the
-    notification_targets registry in events.yaml.
+
+async def _load_known_groups() -> dict[str, Any]:
+    data = await groups_cache.get()
+    return (data or {}).get("groups") or {}
+
+
+async def _save_known_groups(groups: dict[str, Any]) -> None:
+    await groups_cache.save({"groups": groups})
+
+
+async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Record (and log) when the bot is added to / removed from a group or channel.
+
+    Maintains data/known_groups.yaml so /broadcast can list the groups the bot
+    currently belongs to, and surfaces the chat_id at INFO.
     """
     cmu = update.my_chat_member
     if not cmu:
         return
     chat = cmu.chat
     new_status = cmu.new_chat_member.status
-    if chat.type in (ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL):
-        logger.info(
-            "Bot membership change in %s '%s' (chat_id=%s): status=%s "
-            "— add this chat_id to notification_targets to broadcast here.",
-            chat.type, chat.title, chat.id, new_status,
-        )
+    if chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL):
+        return
+
+    logger.info(
+        "Bot membership change in %s '%s' (chat_id=%s): status=%s",
+        chat.type, chat.title, chat.id, new_status,
+    )
+
+    groups = await _load_known_groups()
+    key = str(chat.id)
+    if new_status in _ACTIVE_MEMBER_STATUSES:
+        groups[key] = {
+            "chat_id": chat.id,
+            "title": chat.title or key,
+            "type": str(chat.type),
+            "status": new_status,
+        }
+    else:
+        # Left/kicked/restricted — drop it from the broadcast list.
+        groups.pop(key, None)
+    await _save_known_groups(groups)
 
 
 # ---------------------------------------------------------------------------
@@ -2306,10 +2636,20 @@ def main() -> None:
         fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
     )
 
+    broadcast_conv = ConversationHandler(
+        entry_points=[CommandHandler("broadcast", cmd_broadcast)],
+        states={
+            BC_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, bc_message)],
+            BC_SELECT: [CallbackQueryHandler(bc_select, pattern=f"^{re.escape(CB_BC_PREFIX)}")],
+            BC_RETRY: [CallbackQueryHandler(bc_retry, pattern=f"^{re.escape(CB_BC_PREFIX)}retry:")],
+        },
+        fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
+    )
+
     appointment_conv = ConversationHandler(
         entry_points=[CommandHandler("appointment", cmd_appointment)],
         states={
-            AP_OFFICIAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, ap_official)],
+            AP_OFFICIAL: [CallbackQueryHandler(ap_official, pattern=f"^{re.escape(CB_APSEL_PREFIX)}")],
             AP_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ap_date)],
             AP_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ap_time)],
             AP_DESC: [MessageHandler(filters.TEXT & ~filters.COMMAND, ap_desc)],
@@ -2321,8 +2661,8 @@ def main() -> None:
     cancel_appt_conv = ConversationHandler(
         entry_points=[CommandHandler("cancelappointment", cmd_cancelappointment)],
         states={
-            CA_SELECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, ca_select)],
-            CA_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, ca_confirm)],
+            CA_SELECT: [CallbackQueryHandler(ca_select, pattern=f"^{re.escape(CB_CANCEL_PREFIX)}")],
+            CA_CONFIRM: [CallbackQueryHandler(ca_confirm, pattern=f"^{re.escape(CB_CANCEL_PREFIX)}")],
         },
         fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
     )
@@ -2335,7 +2675,7 @@ def main() -> None:
 
     language_conv = ConversationHandler(
         entry_points=[CommandHandler("language", cmd_language)],
-        states={LANG_SELECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, lang_select)]},
+        states={LANG_SELECT: [CallbackQueryHandler(lang_select, pattern=f"^{re.escape(CB_LANG_PREFIX)}")]},
         fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
     )
 
@@ -2371,6 +2711,7 @@ def main() -> None:
     app.add_handler(modify_event_conv)
     app.add_handler(delete_event_conv)
     app.add_handler(set_service_link_conv)
+    app.add_handler(broadcast_conv)
     app.add_handler(CommandHandler("myappointments", cmd_myappointments))
     app.add_handler(appointment_conv)
     app.add_handler(cancel_appt_conv)
