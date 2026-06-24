@@ -124,10 +124,10 @@ class TestSetTimezone:
 
         with patch("bot.get_all_users", side_effect=_fake_get), \
              patch("bot.save_users", side_effect=_fake_save):
-            result = _run(bot.tz_select(upd, ctx))
+            result = _run(bot.tz_typed(upd, ctx))
         return result, upd, saved
 
-    def test_pick_from_menu(self):
+    def test_type_number_from_menu(self):
         import bot
         result, upd, saved = self._run_select("2")  # America/Chicago
         assert result == bot.ConversationHandler.END
@@ -149,6 +149,64 @@ class TestSetTimezone:
     def test_confirmation_shows_zone(self):
         result, upd, saved = self._run_select("America/Los_Angeles")
         assert "America/Los_Angeles" in upd.message.reply_text.call_args[0][0]
+
+
+class TestSetTimezoneButtons:
+    def _run_button(self, data, users=None):
+        import bot
+        ctx = _make_context()
+        upd = MagicMock()
+        upd.effective_user.id = 111
+        upd.effective_user.username = "u"
+        upd.effective_user.full_name = "U"
+        q = MagicMock()
+        q.answer = AsyncMock()
+        q.edit_message_text = AsyncMock()
+        q.data = data
+        upd.callback_query = q
+        saved = {}
+
+        async def _fake_get():
+            return users if users is not None else [{"chat_id": 111}]
+
+        async def _fake_save(u):
+            saved["users"] = u
+
+        with patch("bot.get_all_users", side_effect=_fake_get), \
+             patch("bot.save_users", side_effect=_fake_save):
+            result = _run(bot.tz_button(upd, ctx))
+        return result, q, saved
+
+    def test_first_button_sets_new_york(self):
+        import bot
+        result, q, saved = self._run_button("tz:0")
+        assert result == bot.ConversationHandler.END
+        assert saved["users"][0]["timezone"] == "America/New_York"
+
+    def test_button_confirmation_shows_zone(self):
+        _, q, _ = self._run_button("tz:3")  # America/Los_Angeles
+        assert "America/Los_Angeles" in q.edit_message_text.call_args[0][0]
+
+    def test_out_of_range_button_ends(self):
+        import bot
+        result, q, saved = self._run_button("tz:99")
+        assert result == bot.ConversationHandler.END
+        assert "users" not in saved
+
+    def test_cmd_settimezone_shows_buttons(self):
+        import bot
+        ctx = _make_context()
+        upd = _make_update()
+
+        async def _fake_get():
+            return [{"chat_id": 111}]
+
+        with patch("bot.get_all_users", side_effect=_fake_get):
+            result = _run(bot.cmd_settimezone(upd, ctx))
+        assert result == bot.TZ_SELECT
+        markup = upd.message.reply_text.call_args.kwargs["reply_markup"]
+        cbs = [b.callback_data for row in markup.inline_keyboard for b in row]
+        assert "tz:0" in cbs and len(cbs) == len(bot.COMMON_TIMEZONES)
 
 
 # ---------------------------------------------------------------------------
