@@ -458,18 +458,38 @@ def _max_request_datetime() -> datetime:
     return TZ.localize(naive)
 
 
-def _active_appt_with_official(
-    appts: list[dict[str, Any]], user_id: int, official_id: str
-) -> "dict | None":
-    """Return the user's existing active appointment with this official, if any."""
+# A user may hold at most this many active appointments with a given official
+# whose scheduled time falls within ±APPOINTMENT_WINDOW_HALF_DAYS of *now*
+# (a symmetric, now-anchored 30-day window).
+APPOINTMENT_MAX_PER_WINDOW = 4
+APPOINTMENT_WINDOW_HALF_DAYS = 15
+
+
+def _count_active_appts_with_official(
+    appts: list[dict[str, Any]],
+    user_id: int,
+    official_id: str,
+    center_dt: datetime,
+    half_days: int = APPOINTMENT_WINDOW_HALF_DAYS,
+) -> int:
+    """Count the user's active appointments with this official whose scheduled
+    time falls within *half_days* days before or after *center_dt*."""
+    start_dt = center_dt - timedelta(days=half_days)
+    end_dt = center_dt + timedelta(days=half_days)
+    count = 0
     for a in appts:
-        if (
-            a.get("user_chat_id") == user_id
-            and a.get("official_id") == official_id
-            and a.get("status") in ACTIVE_APPT_STATUSES
-        ):
-            return a
-    return None
+        if a.get("user_chat_id") != user_id:
+            continue
+        if a.get("official_id") != official_id:
+            continue
+        if a.get("status") not in ACTIVE_APPT_STATUSES:
+            continue
+        dt = _appt_datetime(a)
+        if dt is None:
+            continue
+        if start_dt <= dt <= end_dt:
+            count += 1
+    return count
 
 
 def _merge_special_events(
@@ -1660,13 +1680,13 @@ async def ap_official(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         return ConversationHandler.END
     off = OFFICIALS[int(data)]
 
-    # One active appointment per official at a time.
+    # Per-official frequency limit: at most APPOINTMENT_MAX_PER_WINDOW active
+    # appointments within ±APPOINTMENT_WINDOW_HALF_DAYS of now.
     appts = await get_appointments()
-    existing = _active_appt_with_official(appts, uid, off["id"])
-    if existing:
+    if _count_active_appts_with_official(appts, uid, off["id"], now_tz()) >= APPOINTMENT_MAX_PER_WINDOW:
         await query.edit_message_text(
-            t("appt_already_with_official", lang, official=off["name"],
-              id=existing["id"], status=status_label(existing.get("status"), lang)),
+            t("appt_limit_reached", lang, official=off["name"],
+              max=APPOINTMENT_MAX_PER_WINDOW, days=APPOINTMENT_WINDOW_HALF_DAYS * 2),
             parse_mode=ParseMode.MARKDOWN,
         )
         return ConversationHandler.END
@@ -1771,11 +1791,11 @@ async def ap_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     appts = await get_appointments()
 
-    # Final guard: ensure no active appointment with this official slipped in.
-    existing = _active_appt_with_official(appts, uid, off["id"])
-    if existing:
+    # Final guard: per-official frequency limit within ±15 days of now.
+    if _count_active_appts_with_official(appts, uid, off["id"], now_tz()) >= APPOINTMENT_MAX_PER_WINDOW:
         await update.message.reply_text(
-            t("appt_already_not_submitted", lang, official=off["name"], id=existing["id"]),
+            t("appt_limit_not_submitted", lang, official=off["name"],
+              max=APPOINTMENT_MAX_PER_WINDOW, days=APPOINTMENT_WINDOW_HALF_DAYS * 2),
             parse_mode=ParseMode.MARKDOWN,
         )
         return ConversationHandler.END

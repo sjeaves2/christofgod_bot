@@ -78,30 +78,54 @@ class TestHelpers:
         # 6 calendar months ≈ 181–184 days depending on month lengths
         assert 175 <= delta_days <= 190
 
-    def test_active_appt_with_official_found(self):
-        from bot import _active_appt_with_official
-        appts = [_make_appt(status="pending")]
-        assert _active_appt_with_official(appts, 111, "off1") is not None
+    def _at(self, days, status="pending", official_id="off1", user_chat_id=111, i=0):
+        dt = (datetime.now(TZ) + timedelta(days=days)).replace(microsecond=0)
+        return {
+            "id": f"A{i}", "user_chat_id": user_chat_id, "official_id": official_id,
+            "official_name": "Pastor Test", "requested_datetime": dt.isoformat(),
+            "confirmed_datetime": dt.isoformat(), "status": status, "duration_minutes": 30,
+        }
 
-    def test_active_appt_with_official_ignores_cancelled(self):
-        from bot import _active_appt_with_official
-        appts = [_make_appt(status="cancelled")]
-        assert _active_appt_with_official(appts, 111, "off1") is None
+    def _end(self, days=6):
+        return (datetime.now(TZ) + timedelta(days=days)).replace(microsecond=0)
 
-    def test_active_appt_with_official_ignores_other_official(self):
-        from bot import _active_appt_with_official
-        appts = [_make_appt(official_id="off2")]
-        assert _active_appt_with_official(appts, 111, "off1") is None
+    def test_counts_active_appt_in_window(self):
+        from bot import _count_active_appts_with_official
+        appts = [self._at(5, status="pending")]
+        assert _count_active_appts_with_official(appts, 111, "off1", self._end()) == 1
 
-    def test_active_appt_with_official_ignores_other_user(self):
-        from bot import _active_appt_with_official
-        appts = [_make_appt(user_chat_id=222)]
-        assert _active_appt_with_official(appts, 111, "off1") is None
+    def test_confirmed_counts(self):
+        from bot import _count_active_appts_with_official
+        appts = [self._at(5, status="confirmed")]
+        assert _count_active_appts_with_official(appts, 111, "off1", self._end()) == 1
 
-    def test_confirmed_counts_as_active(self):
-        from bot import _active_appt_with_official
-        appts = [_make_appt(status="confirmed")]
-        assert _active_appt_with_official(appts, 111, "off1") is not None
+    def test_ignores_cancelled_and_declined(self):
+        from bot import _count_active_appts_with_official
+        appts = [self._at(5, status="cancelled", i=1), self._at(4, status="declined", i=2)]
+        assert _count_active_appts_with_official(appts, 111, "off1", self._end()) == 0
+
+    def test_ignores_other_official_and_user(self):
+        from bot import _count_active_appts_with_official
+        appts = [self._at(5, official_id="off2", i=1), self._at(5, user_chat_id=222, i=2)]
+        assert _count_active_appts_with_official(appts, 111, "off1", self._end()) == 0
+
+    def test_excludes_appt_outside_window(self):
+        from bot import _count_active_appts_with_official
+        # 40 days before the anchor end date — outside the trailing 30-day window.
+        appts = [self._at(-40, status="confirmed")]
+        assert _count_active_appts_with_official(appts, 111, "off1", self._end()) == 0
+
+    def test_includes_recent_past_appt(self):
+        from bot import _count_active_appts_with_official
+        # A confirmed appt 10 days before the anchor counts (within window).
+        appts = [self._at(-10, status="confirmed")]
+        assert _count_active_appts_with_official(appts, 111, "off1", self._end(days=0)) == 1
+
+    def test_counts_multiple(self):
+        from bot import _count_active_appts_with_official, APPOINTMENT_MAX_PER_WINDOW
+        appts = [self._at(d, i=d) for d in (1, 3, 5, 7)]
+        assert _count_active_appts_with_official(appts, 111, "off1", self._end(days=8)) == 4
+        assert APPOINTMENT_MAX_PER_WINDOW == 4
 
 
 class TestOverlapHelper:
@@ -177,20 +201,25 @@ class TestOverlapHelper:
 # Rule 1: date window (validated in ap_time)
 # ---------------------------------------------------------------------------
 
+def _run_ap_time(date_str, time_str, existing_appts=None):
+    from bot import ap_time
+    ctx = _make_context()
+    ctx.user_data["ap_date"] = date_str
+    ctx.user_data["ap_official"] = {"id": "off1", "name": "Pastor Test"}
+    upd = _make_update(text=time_str)
+
+    async def _fake_get():
+        return list(existing_appts or [])
+
+    with patch("bot.get_appointments", side_effect=_fake_get), \
+         patch("bot.OFFICIALS", _officials()):
+        result = _run(ap_time(upd, ctx))
+    return result, upd, ctx
+
+
 class TestDateWindow:
     def _run_ap_time(self, date_str: str, time_str: str, existing_appts=None):
-        from bot import ap_time
-        ctx = _make_context()
-        ctx.user_data["ap_date"] = date_str
-        upd = _make_update(text=time_str)
-
-        async def _fake_get():
-            return list(existing_appts or [])
-
-        with patch("bot.get_appointments", side_effect=_fake_get), \
-             patch("bot.OFFICIALS", _officials()):
-            result = _run(ap_time(upd, ctx))
-        return result, upd, ctx
+        return _run_ap_time(date_str, time_str, existing_appts)
 
     def test_future_date_accepted(self):
         from bot import AP_DESC
@@ -269,10 +298,10 @@ class TestDateWindow:
 
 
 # ---------------------------------------------------------------------------
-# Rule 2: one active appointment per official (checked in ap_official)
+# Official selection (ap_official) — no per-official block here anymore
 # ---------------------------------------------------------------------------
 
-class TestOnePerOfficial:
+class TestApOfficialSelection:
     def _run_ap_official(self, appts, data="apsel:0"):
         from bot import ap_official
         ctx = _make_context()
@@ -296,32 +325,18 @@ class TestOnePerOfficial:
             result = _run(ap_official(upd, ctx))
         return result, q, ctx
 
-    def test_no_existing_appointment_proceeds(self):
+    def test_selection_proceeds_to_date(self):
         from bot import AP_DATE
         result, _, ctx = self._run_ap_official([])
         assert result == AP_DATE
         assert ctx.user_data.get("ap_official", {}).get("id") == "off1"
 
-    def test_existing_active_appointment_blocks(self):
-        from bot import ConversationHandler
-        result, q, ctx = self._run_ap_official([_make_appt(status="pending")])
-        assert result == ConversationHandler.END
-        assert "ap_official" not in ctx.user_data
-
-    def test_block_message_mentions_cancel(self):
-        result, q, _ = self._run_ap_official([_make_appt(status="confirmed")])
-        msg = q.edit_message_text.call_args[0][0].lower()
-        assert "cancelappointment" in msg
-
-    def test_cancelled_appointment_does_not_block(self):
+    def test_proceeds_even_with_existing_active_appointment(self):
+        # The per-official cap moved to ap_time; selection no longer blocks.
         from bot import AP_DATE
-        result, _, _ = self._run_ap_official([_make_appt(status="cancelled")])
+        result, _, ctx = self._run_ap_official([_make_appt(status="confirmed")])
         assert result == AP_DATE
-
-    def test_appointment_with_other_official_does_not_block(self):
-        from bot import AP_DATE
-        result, _, _ = self._run_ap_official([_make_appt(official_id="off2")])
-        assert result == AP_DATE
+        assert ctx.user_data.get("ap_official", {}).get("id") == "off1"
 
     def test_invalid_selection_ends(self):
         from bot import ConversationHandler
@@ -332,6 +347,84 @@ class TestOnePerOfficial:
         from bot import ConversationHandler
         result, q, _ = self._run_ap_official([], data="apsel:cancel")
         assert result == ConversationHandler.END
+
+
+# ---------------------------------------------------------------------------
+# Per-official frequency limit (4 within ±15 days of now) — in ap_official
+# ---------------------------------------------------------------------------
+
+class TestPerOfficialWindowLimit:
+    def _appt_offset(self, days, official_id="off1", user_chat_id=111, status="confirmed", i=0):
+        # An appointment `days` from now, at 09:00 on that day.
+        dt = (datetime.now(TZ) + timedelta(days=days)).replace(
+            hour=9, minute=0, second=0, microsecond=0)
+        return {
+            "id": f"W{i}", "user_chat_id": user_chat_id, "official_id": official_id,
+            "official_name": "Pastor Test", "requested_datetime": dt.isoformat(),
+            "confirmed_datetime": dt.isoformat(), "status": status, "duration_minutes": 30,
+        }
+
+    def _run_ap_official(self, existing):
+        from bot import ap_official
+        ctx = _make_context()
+        upd = MagicMock()
+        upd.effective_user.id = 111
+        upd.effective_user.username = "requester"
+        upd.effective_user.full_name = "Test User"
+        q = MagicMock()
+        q.answer = AsyncMock()
+        q.edit_message_text = AsyncMock()
+        q.data = "apsel:0"
+        q.from_user.id = 111
+        upd.callback_query = q
+
+        async def _fake_get():
+            return list(existing)
+
+        with patch("bot.get_appointments", side_effect=_fake_get), \
+             patch("bot.OFFICIALS", _officials()):
+            result = _run(ap_official(upd, ctx))
+        return result, q, ctx
+
+    def test_fourth_appointment_allowed(self):
+        from bot import AP_DATE
+        existing = [self._appt_offset(d, i=d) for d in (-6, -3, 5)]  # 3 in window
+        result, _, ctx = self._run_ap_official(existing)
+        assert result == AP_DATE
+
+    def test_fifth_appointment_blocked(self):
+        from bot import ConversationHandler
+        existing = [self._appt_offset(d, i=d) for d in (-6, -3, 5, 8)]  # 4 in window
+        result, q, ctx = self._run_ap_official(existing)
+        assert result == ConversationHandler.END
+        assert "ap_official" not in ctx.user_data
+        assert "limit" in q.edit_message_text.call_args[0][0].lower()
+
+    def test_window_is_symmetric_future_counts(self):
+        from bot import ConversationHandler
+        # All four in the +15 side (future) still hit the limit.
+        existing = [self._appt_offset(d, i=d) for d in (2, 6, 10, 14)]
+        result, q, ctx = self._run_ap_official(existing)
+        assert result == ConversationHandler.END
+
+    def test_appts_outside_window_do_not_count(self):
+        from bot import AP_DATE
+        # 4 appts beyond ±15 days (some far future, some far past) → not counted.
+        existing = [self._appt_offset(d, i=d) for d in (-40, -20, 20, 40)]
+        result, _, ctx = self._run_ap_official(existing)
+        assert result == AP_DATE
+
+    def test_other_official_does_not_count(self):
+        from bot import AP_DATE
+        existing = [self._appt_offset(d, official_id="off2", i=d) for d in (-6, -3, 5, 8)]
+        result, _, ctx = self._run_ap_official(existing)
+        assert result == AP_DATE
+
+    def test_cancelled_appts_do_not_count(self):
+        from bot import AP_DATE
+        existing = [self._appt_offset(d, status="cancelled", i=d) for d in (-6, -3, 5, 8)]
+        result, _, ctx = self._run_ap_official(existing)
+        assert result == AP_DATE
 
 
 # ---------------------------------------------------------------------------
@@ -375,13 +468,30 @@ class TestConfirmGuard:
         assert result == ConversationHandler.END
         assert any(a["status"] == "pending" for a in saved)
 
-    def test_blocks_when_conflict_appears(self):
+    def test_allows_when_under_limit(self):
         from bot import ConversationHandler
+        # One existing appt with the same official is fine (limit is 4).
         result, upd, saved = self._run_confirm([_make_appt(status="pending")])
         assert result == ConversationHandler.END
-        # Nothing new saved (save_appointments not called)
+        assert any(a["status"] == "pending" for a in saved)
+
+    def test_blocks_when_limit_reached(self):
+        from bot import ConversationHandler
+        # 4 existing appts with off1 within the window → the 5th is blocked.
+        base = datetime.now(TZ) + timedelta(days=10)
+        existing = []
+        for k in range(4):
+            dt = (base - timedelta(days=k + 1)).replace(hour=9, minute=0, second=0, microsecond=0)
+            existing.append({
+                "id": f"L{k}", "user_chat_id": 111, "official_id": "off1",
+                "official_name": "Pastor Test", "requested_datetime": dt.isoformat(),
+                "confirmed_datetime": dt.isoformat(), "status": "confirmed",
+                "duration_minutes": 30,
+            })
+        result, upd, saved = self._run_confirm(existing)
+        assert result == ConversationHandler.END
         assert saved == []
-        assert "already have" in upd.message.reply_text.call_args[0][0].lower()
+        assert "limit" in upd.message.reply_text.call_args[0][0].lower()
 
     def test_blocks_when_overlap_with_other_official_appears(self):
         from bot import ConversationHandler
