@@ -4,3 +4,4 @@ PyYAML>=6.0
 icalendar>=5.0
 reportlab>=4.0
 pytz>=2023.3
+Babel>=2.12
