@@ -2378,18 +2378,54 @@ async def _set_user_field(chat_id: int, field: str, value: str) -> None:
             return
 
 
+CB_TZ_PREFIX = "tz:"
+
+
+async def _apply_timezone(uid: int, lang: str, tz_name: str) -> "str | None":
+    """Validate and persist a timezone; return the confirmation text, or None if invalid."""
+    try:
+        tz = pytz.timezone(tz_name)
+    except Exception:
+        return None
+    await _set_user_field(uid, "timezone", tz_name)
+    return t("tz_set", lang, tz=tz_name, now=format_dt(now_tz(), tz, lang))
+
+
 async def cmd_settimezone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     uid, uname, dname = user_info(update)
     activity.log_command("settimezone", uid, uname, dname)
     _, lang = await get_user_prefs(uid)
-    lines = [t("tz_prompt", lang)]
-    for i, name in enumerate(COMMON_TIMEZONES, 1):
-        lines.append(f"{i}. {name}")
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+    rows = [
+        [InlineKeyboardButton(name, callback_data=f"{CB_TZ_PREFIX}{i}")]
+        for i, name in enumerate(COMMON_TIMEZONES)
+    ]
+    await update.message.reply_text(
+        t("tz_prompt", lang),
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=InlineKeyboardMarkup(rows),
+    )
     return TZ_SELECT
 
 
-async def tz_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def tz_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """A common-zone button was tapped."""
+    query = update.callback_query
+    await query.answer()
+    uid, uname, dname = user_info(update)
+    _, lang = await get_user_prefs(uid)
+    idx = query.data[len(CB_TZ_PREFIX):]
+    if not idx.isdigit() or not (0 <= int(idx) < len(COMMON_TIMEZONES)):
+        await query.edit_message_text(t("tz_invalid", lang))
+        return ConversationHandler.END
+    tz_name = COMMON_TIMEZONES[int(idx)]
+    msg = await _apply_timezone(uid, lang, tz_name)
+    activity.log_command("settimezone", uid, uname, dname, details=f"tz={tz_name}")
+    await query.edit_message_text(msg, parse_mode=ParseMode.MARKDOWN)
+    return ConversationHandler.END
+
+
+async def tz_typed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """A timezone (or list number) was typed instead of tapped."""
     uid, uname, dname = user_info(update)
     _, lang = await get_user_prefs(uid)
     text = update.message.text.strip()
@@ -2397,18 +2433,12 @@ async def tz_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         tz_name = COMMON_TIMEZONES[int(text) - 1]
     else:
         tz_name = text
-    try:
-        tz = pytz.timezone(tz_name)
-    except Exception:
+    msg = await _apply_timezone(uid, lang, tz_name)
+    if msg is None:
         await update.message.reply_text(t("tz_invalid", lang))
         return TZ_SELECT
-
-    await _set_user_field(uid, "timezone", tz_name)
     activity.log_command("settimezone", uid, uname, dname, details=f"tz={tz_name}")
-    await update.message.reply_text(
-        t("tz_set", lang, tz=tz_name, now=format_dt(now_tz(), tz, lang)),
-        parse_mode=ParseMode.MARKDOWN,
-    )
+    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
     return ConversationHandler.END
 
 
@@ -2669,7 +2699,10 @@ def main() -> None:
 
     settimezone_conv = ConversationHandler(
         entry_points=[CommandHandler("settimezone", cmd_settimezone)],
-        states={TZ_SELECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, tz_select)]},
+        states={TZ_SELECT: [
+            CallbackQueryHandler(tz_button, pattern=f"^{re.escape(CB_TZ_PREFIX)}"),
+            MessageHandler(filters.TEXT & ~filters.COMMAND, tz_typed),
+        ]},
         fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
     )
 

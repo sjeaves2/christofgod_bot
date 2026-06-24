@@ -181,8 +181,8 @@ CATALOG: dict[str, dict[str, str]] = {
         # -- /settimezone --
         "tz_prompt": (
             "*Set Your Time Zone*\n\n"
-            "Choose a number, or type any IANA zone name "
-            "(e.g. `America/New_York`):\n"
+            "Tap a zone below, or type any IANA zone name "
+            "(e.g. `America/New_York`):"
         ),
         "tz_invalid": "That isn't a recognised time zone. Please try again (or /cancel):",
         "tz_set": "✅ Your time zone is set to *{tz}*.\nCurrent local time: {now}",
@@ -318,8 +318,8 @@ CATALOG: dict[str, dict[str, str]] = {
         # -- /settimezone --
         "tz_prompt": (
             "*Establece tu zona horaria*\n\n"
-            "Elige un número o escribe cualquier nombre de zona IANA "
-            "(p. ej. `America/New_York`):\n"
+            "Toca una zona abajo o escribe cualquier nombre de zona IANA "
+            "(p. ej. `America/New_York`):"
         ),
         "tz_invalid": "Esa no es una zona horaria reconocida. Inténtalo de nuevo (o /cancel):",
         "tz_set": "✅ Tu zona horaria se ha establecido a *{tz}*.\nHora local actual: {now}",
@@ -456,8 +456,8 @@ CATALOG: dict[str, dict[str, str]] = {
         # -- /settimezone --
         "tz_prompt": (
             "*Définir votre fuseau horaire*\n\n"
-            "Choisissez un numéro ou saisissez un nom de fuseau IANA "
-            "(p. ex. `America/New_York`) :\n"
+            "Appuyez sur un fuseau ci-dessous ou saisissez un nom de fuseau IANA "
+            "(p. ex. `America/New_York`) :"
         ),
         "tz_invalid": "Ce fuseau horaire n'est pas reconnu. Veuillez réessayer (ou /cancel) :",
         "tz_set": "✅ Votre fuseau horaire est défini sur *{tz}*.\nHeure locale actuelle : {now}",
@@ -595,8 +595,8 @@ CATALOG: dict[str, dict[str, str]] = {
         # -- /settimezone --
         "tz_prompt": (
             "*Setha izoni yakho yesikhathi*\n\n"
-            "Khetha inombolo, noma uthayiphe noma yiliphi igama lezoni ye-IANA "
-            "(isb. `America/New_York`):\n"
+            "Thepha izoni engezansi, noma uthayiphe noma yiliphi igama lezoni ye-IANA "
+            "(isb. `America/New_York`):"
         ),
         "tz_invalid": "Leyo akuyona izoni yesikhathi eyaziwayo. Sicela uzame futhi (noma /cancel):",
         "tz_set": "✅ Izoni yakho yesikhathi isethelwe ku-*{tz}*.\nIsikhathi sendawo samanje: {now}",
