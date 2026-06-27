@@ -550,12 +550,12 @@ class TestCallbackOverlapGuard:
             "status": "confirmed", "duration_minutes": 30,
         }
 
-    def _run_callback(self, action, appts, appt_id="TARGET"):
+    def _run_callback(self, action, appts, appt_id="TARGET", answer_side_effect=None):
         from bot import appt_callback, CB_APPT_PREFIX
 
         ctx = _make_context()
         query = MagicMock()
-        query.answer = AsyncMock()
+        query.answer = AsyncMock(side_effect=answer_side_effect)
         query.edit_message_text = AsyncMock()
         query.data = f"{CB_APPT_PREFIX}{action}:{appt_id}"
         query.message.chat_id = 999
@@ -577,6 +577,88 @@ class TestCallbackOverlapGuard:
              patch("bot._finalize_appointment", finalize):
             _run(appt_callback(upd, ctx))
         return query, finalize
+
+    # --- stale callback recovery ---
+
+    def test_confirm_survives_stale_callback_query(self):
+        """If query.answer() raises BadRequest (bot was offline when tapped),
+        the confirmation must still complete rather than abort."""
+        from telegram.error import BadRequest
+        target = self._target()
+        query, finalize = self._run_callback(
+            "confirm", [target],
+            answer_side_effect=BadRequest("Query is too old and response timeout expired"),
+        )
+        finalize.assert_called_once()
+
+    # --- idempotency guard ---
+
+    def test_confirm_on_already_confirmed_is_noop(self):
+        target = self._target(status="confirmed")
+        query, finalize = self._run_callback("confirm", [target])
+        finalize.assert_not_called()
+        assert "already" in query.edit_message_text.call_args[0][0].lower()
+
+    def test_confirm_on_declined_is_noop(self):
+        target = self._target(status="declined")
+        query, finalize = self._run_callback("confirm", [target])
+        finalize.assert_not_called()
+
+    def test_decline_on_confirmed_is_noop(self):
+        target = self._target(status="confirmed")
+        query, finalize = self._run_callback("decline", [target])
+        # No requester notification or re-save for an already-terminal appt.
+        finalize.assert_not_called()
+        assert "already" in query.edit_message_text.call_args[0][0].lower()
+
+    def test_accept_counter_on_cancelled_is_noop(self):
+        target = self._target(status="cancelled")
+        query, finalize = self._run_callback("accept_counter", [target])
+        finalize.assert_not_called()
+
+    def test_repeated_confirm_finalizes_once(self):
+        """Simulate two taps: first confirms, the persisted state makes the
+        second a no-op (no duplicate finalize)."""
+        from telegram.error import BadRequest
+        target = self._target()
+        store = {"appts": [target]}
+
+        from bot import appt_callback, CB_APPT_PREFIX
+
+        async def _fake_get():
+            return [a.copy() for a in store["appts"]]
+
+        async def _fake_save(a):
+            store["appts"] = a
+
+        finalize_calls = {"n": 0}
+
+        async def _fake_finalize(ctx, appt, appts):
+            finalize_calls["n"] += 1
+            # Mirror real finalize: persist the confirmed status.
+            for i, x in enumerate(appts):
+                if x["id"] == appt["id"]:
+                    appts[i] = appt
+            await _fake_save(appts)
+
+        def _one_tap():
+            ctx = _make_context()
+            query = MagicMock()
+            query.answer = AsyncMock()
+            query.edit_message_text = AsyncMock()
+            query.data = f"{CB_APPT_PREFIX}confirm:TARGET"
+            query.message.chat_id = 999
+            upd = MagicMock()
+            upd.callback_query = query
+            with patch("bot.get_appointments", side_effect=_fake_get), \
+                 patch("bot.save_appointments", side_effect=_fake_save), \
+                 patch("bot.OFFICIALS", _officials()), \
+                 patch("bot._finalize_appointment", side_effect=_fake_finalize):
+                _run(appt_callback(upd, ctx))
+
+        _one_tap()
+        _one_tap()
+        assert finalize_calls["n"] == 1
 
     # --- confirm ---
 

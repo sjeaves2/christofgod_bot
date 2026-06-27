@@ -354,6 +354,21 @@ def now_tz() -> datetime:
     return datetime.now(TZ)
 
 
+async def _answer_cb(query) -> None:
+    """Acknowledge a callback query, tolerating a stale/expired one.
+
+    If the bot was briefly offline when the button was tapped, Telegram expires
+    the callback query and answer() raises BadRequest ("query is too old").
+    That must not abort the handler — edit_message_text and the real work that
+    follow are not subject to the callback's ~15s timeout, so we swallow it and
+    let the handler complete (graceful recovery on wake).
+    """
+    try:
+        await query.answer()
+    except BadRequest:
+        pass
+
+
 def _appt_datetime(appt: dict[str, Any]) -> "datetime | None":
     """Best-effort tz-aware datetime for an appointment (confirmed, else requested)."""
     dt_raw = appt.get("confirmed_datetime") or appt.get("requested_datetime", "")
@@ -397,6 +412,9 @@ def _is_affirmative(text: "str | None") -> bool:
 
 # Statuses that count as an appointment still "in play".
 ACTIVE_APPT_STATUSES = ("pending", "confirmed", "counter_proposed")
+# Once an appointment reaches one of these, callback actions on it are no-ops
+# (prevents duplicate confirmations/declines from repeated or replayed taps).
+TERMINAL_APPT_STATUSES = ("confirmed", "declined", "cancelled")
 
 # How far ahead an appointment may be requested.
 APPOINTMENT_HORIZON_MONTHS = 6
@@ -1474,7 +1492,7 @@ async def bc_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def bc_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
-    await query.answer()
+    await _answer_cb(query)
     action = query.data[len(CB_BC_PREFIX):]
     options: list[dict] = context.user_data.get("bc_options", [])
     selected: set[str] = context.user_data.get("bc_selected", set())
@@ -1601,7 +1619,7 @@ async def _bc_attempt_and_prompt(update: Update, context: ContextTypes.DEFAULT_T
 
 async def bc_retry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
-    await query.answer()
+    await _answer_cb(query)
     action = query.data[len(CB_BC_PREFIX):]
     if action == "retry:no":
         sent = len(context.user_data["bc_done"])
@@ -1667,7 +1685,7 @@ async def cmd_appointment(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def ap_official(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
-    await query.answer()
+    await _answer_cb(query)
     uid = query.from_user.id
     _, lang = await get_user_prefs(uid)
     data = query.data[len(CB_APSEL_PREFIX):]
@@ -1889,7 +1907,7 @@ _counter_propose_state: dict[str, Any] = {}  # appt_id -> {"chat_id": ..., "role
 
 async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    await query.answer()
+    await _answer_cb(query)
     data: str = query.data
     parts = data[len(CB_APPT_PREFIX):].split(":")
     action, appt_id = parts[0], parts[1]
@@ -1898,6 +1916,16 @@ async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     appt = next((a for a in appts if a["id"] == appt_id), None)
     if not appt:
         await query.edit_message_text("⚠️ Appointment not found.")
+        return
+
+    # Idempotency guard: if this appointment is already in a terminal state,
+    # a repeated/replayed tap (e.g. multiple taps while the bot was offline)
+    # must not re-run confirmation/decline side effects.
+    if appt.get("status") in TERMINAL_APPT_STATUSES:
+        await query.edit_message_text(
+            f"ℹ️ Appointment {appt_id} has already been {appt['status']}. "
+            "No further action taken."
+        )
         return
 
     user_chat_id = appt["user_chat_id"]
@@ -2255,7 +2283,7 @@ async def cmd_cancelappointment(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def ca_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
-    await query.answer()
+    await _answer_cb(query)
     uid = query.from_user.id
     tz, lang = await get_user_prefs(uid)
     data = query.data[len(CB_CANCEL_PREFIX):]
@@ -2287,7 +2315,7 @@ async def ca_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def ca_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
-    await query.answer()
+    await _answer_cb(query)
     uid, uname, dname = user_info(update)
     _, lang = await get_user_prefs(uid)
     if query.data != f"{CB_CANCEL_PREFIX}yes":
@@ -2430,7 +2458,7 @@ async def cmd_settimezone(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def tz_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """A common-zone button was tapped."""
     query = update.callback_query
-    await query.answer()
+    await _answer_cb(query)
     uid, uname, dname = user_info(update)
     _, lang = await get_user_prefs(uid)
     idx = query.data[len(CB_TZ_PREFIX):]
@@ -2489,7 +2517,7 @@ async def cmd_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
 async def lang_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
-    await query.answer()
+    await _answer_cb(query)
     uid, uname, dname = user_info(update)
     code = query.data[len(CB_LANG_PREFIX):]
     if code not in AVAILABLE_LANGUAGES:
