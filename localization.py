@@ -122,11 +122,11 @@ CATALOG: dict[str, dict[str, str]] = {
         # -- appointment request flow --
         "appt_choose_official": "*Request an Appointment*\n\nWho would you like to meet with?",
         "appt_invalid_number": "Invalid selection.",
-        "appt_already_with_official": (
-            "You already have an appointment with {official} "
-            "(ID: `{id}`, {status}).\n\n"
-            "Please cancel it with /cancelappointment before requesting another, "
-            "or use /myappointments to review it."
+        "appt_limit_reached": (
+            "You've reached the limit of {max} appointments with {official} "
+            "in any {days}-day period.\n\n"
+            "Please choose a date outside that window, or cancel an existing "
+            "appointment with /cancelappointment."
         ),
         "appt_ask_date": "Desired date (YYYY-MM-DD):",
         "appt_bad_date": "Please use YYYY-MM-DD format:",
@@ -155,9 +155,9 @@ CATALOG: dict[str, dict[str, str]] = {
             "That time overlaps your appointment with {official} "
             "(ID: `{id}`). Request not submitted."
         ),
-        "appt_already_not_submitted": (
-            "You already have an appointment with {official} "
-            "(ID: `{id}`). Request not submitted."
+        "appt_limit_not_submitted": (
+            "You've reached the limit of {max} appointments with {official} "
+            "in any {days}-day period. Request not submitted."
         ),
         "appt_submitted": (
             "✅ *Request submitted!* (ID: `{id}`)\n"
@@ -259,11 +259,11 @@ CATALOG: dict[str, dict[str, str]] = {
         # -- appointment request flow --
         "appt_choose_official": "*Solicitar una cita*\n\n¿Con quién te gustaría reunirte?",
         "appt_invalid_number": "Selección no válida.",
-        "appt_already_with_official": (
-            "Ya tienes una cita con {official} "
-            "(ID: `{id}`, {status}).\n\n"
-            "Cancélala con /cancelappointment antes de solicitar otra, "
-            "o usa /myappointments para revisarla."
+        "appt_limit_reached": (
+            "Has alcanzado el límite de {max} citas con {official} "
+            "en cualquier período de {days} días.\n\n"
+            "Elige una fecha fuera de ese período, o cancela una cita "
+            "existente con /cancelappointment."
         ),
         "appt_ask_date": "Fecha deseada (YYYY-MM-DD):",
         "appt_bad_date": "Usa el formato YYYY-MM-DD:",
@@ -292,9 +292,9 @@ CATALOG: dict[str, dict[str, str]] = {
             "Esa hora se solapa con tu cita con {official} "
             "(ID: `{id}`). Solicitud no enviada."
         ),
-        "appt_already_not_submitted": (
-            "Ya tienes una cita con {official} "
-            "(ID: `{id}`). Solicitud no enviada."
+        "appt_limit_not_submitted": (
+            "Has alcanzado el límite de {max} citas con {official} "
+            "en cualquier período de {days} días. Solicitud no enviada."
         ),
         "appt_submitted": (
             "✅ *¡Solicitud enviada!* (ID: `{id}`)\n"
@@ -397,11 +397,11 @@ CATALOG: dict[str, dict[str, str]] = {
         # -- appointment request flow --
         "appt_choose_official": "*Demander un rendez-vous*\n\nAvec qui souhaitez-vous vous rencontrer ?",
         "appt_invalid_number": "Sélection non valide.",
-        "appt_already_with_official": (
-            "Vous avez déjà un rendez-vous avec {official} "
-            "(ID : `{id}`, {status}).\n\n"
-            "Annulez-le avec /cancelappointment avant d'en demander un autre, "
-            "ou utilisez /myappointments pour le consulter."
+        "appt_limit_reached": (
+            "Vous avez atteint la limite de {max} rendez-vous avec {official} "
+            "sur toute période de {days} jours.\n\n"
+            "Veuillez choisir une date en dehors de cette période, ou annuler "
+            "un rendez-vous existant avec /cancelappointment."
         ),
         "appt_ask_date": "Date souhaitée (YYYY-MM-DD) :",
         "appt_bad_date": "Veuillez utiliser le format YYYY-MM-DD :",
@@ -430,9 +430,9 @@ CATALOG: dict[str, dict[str, str]] = {
             "Cette heure chevauche votre rendez-vous avec {official} "
             "(ID : `{id}`). Demande non envoyée."
         ),
-        "appt_already_not_submitted": (
-            "Vous avez déjà un rendez-vous avec {official} "
-            "(ID : `{id}`). Demande non envoyée."
+        "appt_limit_not_submitted": (
+            "Vous avez atteint la limite de {max} rendez-vous avec {official} "
+            "sur toute période de {days} jours. Demande non envoyée."
         ),
         "appt_submitted": (
             "✅ *Demande envoyée !* (ID : `{id}`)\n"
@@ -536,11 +536,11 @@ CATALOG: dict[str, dict[str, str]] = {
         # -- appointment request flow --
         "appt_choose_official": "*Cela i-aphoyintimenti*\n\nUngathanda ukuhlangana nobani?",
         "appt_invalid_number": "Ukukhetha okungalungile.",
-        "appt_already_with_official": (
-            "Usunayo i-aphoyintimenti no-{official} "
-            "(I-ID: `{id}`, {status}).\n\n"
-            "Sicela uyikhansele nge-/cancelappointment ngaphambi kokucela enye, "
-            "noma usebenzise i-/myappointments ukuze uyibuyekeze."
+        "appt_limit_reached": (
+            "Usufinyelele umkhawulo wama-aphoyintimenti angu-{max} no-{official} "
+            "kunoma yisiphi isikhathi sezinsuku ezingu-{days}.\n\n"
+            "Sicela ukhethe usuku olungaphandle kwaleso sikhathi, noma ukhansele "
+            "i-aphoyintimenti ekhona nge-/cancelappointment."
         ),
         "appt_ask_date": "Usuku olufunayo (YYYY-MM-DD):",
         "appt_bad_date": "Sicela usebenzise ifomethi ethi YYYY-MM-DD:",
@@ -569,9 +569,9 @@ CATALOG: dict[str, dict[str, str]] = {
             "Leso sikhathi sigxubha ne-aphoyintimenti yakho no-{official} "
             "(I-ID: `{id}`). Isicelo asithunyelwanga."
         ),
-        "appt_already_not_submitted": (
-            "Usunayo i-aphoyintimenti no-{official} "
-            "(I-ID: `{id}`). Isicelo asithunyelwanga."
+        "appt_limit_not_submitted": (
+            "Usufinyelele umkhawulo wama-aphoyintimenti angu-{max} no-{official} "
+            "kunoma yisiphi isikhathi sezinsuku ezingu-{days}. Isicelo asithunyelwanga."
         ),
         "appt_submitted": (
             "✅ *Isicelo sithunyelwe!* (I-ID: `{id}`)\n"
