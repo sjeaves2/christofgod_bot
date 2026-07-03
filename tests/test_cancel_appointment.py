@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -165,6 +165,25 @@ class TestCmdCancelAppointment:
         assert "APPT001" in ids
         assert "APPT002" not in ids
 
+    def _past_appt(self, appt_id="PAST1"):
+        a = _make_appt(appt_id=appt_id, status="confirmed")
+        dt = (datetime.now(TZ) - timedelta(days=2)).replace(microsecond=0)
+        a["requested_datetime"] = dt.isoformat()
+        a["confirmed_datetime"] = dt.isoformat()
+        return a
+
+    def test_past_appointment_excluded(self):
+        from bot import ConversationHandler
+        result, _, ctx = self._run_cmd([self._past_appt()])
+        assert result == ConversationHandler.END  # nothing cancelable
+
+    def test_past_excluded_but_future_listed(self):
+        from bot import CA_SELECT
+        result, _, ctx = self._run_cmd([self._past_appt(), _make_appt(appt_id="FUT")])
+        assert result == CA_SELECT
+        ids = [a["id"] for a in ctx.user_data["ca_appts"]]
+        assert ids == ["FUT"]
+
 
 # ---------------------------------------------------------------------------
 # ca_select — picking which appointment to cancel (callback)
@@ -247,6 +266,18 @@ class TestCaConfirmRequester:
         from bot import ConversationHandler
         result, _, _, _ = self._run_confirm("ca:yes", _make_appt())
         assert result == ConversationHandler.END
+
+    def test_past_appointment_not_cancelled(self):
+        from bot import ConversationHandler
+        past = _make_appt()
+        dt = (datetime.now(TZ) - timedelta(days=2)).replace(microsecond=0)
+        past["requested_datetime"] = dt.isoformat()
+        past["confirmed_datetime"] = dt.isoformat()
+        result, q, ctx, saved = self._run_confirm("ca:yes", past)
+        assert result == ConversationHandler.END
+        assert not saved  # not cancelled
+        assert "past" in q.edit_message_text.call_args[0][0].lower() or \
+               "taken place" in q.edit_message_text.call_args[0][0].lower()
 
     def test_no_aborts_and_ends(self):
         from bot import ConversationHandler
