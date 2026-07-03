@@ -34,9 +34,24 @@ special_events:
   # Group(s)/channel(s) to post this reminder to (registry names or chat_ids).
   targets:
     - cogm_members
+  # Optional media attached to this reminder. Each may be a public https URL or a
+  # local file path relative to the project root (e.g. media/flyer.jpg). `image`
+  # is sent as a photo, `document` as a file. The reminder text is used as the
+  # caption (or a separate message if it exceeds 1024 characters).
+  # image: media/sunday-prayer.jpg
+  # document: media/bulletin.pdf
   active: true
 
 convocation_announcements: {}
 convocation_urls:
   sabbath::Eve: https://us06web.zoom.us/j/81594253541?pwd=e3BzF98vLF2t2biXwRGbCVaRUUOrVN.1
   sabbath::Morning: https://us06web.zoom.us/j/81977710637?pwd=7n8cMom08dSCWhBxMMtTWYf7KGkXMb
+
+# Optional per-service media, keyed by phase_key (like convocation_urls). Each
+# value is a public https URL or a local file path (media/...). Example:
+# convocation_images:
+#   "sabbath::Morning": media/sabbath-poster.jpg
+# convocation_documents:
+#   "sabbath::Eve": https://example.org/order-of-service.pdf
+convocation_images: {}
+convocation_documents: {}

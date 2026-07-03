@@ -107,6 +107,7 @@ CATALOG: dict[str, dict[str, str]] = {
             "Tap ✅ Yes to confirm the cancellation, or ✖️ No to keep it."
         ),
         "cancel_aborted": "Cancellation aborted.",
+        "cancel_past": "That appointment has already taken place and can't be cancelled.",
         "cancel_done_by_official_to_user": (
             "❌ Your appointment (ID: `{id}`) with *{official}* "
             "has been cancelled by the official."
@@ -244,6 +245,7 @@ CATALOG: dict[str, dict[str, str]] = {
             "Toca ✅ Sí para confirmar la cancelación, o ✖️ No para conservarla."
         ),
         "cancel_aborted": "Cancelación anulada.",
+        "cancel_past": "Esa cita ya tuvo lugar y no se puede cancelar.",
         "cancel_done_by_official_to_user": (
             "❌ Tu cita (ID: `{id}`) con *{official}* "
             "ha sido cancelada por el oficial."
@@ -382,6 +384,7 @@ CATALOG: dict[str, dict[str, str]] = {
             "Appuyez sur ✅ Oui pour confirmer l'annulation, ou ✖️ Non pour le conserver."
         ),
         "cancel_aborted": "Annulation abandonnée.",
+        "cancel_past": "Ce rendez-vous a déjà eu lieu et ne peut pas être annulé.",
         "cancel_done_by_official_to_user": (
             "❌ Votre rendez-vous (ID : `{id}`) avec *{official}* "
             "a été annulé par le responsable."
@@ -521,6 +524,7 @@ CATALOG: dict[str, dict[str, str]] = {
             "Thepha u-✅ Yebo ukuze uqinisekise ukukhansela, noma u-✖️ Cha ukuze uligcine."
         ),
         "cancel_aborted": "Ukukhansela kuyekisiwe.",
+        "cancel_past": "Lelo aphoyintimenti selenzekile futhi ngeke likhanselwe.",
         "cancel_done_by_official_to_user": (
             "❌ I-aphoyintimenti yakho (I-ID: `{id}`) no-*{official}* "
             "ikhanselwe yisikhulu."
