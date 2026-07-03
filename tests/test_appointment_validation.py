@@ -706,3 +706,100 @@ class TestCallbackOverlapGuard:
                               user_counter_datetime=slot.isoformat())
         query, finalize = self._run_callback("accept_user_counter", [target])
         finalize.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Past-appointment guards (can't cancel/reschedule an appointment in the past)
+# ---------------------------------------------------------------------------
+
+class TestPastGuards:
+    def test_appt_is_past_true(self):
+        from bot import _appt_is_past
+        past = (datetime.now(TZ) - timedelta(days=1)).replace(microsecond=0)
+        assert _appt_is_past({"confirmed_datetime": past.isoformat()}) is True
+
+    def test_appt_is_past_false_for_future(self):
+        from bot import _appt_is_past
+        fut = (datetime.now(TZ) + timedelta(days=1)).replace(microsecond=0)
+        assert _appt_is_past({"requested_datetime": fut.isoformat()}) is False
+
+    def test_datetime_is_past_string(self):
+        from bot import _datetime_is_past
+        past = (datetime.now(TZ) - timedelta(hours=1)).isoformat()
+        fut = (datetime.now(TZ) + timedelta(hours=1)).isoformat()
+        assert _datetime_is_past(past) is True
+        assert _datetime_is_past(fut) is False
+
+    def test_datetime_is_past_none(self):
+        from bot import _datetime_is_past
+        assert _datetime_is_past(None) is False
+
+
+class TestReschedulePastGuards:
+    def _appt(self, when, status="pending", appt_id="R1"):
+        return {
+            "id": appt_id, "user_chat_id": 111, "user_username": "requester",
+            "user_display_name": "Test User", "official_id": "off1",
+            "official_name": "Pastor Test", "requested_datetime": when.isoformat(),
+            "confirmed_datetime": None, "description": "x", "status": status,
+            "duration_minutes": 30,
+        }
+
+    def _run_counter_msg(self, appt, text, role="official"):
+        import bot
+        bot._counter_propose_state[appt["id"]] = {"chat_id": 999, "role": role}
+        ctx = _make_context()
+        upd = _make_update(text=text, chat_id=999, username="off")
+        saved = []
+
+        async def _get():
+            return [appt]
+
+        async def _save(a):
+            saved.extend(a)
+
+        try:
+            with patch("bot.get_appointments", side_effect=_get), \
+                 patch("bot.save_appointments", side_effect=_save):
+                _run(bot.handle_counter_propose_message(upd, ctx))
+        finally:
+            bot._counter_propose_state.pop(appt["id"], None)
+        return upd, saved
+
+    def test_proposing_past_time_rejected(self):
+        import bot
+        appt = self._appt(datetime.now(TZ) + timedelta(days=3))
+        upd, saved = self._run_counter_msg(appt, "2000-01-01 10:00")
+        # Not applied: status stays pending, nothing saved as counter_proposed.
+        assert appt["status"] == "pending"
+        assert "past" in upd.message.reply_text.call_args[0][0].lower()
+
+    def test_proposing_future_time_accepted(self):
+        import bot
+        appt = self._appt(datetime.now(TZ) + timedelta(days=3))
+        future = (datetime.now(TZ) + timedelta(days=10)).strftime("%Y-%m-%d 10:00")
+        upd, saved = self._run_counter_msg(appt, future)
+        assert appt["status"] == "counter_proposed"
+
+    def test_counter_on_past_appointment_blocked(self):
+        # appt_callback "counter" on a past appointment is refused.
+        import bot
+        from bot import CB_APPT_PREFIX
+        past = self._appt(datetime.now(TZ) - timedelta(days=1), appt_id="PASTR")
+        ctx = _make_context()
+        q = MagicMock()
+        q.answer = AsyncMock()
+        q.edit_message_text = AsyncMock()
+        q.data = f"{CB_APPT_PREFIX}counter:PASTR"
+        q.message.chat_id = 999
+        upd = MagicMock()
+        upd.callback_query = q
+
+        async def _get():
+            return [past]
+
+        with patch("bot.get_appointments", side_effect=_get), \
+             patch("bot.OFFICIALS", _officials()):
+            _run(bot.appt_callback(upd, ctx))
+        assert "PASTR" not in bot._counter_propose_state
+        assert "passed" in q.edit_message_text.call_args[0][0].lower()

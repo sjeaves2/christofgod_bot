@@ -390,6 +390,25 @@ def _appt_dt_label(appt: dict[str, Any], tz: "pytz.BaseTzInfo | None" = None,
     return format_dt(dt_obj, tz, lang)
 
 
+def _datetime_is_past(value) -> bool:
+    """True if an ISO string / datetime is in the past (naive values are localized)."""
+    if value is None:
+        return False
+    try:
+        dt = datetime.fromisoformat(value) if isinstance(value, str) else value
+    except (TypeError, ValueError):
+        return False
+    if dt.tzinfo is None:
+        dt = TZ.localize(dt)
+    return dt <= now_tz()
+
+
+def _appt_is_past(appt: dict[str, Any]) -> bool:
+    """True if the appointment's scheduled time is in the past."""
+    dt_obj = _appt_datetime(appt)
+    return dt_obj is not None and dt_obj <= now_tz()
+
+
 def _user_is_appt_official(appt: dict[str, Any], user_id: int, username: "str | None") -> bool:
     """True if this user is the official assigned to the given appointment."""
     off = next((o for o in OFFICIALS if o.get("id") == appt.get("official_id")), None)
@@ -547,6 +566,8 @@ def _merge_special_events(
                             "duration_minutes": defn.get("duration_minutes", 60),
                             "description": defn.get("description", ""),
                             "url": defn.get("url", ""),
+                            "image": defn.get("image", ""),
+                            "document": defn.get("document", ""),
                             "targets": defn.get("targets", []),
                             "announcements": announcements_map.get(key, []),
                         })
@@ -570,6 +591,8 @@ def _merge_special_events(
                     "duration_minutes": defn.get("duration_minutes", 60),
                     "description": defn.get("description", ""),
                     "url": defn.get("url", ""),
+                    "image": defn.get("image", ""),
+                    "document": defn.get("document", ""),
                     "targets": defn.get("targets", []),
                     "announcements": announcements_map.get(defn["id"], []),
                 })
@@ -606,6 +629,8 @@ async def all_upcoming(days_ahead: int = 90) -> list[dict[str, Any]]:
     evdata = await get_all_events_data()
     announcements_map: dict[str, list[str]] = evdata.get("convocation_announcements", {})
     urls_map: dict[str, str] = evdata.get("convocation_urls", {})
+    images_map: dict[str, str] = evdata.get("convocation_images", {}) or {}
+    documents_map: dict[str, str] = evdata.get("convocation_documents", {}) or {}
     special_defs: list[dict[str, Any]] = evdata.get("special_events", [])
 
     # Notification target registry + convocation target assignments
@@ -620,6 +645,10 @@ async def all_upcoming(days_ahead: int = 90) -> list[dict[str, Any]]:
         phase_key = ev.get("phase_key")
         if phase_key and urls_map.get(phase_key):
             ev["url"] = urls_map[phase_key]
+        if phase_key and images_map.get(phase_key):
+            ev["image"] = images_map[phase_key]
+        if phase_key and documents_map.get(phase_key):
+            ev["document"] = documents_map[phase_key]
         names = convo_targets.get(phase_key) if phase_key else None
         if names is None:
             names = convo_targets_default
@@ -663,6 +692,91 @@ async def _save_notif_state(states: dict[str, Any]) -> None:
     await notif_state_cache.save({"states": states})
 
 
+# ---------------------------------------------------------------------------
+# Media attachments (photos / documents) for notifications and broadcasts
+# ---------------------------------------------------------------------------
+
+CAPTION_LIMIT = 1024  # Telegram's caption length limit for photos/documents
+
+
+def _is_media_url(src: "str | None") -> bool:
+    return isinstance(src, str) and src.lower().startswith(("http://", "https://"))
+
+
+def _looks_like_path(src: str) -> bool:
+    """Heuristic: a local path has a separator or a file extension; a Telegram
+    file_id has neither."""
+    return "/" in src or "\\" in src or "." in src
+
+
+def _resolve_local_media(src: "str | None") -> "Path | None":
+    """Resolve a local media path (relative to the project root) to an existing file."""
+    if not src:
+        return None
+    p = Path(src)
+    if not p.is_absolute():
+        p = BASE_DIR / p
+    return p if p.is_file() else None
+
+
+async def _send_media(bot, chat_id, kind: str, source: str,
+                      caption: "str | None" = None, cache: "dict | None" = None):
+    """Send a photo or document to one chat.
+
+    *source* may be an https URL, a local file path, or a Telegram file_id.
+    Local files are uploaded and the returned file_id is stored in *cache* so
+    the same file is only uploaded once across many recipients. Returns the
+    file_id, or None. Raises TelegramError on send failure (caller retries).
+    """
+    parse_mode = ParseMode.MARKDOWN if caption else None
+    opened = None
+    if cache and cache.get("file_id"):
+        media = cache["file_id"]
+    elif _is_media_url(source):
+        media = source
+    else:
+        local = _resolve_local_media(source)
+        if local is not None:
+            opened = local.open("rb")
+            media = InputFile(opened, filename=local.name)
+        else:
+            media = source  # assume it's already a Telegram file_id
+    try:
+        if kind == "photo":
+            msg = await bot.send_photo(chat_id, media, caption=caption, parse_mode=parse_mode)
+            fid = msg.photo[-1].file_id if getattr(msg, "photo", None) else None
+        else:
+            msg = await bot.send_document(chat_id, media, caption=caption, parse_mode=parse_mode)
+            fid = msg.document.file_id if getattr(msg, "document", None) else None
+    finally:
+        if opened:
+            opened.close()
+    if cache is not None and fid:
+        cache["file_id"] = fid
+    return fid
+
+
+async def _send_notification_payload(bot, chat_id, media: dict, text: str, caches: dict) -> None:
+    """Deliver a notification to one chat: image/document with the reminder text as
+    a caption, plus the text as its own message if it exceeds the caption limit."""
+    image = media.get("image")
+    document = media.get("document")
+    if not image and not document:
+        await bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN)
+        return
+    caption = text if len(text) <= CAPTION_LIMIT else None
+    caption_used = False
+    if image:
+        await _send_media(bot, chat_id, "photo", image, caption=caption, cache=caches["image"])
+        caption_used = caption is not None
+    if document:
+        cap = None if caption_used else caption
+        await _send_media(bot, chat_id, "document", document, caption=cap, cache=caches["document"])
+        caption_used = caption_used or (cap is not None)
+    if caption is None:  # text too long to be a caption — send separately
+        await bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN)
+
+
 async def deliver_event_notifications(bot, event: dict[str, Any]) -> int:
     """Post an event reminder to each configured group/channel not yet notified.
 
@@ -695,11 +809,21 @@ async def deliver_event_notifications(bot, event: dict[str, Any]) -> int:
     # Groups/channels get a single rendering in the church's default tz/language.
     text = _render_notification(event, TZ, DEFAULT_LANG)
 
+    # Configured media (image/document): URL or local path. Drop a local file
+    # that's missing so the reminder still goes out as text.
+    media = {"image": event.get("image") or "", "document": event.get("document") or ""}
+    for field, src in list(media.items()):
+        if src and not _is_media_url(src) and _looks_like_path(src) \
+                and _resolve_local_media(src) is None:
+            logger.warning("Event %r: media file not found, skipping: %s", event["name"], src)
+            media[field] = ""
+    caches = {"image": {}, "document": {}}
+
     sent = 0
     failed = 0
     for chat_id in pending:
         try:
-            await bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN)
+            await _send_notification_payload(bot, chat_id, media, text, caches)
             notified.add(chat_id)
             sent += 1
         except TelegramError as exc:
@@ -1459,8 +1583,9 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     activity.log_command("broadcast", uid, uname, dname)
     context.user_data.clear()
     await update.message.reply_text(
-        "📣 *Broadcast*\n\nSend me the message to broadcast. "
-        "Markdown formatting is supported; I'll show you a preview before sending.",
+        "📣 *Broadcast*\n\nSend me the message to broadcast — plain text, or a "
+        "*photo* or *document* (with an optional caption). Markdown is supported; "
+        "I'll show you a preview before sending.",
         parse_mode=ParseMode.MARKDOWN,
     )
     return BC_MESSAGE
@@ -1479,10 +1604,45 @@ async def bc_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return BC_MESSAGE
 
     context.user_data["bc_message"] = text
+    context.user_data.pop("bc_media", None)
     options = await _broadcast_target_options()
     context.user_data["bc_options"] = options
     context.user_data["bc_selected"] = set()
     await update.message.reply_text(
+        "👆 *Preview above.* Choose where to send it, then tap *Send*:",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=_bc_keyboard(options, set()),
+    )
+    return BC_SELECT
+
+
+async def bc_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Broadcast a photo or document (with an optional caption) instead of text."""
+    msg = update.message
+    if msg.photo:
+        kind, file_id = "photo", msg.photo[-1].file_id
+    elif msg.document:
+        kind, file_id = "document", msg.document.file_id
+    else:
+        return BC_MESSAGE
+    caption = msg.caption or ""
+
+    # Preview it back (validates any Markdown in the caption).
+    try:
+        await _send_media(context.bot, msg.chat_id, kind, file_id, caption=caption or None)
+    except BadRequest as exc:
+        await msg.reply_text(
+            f"⚠️ I couldn't render that caption as Markdown ({exc.message}). "
+            "Please fix the caption and re-send."
+        )
+        return BC_MESSAGE
+
+    context.user_data["bc_media"] = {"kind": kind, "file_id": file_id, "caption": caption}
+    context.user_data.pop("bc_message", None)
+    options = await _broadcast_target_options()
+    context.user_data["bc_options"] = options
+    context.user_data["bc_selected"] = set()
+    await msg.reply_text(
         "👆 *Preview above.* Choose where to send it, then tap *Send*:",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=_bc_keyboard(options, set()),
@@ -1553,8 +1713,9 @@ async def _bc_expand_recipients(options: list[dict], selected: set[str]) -> list
 
 
 async def _bc_send_pending(bot, context) -> list[dict]:
-    """Send the message to all recipients not yet delivered. Returns failures."""
-    message: str = context.user_data["bc_message"]
+    """Send the message/media to all recipients not yet delivered. Returns failures."""
+    media: "dict | None" = context.user_data.get("bc_media")
+    message: str = context.user_data.get("bc_message", "")
     recipients: list[dict] = context.user_data["bc_recipients"]
     done: set = context.user_data["bc_done"]
     failures: list[dict] = []
@@ -1562,7 +1723,11 @@ async def _bc_send_pending(bot, context) -> list[dict]:
         if r["chat_id"] in done:
             continue
         try:
-            await bot.send_message(r["chat_id"], message, parse_mode=ParseMode.MARKDOWN)
+            if media:
+                await _send_media(bot, r["chat_id"], media["kind"], media["file_id"],
+                                  caption=media["caption"] or None)
+            else:
+                await bot.send_message(r["chat_id"], message, parse_mode=ParseMode.MARKDOWN)
             done.add(r["chat_id"])
         except TelegramError as exc:
             failures.append(r)
@@ -1930,6 +2095,13 @@ async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     user_chat_id = appt["user_chat_id"]
 
+    # Can't start rescheduling an appointment whose time has already passed.
+    if action in ("counter", "decline_counter") and _appt_is_past(appt):
+        await query.edit_message_text(
+            "⚠️ This appointment's time has already passed; it can no longer be rescheduled."
+        )
+        return
+
     if action == "confirm":
         clash = _confirmed_overlap(appts, appt, appt["requested_datetime"])
         if clash:
@@ -1971,6 +2143,11 @@ async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     elif action == "accept_counter":
         # User accepts counter-proposed time
         proposed = appt.get("counter_datetime", appt["requested_datetime"])
+        if _datetime_is_past(proposed):
+            await query.edit_message_text(
+                "⚠️ That suggested time has already passed. Please suggest a new time."
+            )
+            return
         clash = _confirmed_overlap(appts, appt, proposed)
         if clash:
             await query.edit_message_text(
@@ -1997,6 +2174,11 @@ async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     elif action == "accept_user_counter":
         # Official accepts user's counter-proposed time
         proposed = appt.get("user_counter_datetime", appt["requested_datetime"])
+        if _datetime_is_past(proposed):
+            await query.edit_message_text(
+                "⚠️ That suggested time has already passed. Please suggest a new time."
+            )
+            return
         clash = _confirmed_overlap(appts, appt, proposed)
         if clash:
             await query.edit_message_text(
@@ -2121,7 +2303,20 @@ async def handle_counter_propose_message(
     date_s, time_s = m.group(1), m.group(2)
     parts_d = [int(x) for x in date_s.split("-")]
     parts_t = [int(x) for x in time_s.split(":")]
-    new_dt = TZ.localize(datetime(parts_d[0], parts_d[1], parts_d[2], parts_t[0], parts_t[1]))
+    try:
+        new_dt = TZ.localize(datetime(parts_d[0], parts_d[1], parts_d[2], parts_t[0], parts_t[1]))
+    except ValueError:
+        await update.message.reply_text(
+            "That date/time isn't valid. Please use: YYYY-MM-DD HH:MM"
+        )
+        _counter_propose_state[appt_id] = {"chat_id": chat_id, "role": role}
+        return
+    if new_dt <= now_tz():
+        await update.message.reply_text(
+            "That date/time is in the past. Please suggest a future time: YYYY-MM-DD HH:MM"
+        )
+        _counter_propose_state[appt_id] = {"chat_id": chat_id, "role": role}
+        return
     new_dt_str = format_dt(new_dt)
 
     if role == "official":
@@ -2249,9 +2444,12 @@ async def cmd_cancelappointment(update: Update, context: ContextTypes.DEFAULT_TY
     is_off = _is_known_official(uid, uname)
 
     # Build list of appointments this user is party to that are still active
+    # and have not already taken place (you can't cancel a past appointment).
     active = []
     for a in appts:
         if a.get("status") not in ACTIVE_APPT_STATUSES:
+            continue
+        if _appt_is_past(a):
             continue
         if is_off and _user_is_appt_official(a, uid, uname):
             active.append(a)
@@ -2323,6 +2521,11 @@ async def ca_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return ConversationHandler.END
 
     appt: dict = context.user_data["ca_appt"]
+    # Defensive: the appointment must still be in the future to cancel it.
+    if _appt_is_past(appt):
+        await query.edit_message_text(t("cancel_past", lang))
+        return ConversationHandler.END
+
     appts = await get_appointments()
     for i, a in enumerate(appts):
         if a["id"] == appt["id"]:
@@ -2717,7 +2920,10 @@ def main() -> None:
     broadcast_conv = ConversationHandler(
         entry_points=[CommandHandler("broadcast", cmd_broadcast)],
         states={
-            BC_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, bc_message)],
+            BC_MESSAGE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, bc_message),
+                MessageHandler(filters.PHOTO | filters.Document.ALL, bc_media),
+            ],
             BC_SELECT: [CallbackQueryHandler(bc_select, pattern=f"^{re.escape(CB_BC_PREFIX)}")],
             BC_RETRY: [CallbackQueryHandler(bc_retry, pattern=f"^{re.escape(CB_BC_PREFIX)}retry:")],
         },
