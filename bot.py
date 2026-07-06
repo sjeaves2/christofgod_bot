@@ -421,6 +421,107 @@ def _user_is_appt_official(appt: dict[str, Any], user_id: int, username: "str | 
     return bool(uname_lower) and oname == uname_lower
 
 
+# ---------------------------------------------------------------------------
+# Officials' appointment proxies (secretaries who can negotiate on their behalf)
+# ---------------------------------------------------------------------------
+
+def _save_officials() -> None:
+    """Persist the OFFICIALS list (with any auto-populated chat_ids / flags)."""
+    with open(CONFIG_DIR / "officials.yaml", "w", encoding="utf-8") as fh:
+        yaml.dump({"officials": OFFICIALS}, fh, default_flow_style=False, allow_unicode=True)
+
+
+def _official_by_id(official_id: "str | None") -> "dict | None":
+    return next((o for o in OFFICIALS if o.get("id") == official_id), None)
+
+
+def _person_matches(rec: dict, user_id: int, uname_lower: str) -> bool:
+    """Match a person record (official or proxy) by chat_id or telegram_username."""
+    if rec.get("chat_id") == user_id:
+        return True
+    rname = (rec.get("telegram_username") or "").lstrip("@").lower()
+    return bool(uname_lower) and rname == uname_lower
+
+
+def _enabled_proxies(off: "dict | None") -> list[dict]:
+    """Proxy records for an official, only if proxies are enabled."""
+    if not off or not off.get("proxies_enabled"):
+        return []
+    return off.get("proxies") or []
+
+
+def _user_can_act_for_official(off: "dict | None", user_id: int, username: "str | None") -> bool:
+    """True if the user is the official, or an enabled proxy for that official."""
+    if not off:
+        return False
+    uname_lower = (username or "").lstrip("@").lower()
+    if _person_matches(off, user_id, uname_lower):
+        return True
+    return any(_person_matches(p, user_id, uname_lower) for p in _enabled_proxies(off))
+
+
+def _user_can_act_for_appt(appt: dict, user_id: int, username: "str | None") -> bool:
+    return _user_can_act_for_official(_official_by_id(appt.get("official_id")), user_id, username)
+
+
+def _acting_identity(off: dict, user_id: int, username: "str | None") -> "tuple[str | None, bool]":
+    """Return (display_name, is_proxy) for the acting official/proxy, else (None, False)."""
+    uname_lower = (username or "").lstrip("@").lower()
+    if _person_matches(off, user_id, uname_lower):
+        return off.get("name"), False
+    for p in _enabled_proxies(off):
+        if _person_matches(p, user_id, uname_lower):
+            return (p.get("name") or "A proxy"), True
+    return None, False
+
+
+def _official_side_recipients(off: dict) -> list[dict]:
+    """Chats that should receive an appointment request: the official + enabled
+    proxies that have started the bot. Each: {chat_id, is_proxy, name}."""
+    out: list[dict] = []
+    if off.get("chat_id"):
+        out.append({"chat_id": off["chat_id"], "is_proxy": False, "name": off.get("name")})
+    for p in _enabled_proxies(off):
+        if p.get("chat_id"):
+            out.append({"chat_id": p["chat_id"], "is_proxy": True, "name": p.get("name") or "Proxy"})
+    return out
+
+
+async def cmd_enable_appt_proxies(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Officer-only: enable/disable their appointment proxies. Usage: /enable_appt_proxies yes|no"""
+    uid, uname, dname = user_info(update)
+    uname_lower = (uname or "").lstrip("@").lower()
+    off = next((o for o in OFFICIALS if _person_matches(o, uid, uname_lower)), None)
+    if not off:
+        await update.message.reply_text("Only a church official can manage appointment proxies.")
+        return
+
+    arg = (context.args[0].strip().lower() if context.args else "")
+    if arg in ("yes", "y", "true", "on", "1", "sí", "si", "oui"):
+        enabled = True
+    elif arg in ("no", "n", "false", "off", "0", "non"):
+        enabled = False
+    else:
+        await update.message.reply_text("Usage: /enable_appt_proxies yes|no")
+        return
+
+    off["proxies_enabled"] = enabled
+    _save_officials()
+    activity.log_command("enable_appt_proxies", uid, uname, dname,
+                         details=f"{off.get('id')}={enabled}")
+
+    proxies = off.get("proxies") or []
+    if enabled:
+        names = ", ".join(p.get("name", "?") for p in proxies) or "none configured yet"
+        await update.message.reply_text(
+            f"✅ Appointment proxies *enabled*.\nYour proxies: {names}",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+    else:
+        await update.message.reply_text("✅ Appointment proxies *disabled*.",
+                                        parse_mode=ParseMode.MARKDOWN)
+
+
 # Affirmative replies accepted for typed yes/no prompts, across supported languages.
 _AFFIRMATIVE_WORDS = {"yes", "y", "sí", "si", "s", "oui", "o"}
 
@@ -971,24 +1072,31 @@ async def _register_official_if_known(
     """
     uname_lower = (username or "").lstrip("@").lower()
     phone_norm = re.sub(r"\D", "", phone or "")
-    changed = False
-    for off in OFFICIALS:
+
+    def _match_and_set(rec: dict) -> bool:
         matched = False
         if uname_lower:
-            oname = (off.get("telegram_username") or "").lstrip("@").lower()
-            if oname and oname == uname_lower:
+            rname = (rec.get("telegram_username") or "").lstrip("@").lower()
+            if rname and rname == uname_lower:
                 matched = True
         if not matched and phone_norm:
-            ophone = re.sub(r"\D", "", off.get("phone") or "")
-            if ophone and ophone == phone_norm:
+            rphone = re.sub(r"\D", "", rec.get("phone") or "")
+            if rphone and rphone == phone_norm:
                 matched = True
-        if matched and off.get("chat_id") != user_id:
-            off["chat_id"] = user_id
+        if matched and rec.get("chat_id") != user_id:
+            rec["chat_id"] = user_id
+            return True
+        return False
+
+    changed = False
+    for off in OFFICIALS:
+        if _match_and_set(off):
             changed = True
+        for proxy in off.get("proxies") or []:
+            if _match_and_set(proxy):
+                changed = True
     if changed:
-        raw = {"officials": OFFICIALS}
-        with open(CONFIG_DIR / "officials.yaml", "w", encoding="utf-8") as fh:
-            yaml.dump(raw, fh, default_flow_style=False, allow_unicode=True)
+        _save_officials()
 
 
 async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2023,23 +2131,24 @@ async def ap_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def _notify_official_of_request(
     context: ContextTypes.DEFAULT_TYPE, appt: dict, update: Update
 ) -> None:
-    off_id = appt["official_id"]
-    off = next((o for o in OFFICIALS if o["id"] == off_id), None)
+    off = _official_by_id(appt["official_id"])
     if not off:
         return
-    chat_id = off.get("chat_id")
-    if not chat_id:
-        logger.warning("Official %s has no chat_id — they need to /start the bot.", off_id)
+    recipients = _official_side_recipients(off)
+    if not recipients:
+        logger.warning("Official %s (and any proxies) have no chat_id — they need to /start.",
+                       appt["official_id"])
         return
 
     req_dt_str = format_dt(datetime.fromisoformat(appt["requested_datetime"]))
-    caption = (
+    base = (
         f"📅 *Appointment Request* (ID: `{appt['id']}`)\n\n"
         f"From: {appt['user_display_name']}"
         + (f" (@{appt['user_username']})" if appt.get("user_username") else "")
         + f"\nRequested: {req_dt_str}\n"
         f"Purpose: {appt['description']}"
     )
+    proxy_note = f"\n\n_You're receiving this as {off.get('name')}'s proxy._"
 
     kb = InlineKeyboardMarkup([
         [
@@ -2049,17 +2158,26 @@ async def _notify_official_of_request(
         ]
     ])
 
-    # Try to include user's profile photo
+    # Fetch the requester's profile photo once and reuse it for every recipient.
+    photo_id = None
     try:
         photos = await context.bot.get_user_profile_photos(appt["user_chat_id"], limit=1)
         if photos.photos:
-            photo = photos.photos[0][-1]
-            await context.bot.send_photo(chat_id, photo.file_id, caption=caption,
-                                         parse_mode=ParseMode.MARKDOWN, reply_markup=kb)
-            return
+            photo_id = photos.photos[0][-1].file_id
     except TelegramError:
         pass
-    await context.bot.send_message(chat_id, caption, parse_mode=ParseMode.MARKDOWN, reply_markup=kb)
+
+    for r in recipients:
+        caption = base + (proxy_note if r["is_proxy"] else "")
+        try:
+            if photo_id:
+                await context.bot.send_photo(r["chat_id"], photo_id, caption=caption,
+                                             parse_mode=ParseMode.MARKDOWN, reply_markup=kb)
+            else:
+                await context.bot.send_message(r["chat_id"], caption,
+                                               parse_mode=ParseMode.MARKDOWN, reply_markup=kb)
+        except TelegramError as exc:
+            logger.warning("Couldn't send appointment request to %s: %s", r["chat_id"], exc)
 
 
 # ---------------------------------------------------------------------------
@@ -2068,6 +2186,40 @@ async def _notify_official_of_request(
 
 # Store pending counter-propose state outside conversation
 _counter_propose_state: dict[str, Any] = {}  # appt_id -> {"chat_id": ..., "role": "official"|"user"}
+
+# Actions taken by the official side (official or an enabled proxy). The rest
+# (accept_counter / decline_counter) are taken by the requester.
+OFFICIAL_SIDE_ACTIONS = {"confirm", "decline", "counter",
+                         "accept_user_counter", "decline_user_counter"}
+
+
+def _requester_proxy_note(appt: dict) -> str:
+    """A note for the requester that a proxy is handling this on the official's behalf."""
+    if appt.get("negotiator_is_proxy"):
+        return f"\n\n_Handled by {appt.get('official_name')}'s office on their behalf._"
+    return ""
+
+
+async def _notify_negotiation_started(
+    context: ContextTypes.DEFAULT_TYPE, off: dict, appt: dict, claimant_chat_id: int
+) -> None:
+    """Tell the official and any other proxies that someone has taken up the request."""
+    requester = appt.get("user_display_name") or appt.get("user_username") or "the requester"
+    claimant = appt.get("negotiator_name") or "Someone"
+    by_proxy = appt.get("negotiator_is_proxy")
+    for r in _official_side_recipients(off):
+        if r["chat_id"] == claimant_chat_id:
+            continue
+        if by_proxy and not r["is_proxy"]:
+            msg = (f"🔔 {claimant} is negotiating an appointment on your behalf "
+                   f"with {requester} (ID: `{appt['id']}`).")
+        else:
+            msg = (f"🔔 {claimant} has started handling the appointment request from "
+                   f"{requester} (ID: `{appt['id']}`).")
+        try:
+            await context.bot.send_message(r["chat_id"], msg, parse_mode=ParseMode.MARKDOWN)
+        except TelegramError:
+            pass
 
 
 async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2102,6 +2254,34 @@ async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         return
 
+    # Official-side actions may come from the official OR an enabled proxy.
+    # The first to act "claims" the appointment and must see it through; anyone
+    # else who taps is told it's already being handled.
+    if action in OFFICIAL_SIDE_ACTIONS:
+        off = _official_by_id(appt.get("official_id"))
+        actor_id = query.from_user.id
+        actor_uname = query.from_user.username
+        if not _user_can_act_for_official(off, actor_id, actor_uname):
+            await query.edit_message_text("⚠️ You're not authorized to act on this appointment.")
+            return
+        negotiator = appt.get("negotiator_chat_id")
+        if negotiator is None:
+            name, is_proxy = _acting_identity(off, actor_id, actor_uname)
+            appt["negotiator_chat_id"] = actor_id
+            appt["negotiator_name"] = name or "The official"
+            appt["negotiator_is_proxy"] = is_proxy
+            for i, a in enumerate(appts):
+                if a["id"] == appt_id:
+                    appts[i] = appt
+            await save_appointments(appts)
+            await _notify_negotiation_started(context, off, appt, actor_id)
+        elif negotiator != actor_id:
+            await query.edit_message_text(
+                f"ℹ️ This appointment is already being handled by "
+                f"{appt.get('negotiator_name', 'someone')}."
+            )
+            return
+
     if action == "confirm":
         clash = _confirmed_overlap(appts, appt, appt["requested_datetime"])
         if clash:
@@ -2124,7 +2304,8 @@ async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await save_appointments(appts)
         await query.edit_message_text(f"❌ You declined the appointment (ID: {appt_id}).")
         await context.bot.send_message(user_chat_id,
-            f"❌ Your appointment request (ID: `{appt_id}`) has been declined.",
+            f"❌ Your appointment request (ID: `{appt_id}`) has been declined."
+            + _requester_proxy_note(appt),
             parse_mode=ParseMode.MARKDOWN)
 
     elif action == "counter":
@@ -2234,12 +2415,13 @@ async def _finalize_appointment(
         caption=t("appt_ics_caption", user_lang),
     )
 
+    user_display = appt.get("user_display_name") or appt.get("user_username") or "The requester"
+
     # --- Notify and send ICS to the official (their timezone) ---
     off = next((o for o in OFFICIALS if o["id"] == appt["official_id"]), None)
     if off and off.get("chat_id"):
         off_tz, _ = await get_user_prefs(off["chat_id"])
         off_dt_str = format_dt(confirmed_dt, off_tz)
-        user_display = appt.get("user_display_name") or appt.get("user_username") or "The requester"
         ics_bytes_off = appointment_to_ics(appt_with_dt, TZ)
         off_bio = io.BytesIO(ics_bytes_off)
         await context.bot.send_message(
@@ -2256,6 +2438,15 @@ async def _finalize_appointment(
             off["chat_id"],
             document=InputFile(off_bio, filename="appointment.ics"),
             caption="Import this file into your calendar app.",
+        )
+
+    # --- Note to the negotiating proxy (if a proxy arranged this) ---
+    if appt.get("negotiator_is_proxy") and appt.get("negotiator_chat_id"):
+        await context.bot.send_message(
+            appt["negotiator_chat_id"],
+            f"✅ Appointment confirmed: *{appt['official_name']}* is scheduled with "
+            f"{user_display} on {format_dt(confirmed_dt)} (ID: `{appt['id']}`).",
+            parse_mode=ParseMode.MARKDOWN,
         )
 
 
@@ -2339,20 +2530,22 @@ async def handle_counter_propose_message(
             f"📅 *New time suggested for appointment `{appt_id}`*\n"
             f"With: {appt['official_name']}\n"
             f"Suggested: {new_dt_str}\n"
-            f"Purpose: {appt['description']}",
+            f"Purpose: {appt['description']}"
+            + _requester_proxy_note(appt),
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=kb,
         )
     else:
-        # User suggests alternative → notify official
+        # User suggests alternative → notify the negotiator (official or their proxy)
         appt["user_counter_datetime"] = new_dt.isoformat()
         for i, a in enumerate(appts):
             if a["id"] == appt_id:
                 appts[i] = appt
         await save_appointments(appts)
         await update.message.reply_text(f"✅ Your suggested time has been forwarded: {new_dt_str}")
-        off = next((o for o in OFFICIALS if o["id"] == appt["official_id"]), None)
-        if off and off.get("chat_id"):
+        off = _official_by_id(appt["official_id"])
+        target_chat = appt.get("negotiator_chat_id") or (off.get("chat_id") if off else None)
+        if target_chat:
             kb = InlineKeyboardMarkup([
                 [
                     InlineKeyboardButton("✅ Accept", callback_data=f"{CB_APPT_PREFIX}accept_user_counter:{appt_id}"),
@@ -2360,7 +2553,7 @@ async def handle_counter_propose_message(
                 ]
             ])
             await context.bot.send_message(
-                off["chat_id"],
+                target_chat,
                 f"The user has suggested a new time for appointment `{appt_id}`:\n{new_dt_str}",
                 parse_mode=ParseMode.MARKDOWN,
                 reply_markup=kb,
@@ -2441,17 +2634,16 @@ async def cmd_cancelappointment(update: Update, context: ContextTypes.DEFAULT_TY
     tz, lang = await get_user_prefs(uid)
 
     appts = await get_appointments()
-    is_off = _is_known_official(uid, uname)
-
     # Build list of appointments this user is party to that are still active
     # and have not already taken place (you can't cancel a past appointment).
+    # "Party to" = the requester, the official, or an enabled proxy.
     active = []
     for a in appts:
         if a.get("status") not in ACTIVE_APPT_STATUSES:
             continue
         if _appt_is_past(a):
             continue
-        if is_off and _user_is_appt_official(a, uid, uname):
+        if _user_can_act_for_appt(a, uid, uname):
             active.append(a)
         if a.get("user_chat_id") == uid:
             # Avoid duplicates if official is also the requester (edge case)
@@ -2538,8 +2730,9 @@ async def ca_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         details=f"Cancelled appointment {appt['id']}"
     )
 
-    # Determine who cancelled so we can notify the other party
-    is_off = _is_known_official(uid, uname)
+    # Determine who cancelled so we can notify the other party. An official OR
+    # an enabled proxy counts as the "official side".
+    is_off = _user_can_act_for_appt(appt, uid, uname)
     off = next((o for o in OFFICIALS if o.get("id") == appt.get("official_id")), None)
     user_chat_id = appt.get("user_chat_id")
 
@@ -3000,6 +3193,7 @@ def main() -> None:
     app.add_handler(set_service_link_conv)
     app.add_handler(broadcast_conv)
     app.add_handler(CommandHandler("myappointments", cmd_myappointments))
+    app.add_handler(CommandHandler("enable_appt_proxies", cmd_enable_appt_proxies))
     app.add_handler(appointment_conv)
     app.add_handler(cancel_appt_conv)
     app.add_handler(settimezone_conv)

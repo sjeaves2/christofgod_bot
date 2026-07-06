@@ -559,6 +559,9 @@ class TestCallbackOverlapGuard:
         query.edit_message_text = AsyncMock()
         query.data = f"{CB_APPT_PREFIX}{action}:{appt_id}"
         query.message.chat_id = 999
+        # Actor is the official (chat_id 999 in _officials()).
+        query.from_user.id = 999
+        query.from_user.username = None
         upd = MagicMock()
         upd.callback_query = query
 
@@ -648,6 +651,8 @@ class TestCallbackOverlapGuard:
             query.edit_message_text = AsyncMock()
             query.data = f"{CB_APPT_PREFIX}confirm:TARGET"
             query.message.chat_id = 999
+            query.from_user.id = 999
+            query.from_user.username = None
             upd = MagicMock()
             upd.callback_query = query
             with patch("bot.get_appointments", side_effect=_fake_get), \
