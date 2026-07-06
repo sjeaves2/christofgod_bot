@@ -1,13 +1,30 @@
+# Officials available for appointments. Each may optionally have `proxies`
+# (secretaries who can negotiate appointments on their behalf) and a
+# `proxies_enabled` flag the official toggles via /enable_appt_proxies yes|no.
+# A proxy's chat_id is auto-filled when they run /start (same as officials).
+# Example:
+#   proxies_enabled: true
+#   proxies:
+#     - name: Jane Secretary
+#       telegram_username: janesec
+# NOTE: the bot rewrites this file when it auto-fills chat_ids, which strips
+# these comments — keep a copy of the proxy config elsewhere if needed.
 officials:
 - chat_id: 516225991
   id: pastor_crowdy
   name: Pastor Christel Williams Crowdy
   telegram_username: OneMorah
+  proxies_enabled: true
+  proxies:
+    - name: Evangelist-at-Large Curtis Adair, Jr.
+      telegram_username: curtisadairjr
 - chat_id: 474108062
   id: bishop_eaves
   name: Bishop Samuel Eaves, II
   telegram_username: sjeaves2
+  proxies_enabled: false
 - chat_id: 1756904738
   id: eal_adair
   name: Evangelist-at-Large Curtis Adair, Jr.
   telegram_username: curtisadairjr
+  proxies_enabled: false
