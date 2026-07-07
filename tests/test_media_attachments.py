@@ -201,6 +201,9 @@ class TestBroadcastMedia:
 
     def _photo_update(self, caption=None):
         upd = MagicMock()
+        upd.effective_user.id = 1
+        upd.effective_user.username = "admin"
+        upd.effective_user.full_name = "Admin User"
         m = upd.message
         m.chat_id = 1
         m.photo = [MagicMock(file_id="PIC1")]
@@ -216,8 +219,11 @@ class TestBroadcastMedia:
         with patch("bot._broadcast_target_options", return_value=[]):
             result = _run(bot.bc_media(upd, ctx))
         assert result == bot.BC_SELECT
-        assert ctx.user_data["bc_media"] == {"kind": "photo", "file_id": "PIC1",
-                                             "caption": "Hello *world*"}
+        media = ctx.user_data["bc_media"]
+        assert media["kind"] == "photo" and media["file_id"] == "PIC1"
+        # Caption keeps the body and appends the sender attribution.
+        assert media["caption"].startswith("Hello *world*")
+        assert "posted by Admin User" in media["caption"]
         assert "bc_message" not in ctx.user_data
 
     def test_bad_caption_markdown_stays(self):

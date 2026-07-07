@@ -87,6 +87,7 @@ CATALOG: dict[str, dict[str, str]] = {
         ),
         "share_contact_button": "📱 Share my contact",
         "unsubscribed": "You have been unsubscribed. Send /start to re-subscribe.",
+        "bcast_individual_subscribers": "Individual subscribers",
 
         # -- events --
         "events_header": "*Upcoming Events (next 30 days):*\n",
@@ -225,6 +226,7 @@ CATALOG: dict[str, dict[str, str]] = {
         ),
         "share_contact_button": "📱 Compartir mi contacto",
         "unsubscribed": "Has cancelado la suscripción. Envía /start para volver a suscribirte.",
+        "bcast_individual_subscribers": "Suscriptores individuales",
 
         # -- events --
         "events_header": "*Próximos eventos (próximos 30 días):*\n",
@@ -364,6 +366,7 @@ CATALOG: dict[str, dict[str, str]] = {
         ),
         "share_contact_button": "📱 Partager mon contact",
         "unsubscribed": "Vous avez été désabonné. Envoyez /start pour vous réabonner.",
+        "bcast_individual_subscribers": "Abonnés individuels",
 
         # -- events --
         "events_header": "*Événements à venir (30 prochains jours) :*\n",
@@ -504,6 +507,7 @@ CATALOG: dict[str, dict[str, str]] = {
         ),
         "share_contact_button": "📱 Yabelana ngoxhumana nami",
         "unsubscribed": "Ususiwe ekubhaliseni. Thumela /start ukuze ubhalise futhi.",
+        "bcast_individual_subscribers": "Ababhalisi ngabanye",
 
         # -- events --
         "events_header": "*Imicimbi ezayo (izinsuku ezingu-30 ezizayo):*\n",

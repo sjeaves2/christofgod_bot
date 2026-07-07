@@ -42,37 +42,79 @@ def _update(chat_id=1, text=None):
 # ---------------------------------------------------------------------------
 
 class TestTargetOptions:
-    def _run_opts(self, known_groups, registry):
+    def _run_opts(self, known_groups, registry, get_chat=None, lang="en"):
         import bot
 
+        saved = {"groups": dict(known_groups)}
+
         async def _kg():
-            return known_groups
+            return dict(saved["groups"])
+
+        async def _save(g):
+            saved["groups"] = dict(g)
 
         async def _ev():
             return {"notification_targets": registry}
 
+        bot_obj = MagicMock()
+        # By default, registry chats aren't reachable (get_chat raises).
+        if get_chat is None:
+            from telegram.error import BadRequest
+            bot_obj.get_chat = AsyncMock(side_effect=BadRequest("not found"))
+        else:
+            bot_obj.get_chat = AsyncMock(side_effect=get_chat)
+
         with patch("bot._load_known_groups", side_effect=_kg), \
+             patch("bot._save_known_groups", side_effect=_save), \
              patch("bot.get_all_events_data", side_effect=_ev):
-            return _run(bot._broadcast_target_options())
+            opts = _run(bot._broadcast_target_options(bot_obj, lang))
+        return opts, saved["groups"]
 
     def test_all_subscribers_always_first(self):
-        opts = self._run_opts({}, {})
+        opts, _ = self._run_opts({}, {})
         assert opts[0]["kind"] == "all"
         assert opts[0]["key"] == "all"
 
+    def test_individual_subscribers_label_localized(self):
+        from localization import t
+        en, _ = self._run_opts({}, {}, lang="en")
+        es, _ = self._run_opts({}, {}, lang="es")
+        assert en[0]["label"] == t("bcast_individual_subscribers", "en")
+        assert es[0]["label"] == t("bcast_individual_subscribers", "es")
+        assert en[0]["label"] != es[0]["label"]  # actually translated
+
     def test_includes_tracked_groups(self):
-        opts = self._run_opts(
+        opts, _ = self._run_opts(
             {"-100": {"chat_id": -100, "title": "COGM Members", "status": "member"}}, {})
         labels = [o["label"] for o in opts]
         assert "COGM Members" in labels
 
-    def test_includes_registry_groups(self):
-        opts = self._run_opts({}, {"cogm_members": -1001178984510})
+    def test_unresolvable_registry_group_uses_symbolic_name(self):
+        # get_chat fails → registry entry still offered, labelled with its key.
+        opts, _ = self._run_opts({}, {"cogm_members": -1001178984510})
         ids = [o["chat_id"] for o in opts if o["kind"] == "group"]
+        labels = [o["label"] for o in opts if o["kind"] == "group"]
         assert -1001178984510 in ids
+        assert "cogm_members" in labels
+
+    def test_registry_resolved_to_pretty_title_and_recorded(self):
+        # get_chat succeeds → the pretty title is used AND recorded in known_groups.
+        async def _get_chat(cid):
+            chat = MagicMock()
+            chat.id = cid
+            chat.title = "COGM Members"
+            from telegram.constants import ChatType
+            chat.type = ChatType.SUPERGROUP
+            return chat
+
+        opts, saved = self._run_opts({}, {"cogm_members": -1001178984510}, get_chat=_get_chat)
+        labels = [o["label"] for o in opts if o["kind"] == "group"]
+        assert "COGM Members" in labels
+        assert "cogm_members" not in labels           # symbolic name replaced
+        assert str(-1001178984510) in saved            # persisted into known_groups
 
     def test_union_dedupes_by_chat_id(self):
-        opts = self._run_opts(
+        opts, _ = self._run_opts(
             {"-100": {"chat_id": -100, "title": "Tracked", "status": "member"}},
             {"same": -100},
         )
@@ -256,7 +298,7 @@ class TestMessagePreview:
     def test_good_markdown_advances_to_select(self):
         import bot
 
-        async def _opts():
+        async def _opts(_bot, _lang=None):
             return [{"key": "all", "kind": "all", "chat_id": None, "label": "All subscribers"}]
 
         ctx = _ctx()
@@ -264,7 +306,22 @@ class TestMessagePreview:
         with patch("bot._broadcast_target_options", side_effect=_opts):
             result = _run(bot.bc_message(upd, ctx))
         assert result == bot.BC_SELECT
-        assert ctx.user_data["bc_message"] == "Good *message*"
+        # The stored message keeps the body and appends the sender attribution.
+        stored = ctx.user_data["bc_message"]
+        assert stored.startswith("Good *message*")
+        assert "posted by Admin User" in stored
+
+    def test_sender_name_appended(self):
+        import bot
+
+        async def _opts(_bot, _lang=None):
+            return []
+
+        ctx = _ctx()
+        upd = _update(text="Announcement")
+        with patch("bot._broadcast_target_options", side_effect=_opts):
+            _run(bot.bc_message(upd, ctx))
+        assert ctx.user_data["bc_message"].endswith("— posted by Admin User")
 
 
 # ---------------------------------------------------------------------------
