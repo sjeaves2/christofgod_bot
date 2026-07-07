@@ -40,6 +40,7 @@ from telegram import (
 )
 from telegram.constants import ChatType, ParseMode
 from telegram.error import BadRequest, Forbidden, TelegramError
+from telegram.helpers import escape_markdown
 from telegram.ext import (
     Application,
     ApplicationHandlerStop,
@@ -1641,17 +1642,54 @@ CB_BC_PREFIX = "bc:"
 BC_MAX_RETRIES = 3
 
 
-async def _broadcast_target_options() -> list[dict[str, Any]]:
-    """Build the selectable target list: tracked groups ∪ registry, plus 'All'.
+async def _reconcile_registry_into_known_groups(bot) -> dict[str, Any]:
+    """Ensure every valid notification_targets chat is recorded in known_groups.
+
+    For each registry target not already tracked, fetch its real chat (title,
+    type) via the API and add it to known_groups so broadcasts can show the
+    group's pretty name. Invalid/unreachable ids are skipped. Returns the
+    (possibly updated) known_groups map.
+    """
+    groups = await _load_known_groups()
+    evdata = await get_all_events_data()
+    registry: dict = evdata.get("notification_targets", {}) or {}
+
+    added = False
+    for name, cid in registry.items():
+        if str(cid) in groups:
+            continue
+        try:
+            chat = await bot.get_chat(cid)
+        except TelegramError as exc:
+            logger.warning("notification_targets '%s' (%s) not reachable: %s", name, cid, exc)
+            continue
+        if chat.type in (ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL):
+            groups[str(chat.id)] = {
+                "chat_id": chat.id,
+                "title": chat.title or name,
+                "type": str(chat.type),
+                "status": "member",
+            }
+            added = True
+    if added:
+        await _save_known_groups(groups)
+    return groups
+
+
+async def _broadcast_target_options(bot, lang: str = DEFAULT_LANG) -> list[dict[str, Any]]:
+    """Build the selectable target list from known groups (using their pretty
+    titles), plus any registry target we couldn't resolve, plus individual subscribers.
 
     Each option: {"key": str, "kind": "all"|"group", "chat_id": ..., "label": str}.
     """
     options: list[dict[str, Any]] = [
-        {"key": "all", "kind": "all", "chat_id": None, "label": "All subscribers"}
+        {"key": "all", "kind": "all", "chat_id": None,
+         "label": t("bcast_individual_subscribers", lang)}
     ]
     seen: set[str] = set()
 
-    groups = await _load_known_groups()
+    # Pull titles for any configured targets we haven't recorded yet.
+    groups = await _reconcile_registry_into_known_groups(bot)
     for g in groups.values():
         cid = g.get("chat_id")
         k = str(cid)
@@ -1661,6 +1699,8 @@ async def _broadcast_target_options() -> list[dict[str, Any]]:
         options.append({"key": k, "kind": "group", "chat_id": cid,
                         "label": g.get("title") or k})
 
+    # Registry targets that couldn't be resolved to a title — still offer them,
+    # labelled with the registry name so they remain selectable.
     evdata = await get_all_events_data()
     registry: dict = evdata.get("notification_targets", {}) or {}
     for name, cid in registry.items():
@@ -1671,6 +1711,12 @@ async def _broadcast_target_options() -> list[dict[str, Any]]:
         options.append({"key": k, "kind": "group", "chat_id": cid, "label": name})
 
     return options
+
+
+def _append_sender(body: str, sender_name: str) -> str:
+    """Append a '— posted by <name>' attribution line to a broadcast body/caption."""
+    footer = f"— posted by {escape_markdown(sender_name, version=1)}"
+    return f"{body}\n\n{footer}" if body else footer
 
 
 def _bc_keyboard(options: list[dict], selected: set[str]) -> InlineKeyboardMarkup:
@@ -1700,8 +1746,10 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
 
 async def bc_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    text = update.message.text
-    # Validate Markdown by rendering a preview back to the admin.
+    uid, _, dname = user_info(update)
+    _, lang = await get_user_prefs(uid)
+    text = _append_sender(update.message.text, dname)
+    # Validate Markdown by rendering a preview (with the attribution) back to the admin.
     try:
         await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
     except BadRequest as exc:
@@ -1713,7 +1761,7 @@ async def bc_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     context.user_data["bc_message"] = text
     context.user_data.pop("bc_media", None)
-    options = await _broadcast_target_options()
+    options = await _broadcast_target_options(context.bot, lang)
     context.user_data["bc_options"] = options
     context.user_data["bc_selected"] = set()
     await update.message.reply_text(
@@ -1733,7 +1781,13 @@ async def bc_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         kind, file_id = "document", msg.document.file_id
     else:
         return BC_MESSAGE
+
+    uid, _, dname = user_info(update)
+    _, lang = await get_user_prefs(uid)
     caption = msg.caption or ""
+    # Append the sender attribution if it still fits within the caption limit.
+    with_sender = _append_sender(caption, dname)
+    caption = with_sender if len(with_sender) <= CAPTION_LIMIT else caption
 
     # Preview it back (validates any Markdown in the caption).
     try:
@@ -1747,7 +1801,7 @@ async def bc_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     context.user_data["bc_media"] = {"kind": kind, "file_id": file_id, "caption": caption}
     context.user_data.pop("bc_message", None)
-    options = await _broadcast_target_options()
+    options = await _broadcast_target_options(context.bot, lang)
     context.user_data["bc_options"] = options
     context.user_data["bc_selected"] = set()
     await msg.reply_text(

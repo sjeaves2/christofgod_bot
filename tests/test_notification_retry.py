@@ -256,7 +256,7 @@ class TestGroupGate:
         with pytest.raises(bot.ApplicationHandlerStop):
             _run(bot._ignore_group_messages(upd, ctx))
 
-    def test_my_chat_member_logs_chat_id(self, caplog):
+    def test_my_chat_member_logs_and_records(self, caplog):
         import bot, logging
         from telegram.constants import ChatType
 
@@ -267,9 +267,21 @@ class TestGroupGate:
         upd.my_chat_member.new_chat_member.status = "member"
         ctx = MagicMock()
 
-        with caplog.at_level(logging.INFO, logger="bot"):
+        saved = {"groups": {}}
+
+        async def _load():
+            return dict(saved["groups"])
+
+        async def _save(g):
+            saved["groups"] = dict(g)
+
+        with patch("bot._load_known_groups", side_effect=_load), \
+             patch("bot._save_known_groups", side_effect=_save), \
+             caplog.at_level(logging.INFO, logger="bot"):
             _run(bot.on_my_chat_member(upd, ctx))
 
         joined = " ".join(r.getMessage() for r in caplog.records)
         assert "-1009999" in joined
         assert "COGM Members" in joined
+        # Recorded into known_groups (via the patched store, not the real file).
+        assert saved["groups"]["-1009999"]["title"] == "COGM Members"
