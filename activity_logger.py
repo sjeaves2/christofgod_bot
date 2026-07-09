@@ -6,7 +6,6 @@ Records are kept for 6 months (configurable via retention_days).
 from __future__ import annotations
 
 import logging
-import os
 from datetime import datetime, timedelta
 from pathlib import Path
 

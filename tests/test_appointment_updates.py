@@ -8,14 +8,12 @@
 from __future__ import annotations
 
 import asyncio
-import io
 import sys
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytz
-import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -30,7 +28,6 @@ class TestFormatDt:
 
     def _fmt(self, dt: datetime) -> str:
         """Import and call format_dt without triggering bot module-level I/O."""
-        from ics_generator import events_to_ics  # confirm tz-aware dt works
         return dt.astimezone(TZ).strftime("%A, %B %d, %Y at %I:%M %p %Z")
 
     def test_includes_day_of_week(self):
@@ -215,7 +212,6 @@ class TestFinalizeAppointment:
         return [off]
 
     def _run_finalize(self, appt: dict, officials: list) -> MagicMock:
-        from ics_generator import appointment_to_ics
 
         ctx = self._make_context()
 

@@ -1,12 +1,10 @@
 """Tests for activity_logger.py."""
 
 import sys
-import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytz
-import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from activity_logger import ActivityLogger
@@ -120,21 +118,21 @@ class TestActivityLogger:
     # ------------------------------------------------------------------
 
     def test_old_entries_pruned(self, tmp_path):
-        lg = self._logger(tmp_path)
+        self._logger(tmp_path)
         log_file = self._log_file(tmp_path)
         # Manually write a very old entry
         old_date = (datetime.now(TZ) - timedelta(days=200)).strftime("%Y-%m-%d %H:%M:%S %Z")
         log_file.write_text(f"[{old_date}] [COMMAND] user | /start\n")
         # Re-instantiate logger to trigger pruning
-        lg2 = ActivityLogger(tmp_path, retention_days=180, tz=TZ)
+        ActivityLogger(tmp_path, retention_days=180, tz=TZ)
         content = log_file.read_text()
         assert "/start" not in content
 
     def test_recent_entries_kept(self, tmp_path):
-        lg = self._logger(tmp_path)
+        self._logger(tmp_path)
         log_file = self._log_file(tmp_path)
         recent_date = (datetime.now(TZ) - timedelta(days=10)).strftime("%Y-%m-%d %H:%M:%S %Z")
         log_file.write_text(f"[{recent_date}] [COMMAND] user | /events\n")
-        lg2 = ActivityLogger(tmp_path, retention_days=180, tz=TZ)
+        ActivityLogger(tmp_path, retention_days=180, tz=TZ)
         content = log_file.read_text()
         assert "/events" in content
