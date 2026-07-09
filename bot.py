@@ -14,11 +14,9 @@ Usage:
 
 from __future__ import annotations
 
-import asyncio
 import calendar
 import io
 import logging
-import os
 import re
 import uuid
 from datetime import datetime, timedelta
@@ -28,7 +26,6 @@ from typing import Any
 import pytz
 import yaml
 from telegram import (
-    Bot,
     BotCommand,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -39,7 +36,7 @@ from telegram import (
     Update,
 )
 from telegram.constants import ChatType, ParseMode
-from telegram.error import BadRequest, Forbidden, TelegramError
+from telegram.error import BadRequest, TelegramError
 from telegram.helpers import escape_markdown
 from telegram.ext import (
     Application,
@@ -57,8 +54,6 @@ from activity_logger import ActivityLogger
 from cache import FileCache
 from hebrew_calendar import (
     all_upcoming_events,
-    upcoming_convocation_events,
-    sabbath_events,
     service_phases,
 )
 from localization import (
@@ -679,7 +674,6 @@ def _merge_special_events(
             if not date_str:
                 continue
             h, m = [int(x) for x in defn["time"].split(":")]
-            from datetime import date as _date
             parts = [int(x) for x in date_str.split("-")]
             svc_dt = TZ.localize(datetime(parts[0], parts[1], parts[2], h, m))
             notif_dt = svc_dt - timedelta(minutes=int(defn.get("notification_minutes", DEFAULT_NOTIF_MIN)))
@@ -2408,7 +2402,7 @@ async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "role": "user",
         }
         await query.edit_message_text(
-            f"Suggest a different date/time (or type 'cancel' to cancel the request):\n"
+            "Suggest a different date/time (or type 'cancel' to cancel the request):\n"
             "YYYY-MM-DD HH:MM"
         )
 
@@ -2430,7 +2424,7 @@ async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         appt["status"] = "confirmed"
         appt["confirmed_datetime"] = proposed
         await _finalize_appointment(context, appt, appts)
-        await query.edit_message_text(f"✅ You confirmed the appointment with the user's suggested time.")
+        await query.edit_message_text("✅ You confirmed the appointment with the user's suggested time.")
 
     elif action == "decline_user_counter":
         appt["status"] = "declined"
@@ -2438,7 +2432,7 @@ async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             if a["id"] == appt_id:
                 appts[i] = appt
         await save_appointments(appts)
-        await query.edit_message_text(f"❌ Request cancelled.")
+        await query.edit_message_text("❌ Request cancelled.")
         await context.bot.send_message(user_chat_id,
             f"Your appointment request (ID: `{appt_id}`) has been cancelled.",
             parse_mode=ParseMode.MARKDOWN)

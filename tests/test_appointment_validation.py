@@ -13,7 +13,6 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytz
-import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -622,7 +621,6 @@ class TestCallbackOverlapGuard:
     def test_repeated_confirm_finalizes_once(self):
         """Simulate two taps: first confirms, the persisted state makes the
         second a no-op (no duplicate finalize)."""
-        from telegram.error import BadRequest
         target = self._target()
         store = {"appts": [target]}
 
@@ -772,7 +770,6 @@ class TestReschedulePastGuards:
         return upd, saved
 
     def test_proposing_past_time_rejected(self):
-        import bot
         appt = self._appt(datetime.now(TZ) + timedelta(days=3))
         upd, saved = self._run_counter_msg(appt, "2000-01-01 10:00")
         # Not applied: status stays pending, nothing saved as counter_proposed.
@@ -780,7 +777,6 @@ class TestReschedulePastGuards:
         assert "past" in upd.message.reply_text.call_args[0][0].lower()
 
     def test_proposing_future_time_accepted(self):
-        import bot
         appt = self._appt(datetime.now(TZ) + timedelta(days=3))
         future = (datetime.now(TZ) + timedelta(days=10)).strftime("%Y-%m-%d 10:00")
         upd, saved = self._run_counter_msg(appt, future)

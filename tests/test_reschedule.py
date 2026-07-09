@@ -9,7 +9,6 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytz
-import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -110,7 +109,6 @@ class TestCmdReschedule:
         officials = officials or _officials()
         ctx = _ctx()
         upd = _msg_update("", chat_id=chat_id, username=username)
-        saved = []
         with patch("bot.get_appointments", side_effect=_g(appts)), \
              patch("bot.OFFICIALS", officials):
             result = _run(bot.cmd_reschedule(upd, ctx))
@@ -215,7 +213,6 @@ class TestRsNewtime:
         assert ctx.bot.send_message.await_args[0][0] == 111  # requester notified
 
     def test_proxy_proposal_sets_negotiator(self):
-        import bot
         future = (datetime.now(TZ) + timedelta(days=10)).strftime("%Y-%m-%d 10:00")
         result, upd, ctx, saved = self._run(
             _appt(), future, role="official", chat_id=888, username="janesec",
