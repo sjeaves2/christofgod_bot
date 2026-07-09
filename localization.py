@@ -77,6 +77,7 @@ CATALOG: dict[str, dict[str, str]] = {
             "/appointment — request a meeting with a church official\n"
             "/myappointments — list your appointments\n"
             "/cancelappointment — cancel a pending or confirmed appointment\n"
+            "/reschedule — propose a new time for an upcoming appointment\n"
             "/settimezone — set your time zone for displayed times\n"
             "/language — choose your language\n"
             "/stop — unsubscribe from notifications"
@@ -109,6 +110,16 @@ CATALOG: dict[str, dict[str, str]] = {
         ),
         "cancel_aborted": "Cancellation aborted.",
         "cancel_past": "That appointment has already taken place and can't be cancelled.",
+
+        # -- reschedule appointment --
+        "resched_none": "You have no upcoming appointments to reschedule.",
+        "resched_list_header": "*Reschedule an Appointment*\nChoose one to reschedule:",
+        "resched_ask_time": "Enter the new date and time (YYYY-MM-DD HH:MM):",
+        "resched_bad_format": "Please use the format YYYY-MM-DD HH:MM:",
+        "resched_past": "That date/time is in the past. Please enter a future time (YYYY-MM-DD HH:MM):",
+        "resched_overlap": "That time overlaps another of your appointments. Please choose a different time (YYYY-MM-DD HH:MM):",
+        "resched_no_longer": "That appointment can no longer be rescheduled.",
+        "resched_sent": "✅ Your reschedule request has been sent. You'll be notified when it's accepted or declined.",
         "cancel_done_by_official_to_user": (
             "❌ Your appointment (ID: `{id}`) with *{official}* "
             "has been cancelled by the official."
@@ -216,6 +227,7 @@ CATALOG: dict[str, dict[str, str]] = {
             "/appointment — solicitar una reunión con un oficial de la iglesia\n"
             "/myappointments — ver tus citas\n"
             "/cancelappointment — cancelar una cita pendiente o confirmada\n"
+            "/reschedule — proponer una nueva hora para una cita próxima\n"
             "/settimezone — establecer tu zona horaria para las horas mostradas\n"
             "/language — elegir tu idioma\n"
             "/stop — cancelar la suscripción a las notificaciones"
@@ -248,6 +260,16 @@ CATALOG: dict[str, dict[str, str]] = {
         ),
         "cancel_aborted": "Cancelación anulada.",
         "cancel_past": "Esa cita ya tuvo lugar y no se puede cancelar.",
+
+        # -- reschedule appointment --
+        "resched_none": "No tienes citas próximas para reprogramar.",
+        "resched_list_header": "*Reprogramar una cita*\nElige una para reprogramar:",
+        "resched_ask_time": "Ingresa la nueva fecha y hora (YYYY-MM-DD HH:MM):",
+        "resched_bad_format": "Usa el formato YYYY-MM-DD HH:MM:",
+        "resched_past": "Esa fecha/hora ya pasó. Ingresa una hora futura (YYYY-MM-DD HH:MM):",
+        "resched_overlap": "Esa hora se solapa con otra de tus citas. Elige otra hora (YYYY-MM-DD HH:MM):",
+        "resched_no_longer": "Esa cita ya no se puede reprogramar.",
+        "resched_sent": "✅ Tu solicitud de reprogramación ha sido enviada. Se te notificará cuando sea aceptada o rechazada.",
         "cancel_done_by_official_to_user": (
             "❌ Tu cita (ID: `{id}`) con *{official}* "
             "ha sido cancelada por el oficial."
@@ -355,6 +377,7 @@ CATALOG: dict[str, dict[str, str]] = {
             "/appointment — demander un rendez-vous avec un responsable de l'église\n"
             "/myappointments — voir vos rendez-vous\n"
             "/cancelappointment — annuler un rendez-vous en attente ou confirmé\n"
+            "/reschedule — proposer une nouvelle heure pour un rendez-vous à venir\n"
             "/settimezone — définir votre fuseau horaire pour les heures affichées\n"
             "/language — choisir votre langue\n"
             "/stop — vous désabonner des notifications"
@@ -388,6 +411,16 @@ CATALOG: dict[str, dict[str, str]] = {
         ),
         "cancel_aborted": "Annulation abandonnée.",
         "cancel_past": "Ce rendez-vous a déjà eu lieu et ne peut pas être annulé.",
+
+        # -- reschedule appointment --
+        "resched_none": "Vous n'avez aucun rendez-vous à venir à reprogrammer.",
+        "resched_list_header": "*Reprogrammer un rendez-vous*\nChoisissez-en un à reprogrammer :",
+        "resched_ask_time": "Saisissez la nouvelle date et heure (YYYY-MM-DD HH:MM) :",
+        "resched_bad_format": "Veuillez utiliser le format YYYY-MM-DD HH:MM :",
+        "resched_past": "Cette date/heure est déjà passée. Veuillez saisir une heure future (YYYY-MM-DD HH:MM) :",
+        "resched_overlap": "Cette heure chevauche un autre de vos rendez-vous. Veuillez choisir une autre heure (YYYY-MM-DD HH:MM) :",
+        "resched_no_longer": "Ce rendez-vous ne peut plus être reprogrammé.",
+        "resched_sent": "✅ Votre demande de reprogrammation a été envoyée. Vous serez informé de son acceptation ou de son refus.",
         "cancel_done_by_official_to_user": (
             "❌ Votre rendez-vous (ID : `{id}`) avec *{official}* "
             "a été annulé par le responsable."
@@ -497,6 +530,7 @@ CATALOG: dict[str, dict[str, str]] = {
             "/appointment — cela umhlangano nesikhulu sebandla\n"
             "/myappointments — bona ama-aphoyintimenti akho\n"
             "/cancelappointment — khansela i-aphoyintimenti elindile noma eqinisekisiwe\n"
+            "/reschedule — phakamisa isikhathi esisha se-aphoyintimenti ezayo\n"
             "/settimezone — setha izoni yesikhathi sakho yezikhathi eziboniswayo\n"
             "/language — khetha ulimi lwakho\n"
             "/stop — yekisa ukubhalisa ezaziswayweni"
@@ -529,6 +563,16 @@ CATALOG: dict[str, dict[str, str]] = {
         ),
         "cancel_aborted": "Ukukhansela kuyekisiwe.",
         "cancel_past": "Lelo aphoyintimenti selenzekile futhi ngeke likhanselwe.",
+
+        # -- reschedule appointment --
+        "resched_none": "Awunawo ama-aphoyintimenti azayo ongawahlela kabusha.",
+        "resched_list_header": "*Hlela kabusha i-aphoyintimenti*\nKhetha elilodwa ukulihlela kabusha:",
+        "resched_ask_time": "Faka usuku nesikhathi esisha (YYYY-MM-DD HH:MM):",
+        "resched_bad_format": "Sicela usebenzise ifomethi ethi YYYY-MM-DD HH:MM:",
+        "resched_past": "Lelo suku/sikhathi seludlulile. Sicela ufake isikhathi esizayo (YYYY-MM-DD HH:MM):",
+        "resched_overlap": "Leso sikhathi sigxubha nelinye lama-aphoyintimenti akho. Sicela ukhethe esinye isikhathi (YYYY-MM-DD HH:MM):",
+        "resched_no_longer": "Lelo aphoyintimenti ngeke lisahlelwa kabusha.",
+        "resched_sent": "✅ Isicelo sakho sokuhlela kabusha sithunyeliwe. Uzokwaziswa lapho samukelwa noma senqatshelwa.",
         "cancel_done_by_official_to_user": (
             "❌ I-aphoyintimenti yakho (I-ID: `{id}`) no-*{official}* "
             "ikhanselwe yisikhulu."
