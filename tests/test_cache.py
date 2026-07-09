@@ -2,10 +2,8 @@
 
 import asyncio
 import sys
-import time
 from pathlib import Path
 
-import pytest
 import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -53,7 +51,7 @@ class TestFileCacheSync:
         p = tmp_path / "data.yaml"
         write_yaml(p, {"a": 1})
         cache = FileCache(p)
-        first = cache.get_sync()
+        cache.get_sync()  # prime the in-memory cache
         # Mutate in-memory without touching file
         cache._data["injected"] = True
         second = cache.get_sync()
@@ -93,7 +91,6 @@ class TestFileCacheSync:
         write_yaml(p, {"v": 1})
         cache = FileCache(p)
         cache.get_sync()
-        original_mtime = cache._last_mtime
         # Modify in-memory, don't change file
         cache._data["injected"] = 99
         cache._last_check = 0

@@ -5,14 +5,10 @@ and _register_official_if_known() by testing the pure matching logic directly.
 """
 from __future__ import annotations
 
-import asyncio
-import importlib
 import re
 import sys
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
-import pytest
 
 # We need to import bot.py but it requires a valid config.yaml and will
 # attempt to load YAML files at module level.  Patch open / yaml.safe_load

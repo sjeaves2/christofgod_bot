@@ -14,11 +14,9 @@ Usage:
 
 from __future__ import annotations
 
-import asyncio
 import calendar
 import io
 import logging
-import os
 import re
 import uuid
 from datetime import datetime, timedelta
@@ -28,7 +26,6 @@ from typing import Any
 import pytz
 import yaml
 from telegram import (
-    Bot,
     BotCommand,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -39,7 +36,7 @@ from telegram import (
     Update,
 )
 from telegram.constants import ChatType, ParseMode
-from telegram.error import BadRequest, Forbidden, TelegramError
+from telegram.error import BadRequest, TelegramError
 from telegram.helpers import escape_markdown
 from telegram.ext import (
     Application,
@@ -57,8 +54,6 @@ from activity_logger import ActivityLogger
 from cache import FileCache
 from hebrew_calendar import (
     all_upcoming_events,
-    upcoming_convocation_events,
-    sabbath_events,
     service_phases,
 )
 from localization import (
@@ -679,7 +674,6 @@ def _merge_special_events(
             if not date_str:
                 continue
             h, m = [int(x) for x in defn["time"].split(":")]
-            from datetime import date as _date
             parts = [int(x) for x in date_str.split("-")]
             svc_dt = TZ.localize(datetime(parts[0], parts[1], parts[2], h, m))
             notif_dt = svc_dt - timedelta(minutes=int(defn.get("notification_minutes", DEFAULT_NOTIF_MIN)))
@@ -2289,6 +2283,12 @@ async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await query.edit_message_text("⚠️ Appointment not found.")
         return
 
+    # Reschedule responses act on an already-confirmed (i.e. "terminal") appointment,
+    # so they are handled before the terminal-status guard below.
+    if action in ("rs_accept", "rs_decline"):
+        await _handle_reschedule_response(context, query, appt, appts, action)
+        return
+
     # Idempotency guard: if this appointment is already in a terminal state,
     # a repeated/replayed tap (e.g. multiple taps while the bot was offline)
     # must not re-run confirmation/decline side effects.
@@ -2402,7 +2402,7 @@ async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "role": "user",
         }
         await query.edit_message_text(
-            f"Suggest a different date/time (or type 'cancel' to cancel the request):\n"
+            "Suggest a different date/time (or type 'cancel' to cancel the request):\n"
             "YYYY-MM-DD HH:MM"
         )
 
@@ -2424,7 +2424,7 @@ async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         appt["status"] = "confirmed"
         appt["confirmed_datetime"] = proposed
         await _finalize_appointment(context, appt, appts)
-        await query.edit_message_text(f"✅ You confirmed the appointment with the user's suggested time.")
+        await query.edit_message_text("✅ You confirmed the appointment with the user's suggested time.")
 
     elif action == "decline_user_counter":
         appt["status"] = "declined"
@@ -2432,7 +2432,7 @@ async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             if a["id"] == appt_id:
                 appts[i] = appt
         await save_appointments(appts)
-        await query.edit_message_text(f"❌ Request cancelled.")
+        await query.edit_message_text("❌ Request cancelled.")
         await context.bot.send_message(user_chat_id,
             f"Your appointment request (ID: `{appt_id}`) has been cancelled.",
             parse_mode=ParseMode.MARKDOWN)
@@ -2848,6 +2848,241 @@ async def _send_cancellation_ics(
 
 
 # ---------------------------------------------------------------------------
+# /reschedule — propose a new time for an upcoming appointment
+# ---------------------------------------------------------------------------
+#
+# The original appointment stays confirmed at its current time until the other
+# party accepts the proposed new time. A decline keeps the original.
+# Reschedule actions ("rs_accept"/"rs_decline") ride on CB_APPT_PREFIX and are
+# handled early in appt_callback (before the terminal-status guard, since a
+# confirmed appointment is "terminal").
+
+RS_SELECT, RS_NEWTIME = range(2)
+
+CB_RESCHED_PREFIX = "rs:"
+
+
+async def cmd_reschedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    uid, uname, dname = user_info(update)
+    activity.log_command("reschedule", uid, uname, dname)
+    context.user_data.clear()
+    tz, lang = await get_user_prefs(uid)
+
+    appts = await get_appointments()
+    # Future, active appointments the user is party to (requester, official, or
+    # an enabled proxy).
+    reschedulable: list[dict] = []
+    for a in appts:
+        if a.get("status") not in ACTIVE_APPT_STATUSES:
+            continue
+        if _appt_is_past(a):
+            continue
+        if _user_can_act_for_appt(a, uid, uname):
+            reschedulable.append(a)
+        if a.get("user_chat_id") == uid and not any(x["id"] == a["id"] for x in reschedulable):
+            reschedulable.append(a)
+
+    if not reschedulable:
+        await update.message.reply_text(t("resched_none", lang))
+        return ConversationHandler.END
+
+    context.user_data["rs_appts"] = reschedulable
+    rows = []
+    for i, a in enumerate(reschedulable):
+        label = f"{a['official_name']} — {_appt_dt_label(a, tz, lang)}"
+        rows.append([InlineKeyboardButton(label, callback_data=f"{CB_RESCHED_PREFIX}sel:{i}")])
+    rows.append([InlineKeyboardButton(
+        "✖️ " + t("cancel_aborted", lang).rstrip("."),
+        callback_data=f"{CB_RESCHED_PREFIX}abort",
+    )])
+    await update.message.reply_text(
+        t("resched_list_header", lang),
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=InlineKeyboardMarkup(rows),
+    )
+    return RS_SELECT
+
+
+async def rs_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await _answer_cb(query)
+    uid = query.from_user.id
+    _, lang = await get_user_prefs(uid)
+    data = query.data[len(CB_RESCHED_PREFIX):]
+    reschedulable: list[dict] = context.user_data.get("rs_appts", [])
+
+    if data == "abort":
+        await query.edit_message_text(t("cancel_aborted", lang))
+        return ConversationHandler.END
+
+    idx = data.split(":", 1)[1] if data.startswith("sel:") else ""
+    if not idx.isdigit() or not (0 <= int(idx) < len(reschedulable)):
+        await query.edit_message_text(t("cancel_aborted", lang))
+        return ConversationHandler.END
+
+    appt = reschedulable[int(idx)]
+    # Role of the person rescheduling: the requester, or the official side.
+    context.user_data["rs_appt_id"] = appt["id"]
+    context.user_data["rs_role"] = "user" if appt.get("user_chat_id") == uid else "official"
+    await query.edit_message_text(t("resched_ask_time", lang))
+    return RS_NEWTIME
+
+
+async def rs_newtime(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    uid, uname, dname = user_info(update)
+    tz, lang = await get_user_prefs(uid)
+    text = update.message.text.strip()
+    appt_id = context.user_data.get("rs_appt_id")
+    role = context.user_data.get("rs_role")
+
+    appts = await get_appointments()
+    appt = next((a for a in appts if a["id"] == appt_id), None)
+    if not appt or appt.get("status") not in ACTIVE_APPT_STATUSES or _appt_is_past(appt):
+        await update.message.reply_text(t("resched_no_longer", lang))
+        return ConversationHandler.END
+
+    m = re.match(r"(\d{4}-\d{2}-\d{2})\s+(\d{1,2}:\d{2})", text)
+    if not m:
+        await update.message.reply_text(t("resched_bad_format", lang))
+        return RS_NEWTIME
+    parts_d = [int(x) for x in m.group(1).split("-")]
+    parts_t = [int(x) for x in m.group(2).split(":")]
+    try:
+        new_dt = TZ.localize(datetime(parts_d[0], parts_d[1], parts_d[2], parts_t[0], parts_t[1]))
+    except ValueError:
+        await update.message.reply_text(t("resched_bad_format", lang))
+        return RS_NEWTIME
+    if new_dt <= now_tz():
+        await update.message.reply_text(t("resched_past", lang))
+        return RS_NEWTIME
+    # No overlap with the requester's other active appointments.
+    if _overlapping_appt(appts, appt["user_chat_id"], new_dt,
+                         DEFAULT_APPT_DURATION_MIN, exclude_id=appt["id"]):
+        await update.message.reply_text(t("resched_overlap", lang))
+        return RS_NEWTIME
+
+    # Record the proposal WITHOUT touching the confirmed status/time.
+    appt["reschedule_proposed_datetime"] = new_dt.isoformat()
+    appt["reschedule_proposed_by"] = role
+    off = _official_by_id(appt["official_id"])
+    if role == "official" and off:
+        name, is_proxy = _acting_identity(off, uid, uname)
+        appt["negotiator_chat_id"] = uid
+        appt["negotiator_name"] = name or "The official"
+        appt["negotiator_is_proxy"] = is_proxy
+    for i, a in enumerate(appts):
+        if a["id"] == appt_id:
+            appts[i] = appt
+    await save_appointments(appts)
+
+    new_dt_str = format_dt(new_dt)
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Accept", callback_data=f"{CB_APPT_PREFIX}rs_accept:{appt_id}"),
+        InlineKeyboardButton("❌ Decline", callback_data=f"{CB_APPT_PREFIX}rs_decline:{appt_id}"),
+    ]])
+
+    if role == "official":
+        # Notify the requester.
+        await context.bot.send_message(
+            appt["user_chat_id"],
+            f"📅 *Reschedule requested for appointment `{appt_id}`*\n"
+            f"With: {appt['official_name']}\n"
+            f"New time: {new_dt_str}\n"
+            f"Purpose: {appt.get('description', '')}"
+            + _requester_proxy_note(appt),
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=kb,
+        )
+    else:
+        # Requester is rescheduling → notify the official side (officer + proxies).
+        requester = appt.get("user_display_name") or appt.get("user_username") or "The requester"
+        for r in _official_side_recipients(off) if off else []:
+            try:
+                await context.bot.send_message(
+                    r["chat_id"],
+                    f"📅 *Reschedule requested for appointment `{appt_id}`*\n"
+                    f"From: {requester}\n"
+                    f"New time: {new_dt_str}\n"
+                    f"Purpose: {appt.get('description', '')}",
+                    parse_mode=ParseMode.MARKDOWN,
+                    reply_markup=kb,
+                )
+            except TelegramError:
+                pass
+
+    await update.message.reply_text(t("resched_sent", lang))
+    return ConversationHandler.END
+
+
+async def _handle_reschedule_response(
+    context: ContextTypes.DEFAULT_TYPE, query, appt: dict, appts: list, action: str
+) -> None:
+    """Handle the other party accepting/declining a proposed reschedule."""
+    appt_id = appt["id"]
+    proposed = appt.get("reschedule_proposed_datetime")
+    if not proposed:
+        await query.edit_message_text("ℹ️ This reschedule request has already been handled.")
+        return
+
+    proposed_by = appt.get("reschedule_proposed_by")
+    actor_id = query.from_user.id
+    actor_uname = query.from_user.username
+    # The party who did NOT propose responds.
+    if proposed_by == "official":
+        authorized = actor_id == appt.get("user_chat_id")
+    else:  # proposed by the requester → official side responds
+        authorized = _user_can_act_for_appt(appt, actor_id, actor_uname)
+    if not authorized:
+        await query.edit_message_text("⚠️ You're not authorized to respond to this reschedule.")
+        return
+
+    def _clear_and_store():
+        appt.pop("reschedule_proposed_datetime", None)
+        appt.pop("reschedule_proposed_by", None)
+        for i, a in enumerate(appts):
+            if a["id"] == appt_id:
+                appts[i] = appt
+
+    proposer_chat = (appt["user_chat_id"] if proposed_by == "user"
+                     else appt.get("negotiator_chat_id")
+                     or (_official_by_id(appt["official_id"]) or {}).get("chat_id"))
+
+    if action == "rs_decline":
+        _clear_and_store()
+        await save_appointments(appts)
+        await query.edit_message_text("❌ Reschedule declined; the original time stands.")
+        if proposer_chat:
+            await context.bot.send_message(
+                proposer_chat,
+                f"❌ Your reschedule request for appointment `{appt_id}` was declined; "
+                "the original time stands.",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+        return
+
+    # rs_accept
+    if _datetime_is_past(proposed):
+        await query.edit_message_text(
+            "⚠️ That proposed time has already passed; no change was made."
+        )
+        _clear_and_store()
+        await save_appointments(appts)
+        return
+    clash = _confirmed_overlap(appts, appt, proposed)
+    if clash:
+        await query.edit_message_text(
+            f"⚠️ That time now overlaps another appointment (ID: {clash['id']}); "
+            "not rescheduled."
+        )
+        return
+    appt["confirmed_datetime"] = proposed
+    appt["status"] = "confirmed"
+    _clear_and_store()
+    await _finalize_appointment(context, appt, appts)  # new ICS to both, proxy note if any
+    await query.edit_message_text("✅ Reschedule accepted; the new time is confirmed.")
+
+
+# ---------------------------------------------------------------------------
 # /settimezone — per-user time zone preference
 # ---------------------------------------------------------------------------
 
@@ -3079,6 +3314,7 @@ async def post_init(app: Application) -> None:
         BotCommand("appointment", "Request a meeting with an official"),
         BotCommand("myappointments", "List your appointments"),
         BotCommand("cancelappointment", "Cancel a pending or confirmed appointment"),
+        BotCommand("reschedule", "Propose a new time for an upcoming appointment"),
         BotCommand("settimezone", "Set your time zone for displayed times"),
         BotCommand("language", "Choose your language"),
         BotCommand("stop", "Unsubscribe from notifications"),
@@ -3198,6 +3434,15 @@ def main() -> None:
         fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
     )
 
+    reschedule_conv = ConversationHandler(
+        entry_points=[CommandHandler("reschedule", cmd_reschedule)],
+        states={
+            RS_SELECT: [CallbackQueryHandler(rs_select, pattern=f"^{re.escape(CB_RESCHED_PREFIX)}")],
+            RS_NEWTIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, rs_newtime)],
+        },
+        fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
+    )
+
     settimezone_conv = ConversationHandler(
         entry_points=[CommandHandler("settimezone", cmd_settimezone)],
         states={TZ_SELECT: [
@@ -3250,6 +3495,7 @@ def main() -> None:
     app.add_handler(CommandHandler("enable_appt_proxies", cmd_enable_appt_proxies))
     app.add_handler(appointment_conv)
     app.add_handler(cancel_appt_conv)
+    app.add_handler(reschedule_conv)
     app.add_handler(settimezone_conv)
     app.add_handler(language_conv)
 

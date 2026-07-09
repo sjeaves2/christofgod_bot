@@ -4,7 +4,6 @@ import sys
 from io import BytesIO
 from pathlib import Path
 
-import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from pdf_generator import generate_user_list_pdf
