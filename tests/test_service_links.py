@@ -9,12 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytz
-import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 

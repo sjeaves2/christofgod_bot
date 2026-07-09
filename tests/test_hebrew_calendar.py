@@ -5,7 +5,6 @@ from datetime import datetime
 from pathlib import Path
 
 import pytz
-import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from hebrew_calendar import (
@@ -17,7 +16,6 @@ from hebrew_calendar import (
     convocations_for_hebrew_year,
     sabbath_events,
     service_phases,
-    upcoming_convocation_events,
 )
 
 TZ = pytz.timezone("America/New_York")
