@@ -346,6 +346,33 @@ async def get_user_prefs(chat_id: int) -> "tuple[pytz.BaseTzInfo, str]":
     return user_tz_of(record), user_lang_of(record)
 
 
+# ---------------------------------------------------------------------------
+# Opt-in personal notification preferences (by event category)
+# ---------------------------------------------------------------------------
+
+# Category key -> catalog label key. Order defines the /notifications layout.
+NOTIF_CATEGORIES: list[tuple[str, str]] = [
+    ("convocations", "notif_cat_convocations"),   # Sabbath + the annual feasts
+    ("sunday_prayer", "notif_cat_sunday_prayer"),
+    ("special", "notif_cat_special"),
+]
+_NOTIF_CATEGORY_KEYS = {k for k, _ in NOTIF_CATEGORIES}
+
+
+def _event_category(event: dict[str, Any]) -> str:
+    """Classify an event into a notification category (see NOTIF_CATEGORIES)."""
+    if event.get("type") == "convocation":
+        return "convocations"
+    if event.get("special_id") == "sunday_morning_prayer":
+        return "sunday_prayer"
+    return "special"
+
+
+def user_notif_prefs(record: "dict | None") -> set:
+    """Set of event categories a user has opted into for personal reminders."""
+    return {c for c in ((record or {}).get("notif_prefs") or []) if c in _NOTIF_CATEGORY_KEYS}
+
+
 def now_tz() -> datetime:
     return datetime.now(TZ)
 
@@ -873,14 +900,31 @@ async def _send_notification_payload(bot, chat_id, media: dict, text: str, cache
         await bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN)
 
 
-async def deliver_event_notifications(bot, event: dict[str, Any]) -> int:
-    """Post an event reminder to each configured group/channel not yet notified.
+async def _notification_recipients(event: dict[str, Any]) -> dict:
+    """Map every recipient chat_id -> (tz, lang) for this event.
 
-    Notifications are broadcast once per target chat (not per individual user).
-    Idempotent: tracks delivered target chats in notification_state so a missed
-    or partially-failed broadcast can be retried later without duplicate posts.
-    Does nothing once the event's service time has passed. Returns the number of
-    messages posted on this call.
+    Recipients are the configured group/channel targets (rendered in the church
+    default tz/language) plus any individual subscribers who opted into this
+    event's category (rendered in their own tz/language).
+    """
+    recipients: dict = {}
+    for cid in event.get("target_chat_ids") or []:
+        recipients.setdefault(cid, (TZ, DEFAULT_LANG))
+    category = _event_category(event)
+    for u in await get_all_users():
+        if category in user_notif_prefs(u):
+            recipients[u["chat_id"]] = (user_tz_of(u), user_lang_of(u))
+    return recipients
+
+
+async def deliver_event_notifications(bot, event: dict[str, Any]) -> int:
+    """Post an event reminder to each recipient not yet notified.
+
+    Recipients are the configured groups/channels plus individual subscribers
+    who opted in (via /notifications) to this event's category. Idempotent:
+    tracks delivered chats in notification_state so a missed or partially-failed
+    broadcast can be retried later without duplicates. Does nothing once the
+    event's service time has passed. Returns the number of messages sent.
     """
     key = event["key"]
     service_time = event["service_time"]
@@ -888,9 +932,9 @@ async def deliver_event_notifications(bot, event: dict[str, Any]) -> int:
     if now >= service_time:
         return 0  # too late — the event has already started
 
-    targets = event.get("target_chat_ids") or []
-    if not targets:
-        return 0  # no group/channel configured for this event
+    recipients = await _notification_recipients(event)
+    if not recipients:
+        return 0  # no groups configured and nobody opted in
 
     states = await _load_notif_state()
     state = states.setdefault(
@@ -898,12 +942,9 @@ async def deliver_event_notifications(bot, event: dict[str, Any]) -> int:
         {"name": event["name"], "service_time": service_time.isoformat(), "notified": []},
     )
     notified = set(state["notified"])
-    pending = [c for c in targets if c not in notified]
+    pending = [c for c in recipients if c not in notified]
     if not pending:
         return 0
-
-    # Groups/channels get a single rendering in the church's default tz/language.
-    text = _render_notification(event, TZ, DEFAULT_LANG)
 
     # Configured media (image/document): URL or local path. Drop a local file
     # that's missing so the reminder still goes out as text.
@@ -918,6 +959,8 @@ async def deliver_event_notifications(bot, event: dict[str, Any]) -> int:
     sent = 0
     failed = 0
     for chat_id in pending:
+        tz, lang = recipients[chat_id]
+        text = _render_notification(event, tz, lang)
         try:
             await _send_notification_payload(bot, chat_id, media, text, caches)
             notified.add(chat_id)
@@ -1109,11 +1152,42 @@ async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # /help  /events  /exportcalendar
 # ---------------------------------------------------------------------------
 
+# /help subtopics -> catalog key with a detailed explanation.
+HELP_TOPICS = {
+    "appointment": "help_appointment",
+    "myappointments": "help_myappointments",
+    "cancelappointment": "help_cancelappointment",
+    "reschedule": "help_reschedule",
+    "events": "help_events",
+    "exportcalendar": "help_exportcalendar",
+    "settimezone": "help_settimezone",
+    "language": "help_language",
+    "notifications": "help_notifications",
+}
+
+
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     uid, uname, dname = user_info(update)
-    activity.log_command("help", uid, uname, dname)
     _, lang = await get_user_prefs(uid)
+
+    topic = (context.args[0].lstrip("/").lower() if context.args else None)
+    if topic:
+        activity.log_command("help", uid, uname, dname, details=f"topic={topic}")
+        if topic in HELP_TOPICS:
+            await update.message.reply_text(t(HELP_TOPICS[topic], lang),
+                                            parse_mode=ParseMode.MARKDOWN)
+        else:
+            topics = ", ".join(f"`{x}`" for x in HELP_TOPICS)
+            await update.message.reply_text(
+                t("help_unknown_topic", lang, topics=topics),
+                parse_mode=ParseMode.MARKDOWN,
+            )
+        return
+
+    activity.log_command("help", uid, uname, dname)
     text = _commands_text(lang, is_admin(update))
+    # Hint that per-command help is available.
+    text += "\n\n" + t("help_topic_hint", lang)
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
 
 
@@ -3219,6 +3293,90 @@ async def lang_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
 
 # ---------------------------------------------------------------------------
+# /notifications — opt-in personal reminders by event category
+# ---------------------------------------------------------------------------
+
+CB_NOTIFPREF_PREFIX = "np:"
+
+
+def _notif_prefs_keyboard(prefs: set, lang: str) -> InlineKeyboardMarkup:
+    rows = []
+    for key, label_key in NOTIF_CATEGORIES:
+        mark = "✅ " if key in prefs else "▫️ "
+        rows.append([InlineKeyboardButton(
+            mark + t(label_key, lang), callback_data=f"{CB_NOTIFPREF_PREFIX}toggle:{key}"
+        )])
+    rows.append([InlineKeyboardButton(
+        t("notif_prefs_done", lang), callback_data=f"{CB_NOTIFPREF_PREFIX}done"
+    )])
+    return InlineKeyboardMarkup(rows)
+
+
+def _notif_prefs_summary(prefs: set, lang: str) -> str:
+    if not prefs:
+        return t("notif_prefs_none", lang)
+    lines = [t(lk, lang) for k, lk in NOTIF_CATEGORIES if k in prefs]
+    return t("notif_prefs_saved", lang, list="\n".join(f"• {x}" for x in lines))
+
+
+async def _get_user_notif_prefs(chat_id: int) -> set:
+    users = await get_all_users()
+    rec = next((u for u in users if u.get("chat_id") == chat_id), None)
+    return user_notif_prefs(rec)
+
+
+async def _set_user_notif_prefs(chat_id: int, uname: "str | None",
+                                dname: str, prefs: set) -> None:
+    """Persist a user's notification categories, creating a record if needed
+    (so friends-of-the-congregation can opt in without a full /start first)."""
+    users = await get_all_users()
+    rec = next((u for u in users if u.get("chat_id") == chat_id), None)
+    if rec is None:
+        rec = {"chat_id": chat_id, "username": uname, "display_name": dname,
+               "joined": now_tz().isoformat()}
+        users.append(rec)
+    rec["notif_prefs"] = sorted(prefs)
+    await save_users(users)
+
+
+async def cmd_notifications(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    uid, uname, dname = user_info(update)
+    activity.log_command("notifications", uid, uname, dname)
+    _, lang = await get_user_prefs(uid)
+    prefs = await _get_user_notif_prefs(uid)
+    await update.message.reply_text(
+        t("notif_prefs_prompt", lang),
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=_notif_prefs_keyboard(prefs, lang),
+    )
+
+
+async def notif_prefs_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await _answer_cb(query)
+    uid, uname, dname = user_info(update)
+    _, lang = await get_user_prefs(uid)
+    action = query.data[len(CB_NOTIFPREF_PREFIX):]
+
+    if action == "done":
+        prefs = await _get_user_notif_prefs(uid)
+        await query.edit_message_text(_notif_prefs_summary(prefs, lang),
+                                      parse_mode=ParseMode.MARKDOWN)
+        return
+
+    if action.startswith("toggle:"):
+        cat = action.split(":", 1)[1]
+        if cat not in _NOTIF_CATEGORY_KEYS:
+            return
+        prefs = await _get_user_notif_prefs(uid)
+        prefs.discard(cat) if cat in prefs else prefs.add(cat)
+        await _set_user_notif_prefs(uid, uname, dname, prefs)
+        activity.log_command("notifications", uid, uname, dname,
+                             details=f"{cat}={'on' if cat in prefs else 'off'}")
+        await query.edit_message_reply_markup(reply_markup=_notif_prefs_keyboard(prefs, lang))
+
+
+# ---------------------------------------------------------------------------
 # Command-execution logging (INFO)
 # ---------------------------------------------------------------------------
 
@@ -3317,6 +3475,7 @@ async def post_init(app: Application) -> None:
         BotCommand("reschedule", "Propose a new time for an upcoming appointment"),
         BotCommand("settimezone", "Set your time zone for displayed times"),
         BotCommand("language", "Choose your language"),
+        BotCommand("notifications", "Choose which reminders you receive"),
         BotCommand("stop", "Unsubscribe from notifications"),
     ])
 
@@ -3498,6 +3657,9 @@ def main() -> None:
     app.add_handler(reschedule_conv)
     app.add_handler(settimezone_conv)
     app.add_handler(language_conv)
+    app.add_handler(CommandHandler("notifications", cmd_notifications))
+    app.add_handler(CallbackQueryHandler(
+        notif_prefs_callback, pattern=f"^{re.escape(CB_NOTIFPREF_PREFIX)}"))
 
     app.add_handler(CallbackQueryHandler(appt_callback, pattern=f"^{re.escape(CB_APPT_PREFIX)}"))
 
