@@ -80,6 +80,7 @@ CATALOG: dict[str, dict[str, str]] = {
             "/reschedule — propose a new time for an upcoming appointment\n"
             "/settimezone — set your time zone for displayed times\n"
             "/language — choose your language\n"
+            "/notifications — choose which reminders you receive\n"
             "/stop — unsubscribe from notifications"
         ),
         "share_contact_prompt": (
@@ -204,6 +205,63 @@ CATALOG: dict[str, dict[str, str]] = {
         "lang_prompt": "*Choose Your Language*",
         "lang_set": "✅ Language set to *{language}*.",
 
+        # -- /notifications (opt-in personal reminders) --
+        "notif_cat_convocations": "Sabbath and other Holy Convocations",
+        "notif_cat_sunday_prayer": "Sunday Morning Prayer",
+        "notif_cat_special": "Special events",
+        "notif_prefs_prompt": (
+            "*Personal Reminders*\n\n"
+            "Choose which reminders you'd like sent to you directly. "
+            "This is handy if you're not in a church group chat. "
+            "Tap to turn each on/off, then tap Done."
+        ),
+        "notif_prefs_done": "✔️ Done",
+        "notif_prefs_none": (
+            "You've turned off all personal reminders. "
+            "You can turn them back on any time with /notifications."
+        ),
+        "notif_prefs_saved": "✅ You'll receive personal reminders for:\n{list}",
+
+        # -- /help topics --
+        "help_topic_hint": "For details on a command, send `/help <command>` (e.g. `/help appointment`).",
+        "help_unknown_topic": "I don't have help for that. Try one of: {topics}",
+        "help_appointment": (
+            "*/appointment* — Request a meeting with a church official.\n\n"
+            "Pick the official, then enter a date and time. They (or their proxy) "
+            "will confirm, decline, or suggest a different time. Once confirmed you "
+            "get a calendar file."
+        ),
+        "help_myappointments": (
+            "*/myappointments* — List your upcoming and past appointments and their status."
+        ),
+        "help_cancelappointment": (
+            "*/cancelappointment* — Cancel an upcoming appointment. Pick it from the "
+            "list and confirm. The other party is notified. Past appointments can't be cancelled."
+        ),
+        "help_reschedule": (
+            "*/reschedule* — Propose a new time for an upcoming appointment. Pick it, "
+            "enter the new date/time, and the other party accepts or declines. If declined, "
+            "the original time is kept. New times can't be in the past."
+        ),
+        "help_events": (
+            "*/events* — Show upcoming convocations, services and events for the next 30 days, "
+            "with any join links."
+        ),
+        "help_exportcalendar": (
+            "*/exportcalendar* — Download an ICS calendar file of upcoming events to import "
+            "into your calendar app."
+        ),
+        "help_settimezone": (
+            "*/settimezone* — Set your time zone so dates and times are shown in your local time. "
+            "Tap a common zone or type any IANA name (e.g. `America/New_York`)."
+        ),
+        "help_language": "*/language* — Choose the language the bot uses when talking to you.",
+        "help_notifications": (
+            "*/notifications* — Choose which reminders you receive as personal messages "
+            "(Sabbath and Holy Convocations, Sunday Morning Prayer, Special events). Useful "
+            "if you're not in a church group chat."
+        ),
+
         # -- appointment statuses --
         "status_pending": "pending",
         "status_confirmed": "confirmed",
@@ -230,6 +288,7 @@ CATALOG: dict[str, dict[str, str]] = {
             "/reschedule — proponer una nueva hora para una cita próxima\n"
             "/settimezone — establecer tu zona horaria para las horas mostradas\n"
             "/language — elegir tu idioma\n"
+            "/notifications — elegir qué recordatorios recibes\n"
             "/stop — cancelar la suscripción a las notificaciones"
         ),
         "share_contact_prompt": (
@@ -354,6 +413,63 @@ CATALOG: dict[str, dict[str, str]] = {
         "lang_prompt": "*Elige tu idioma*",
         "lang_set": "✅ Idioma establecido a *{language}*.",
 
+        # -- /notifications (recordatorios personales opcionales) --
+        "notif_cat_convocations": "Sábado y otras Santas Convocaciones",
+        "notif_cat_sunday_prayer": "Oración del domingo por la mañana",
+        "notif_cat_special": "Eventos especiales",
+        "notif_prefs_prompt": (
+            "*Recordatorios personales*\n\n"
+            "Elige qué recordatorios quieres recibir directamente. "
+            "Es útil si no estás en un chat de grupo de la iglesia. "
+            "Toca para activar/desactivar cada uno y luego toca Listo."
+        ),
+        "notif_prefs_done": "✔️ Listo",
+        "notif_prefs_none": (
+            "Has desactivado todos los recordatorios personales. "
+            "Puedes volver a activarlos en cualquier momento con /notifications."
+        ),
+        "notif_prefs_saved": "✅ Recibirás recordatorios personales de:\n{list}",
+
+        # -- temas de /help --
+        "help_topic_hint": "Para más detalles de un comando, envía `/help <comando>` (p. ej. `/help appointment`).",
+        "help_unknown_topic": "No tengo ayuda para eso. Prueba con: {topics}",
+        "help_appointment": (
+            "*/appointment* — Solicita una reunión con un oficial de la iglesia.\n\n"
+            "Elige al oficial y luego ingresa una fecha y hora. Él (o su representante) "
+            "confirmará, rechazará o sugerirá otra hora. Una vez confirmada recibes un "
+            "archivo de calendario."
+        ),
+        "help_myappointments": (
+            "*/myappointments* — Muestra tus citas próximas y pasadas y su estado."
+        ),
+        "help_cancelappointment": (
+            "*/cancelappointment* — Cancela una cita próxima. Elígela de la lista y confirma. "
+            "Se notifica a la otra parte. Las citas pasadas no se pueden cancelar."
+        ),
+        "help_reschedule": (
+            "*/reschedule* — Propone una nueva hora para una cita próxima. Elígela, ingresa "
+            "la nueva fecha/hora, y la otra parte acepta o rechaza. Si se rechaza, se mantiene "
+            "la hora original. Las nuevas horas no pueden estar en el pasado."
+        ),
+        "help_events": (
+            "*/events* — Muestra las convocaciones, servicios y eventos de los próximos 30 días, "
+            "con sus enlaces para unirse."
+        ),
+        "help_exportcalendar": (
+            "*/exportcalendar* — Descarga un archivo de calendario ICS de los próximos eventos "
+            "para importarlo a tu aplicación de calendario."
+        ),
+        "help_settimezone": (
+            "*/settimezone* — Establece tu zona horaria para ver fechas y horas en tu hora local. "
+            "Toca una zona común o escribe un nombre IANA (p. ej. `America/New_York`)."
+        ),
+        "help_language": "*/language* — Elige el idioma que el bot usa contigo.",
+        "help_notifications": (
+            "*/notifications* — Elige qué recordatorios recibes como mensajes personales "
+            "(Sábado y Santas Convocaciones, Oración del domingo por la mañana, Eventos especiales). "
+            "Útil si no estás en un chat de grupo de la iglesia."
+        ),
+
         # -- appointment statuses --
         "status_pending": "pendiente",
         "status_confirmed": "confirmada",
@@ -380,6 +496,7 @@ CATALOG: dict[str, dict[str, str]] = {
             "/reschedule — proposer une nouvelle heure pour un rendez-vous à venir\n"
             "/settimezone — définir votre fuseau horaire pour les heures affichées\n"
             "/language — choisir votre langue\n"
+            "/notifications — choisir les rappels que vous recevez\n"
             "/stop — vous désabonner des notifications"
         ),
         "share_contact_prompt": (
@@ -505,6 +622,63 @@ CATALOG: dict[str, dict[str, str]] = {
         "lang_prompt": "*Choisissez votre langue*",
         "lang_set": "✅ Langue définie sur *{language}*.",
 
+        # -- /notifications (rappels personnels optionnels) --
+        "notif_cat_convocations": "Sabbat et autres Saintes Convocations",
+        "notif_cat_sunday_prayer": "Prière du dimanche matin",
+        "notif_cat_special": "Événements spéciaux",
+        "notif_prefs_prompt": (
+            "*Rappels personnels*\n\n"
+            "Choisissez les rappels que vous souhaitez recevoir directement. "
+            "Pratique si vous n'êtes pas dans un groupe de discussion de l'église. "
+            "Appuyez pour activer/désactiver chacun, puis appuyez sur Terminé."
+        ),
+        "notif_prefs_done": "✔️ Terminé",
+        "notif_prefs_none": (
+            "Vous avez désactivé tous les rappels personnels. "
+            "Vous pouvez les réactiver à tout moment avec /notifications."
+        ),
+        "notif_prefs_saved": "✅ Vous recevrez des rappels personnels pour :\n{list}",
+
+        # -- rubriques de /help --
+        "help_topic_hint": "Pour les détails d'une commande, envoyez `/help <commande>` (p. ex. `/help appointment`).",
+        "help_unknown_topic": "Je n'ai pas d'aide pour cela. Essayez : {topics}",
+        "help_appointment": (
+            "*/appointment* — Demandez un rendez-vous avec un responsable de l'église.\n\n"
+            "Choisissez le responsable, puis saisissez une date et une heure. Lui (ou son "
+            "délégué) confirmera, refusera ou proposera un autre horaire. Une fois confirmé, "
+            "vous recevez un fichier de calendrier."
+        ),
+        "help_myappointments": (
+            "*/myappointments* — Affiche vos rendez-vous à venir et passés ainsi que leur statut."
+        ),
+        "help_cancelappointment": (
+            "*/cancelappointment* — Annulez un rendez-vous à venir. Choisissez-le dans la liste "
+            "et confirmez. L'autre partie est prévenue. Les rendez-vous passés ne peuvent pas être annulés."
+        ),
+        "help_reschedule": (
+            "*/reschedule* — Proposez un nouvel horaire pour un rendez-vous à venir. Choisissez-le, "
+            "saisissez la nouvelle date/heure, et l'autre partie accepte ou refuse. En cas de refus, "
+            "l'horaire d'origine est conservé. Les nouveaux horaires ne peuvent pas être dans le passé."
+        ),
+        "help_events": (
+            "*/events* — Affiche les convocations, services et événements des 30 prochains jours, "
+            "avec leurs liens de connexion."
+        ),
+        "help_exportcalendar": (
+            "*/exportcalendar* — Téléchargez un fichier de calendrier ICS des prochains événements "
+            "à importer dans votre application de calendrier."
+        ),
+        "help_settimezone": (
+            "*/settimezone* — Définissez votre fuseau horaire pour afficher dates et heures en heure "
+            "locale. Appuyez sur un fuseau courant ou saisissez un nom IANA (p. ex. `America/New_York`)."
+        ),
+        "help_language": "*/language* — Choisissez la langue que le bot utilise avec vous.",
+        "help_notifications": (
+            "*/notifications* — Choisissez les rappels que vous recevez en messages personnels "
+            "(Sabbat et Saintes Convocations, Prière du dimanche matin, Événements spéciaux). "
+            "Utile si vous n'êtes pas dans un groupe de discussion de l'église."
+        ),
+
         # -- appointment statuses --
         "status_pending": "en attente",
         "status_confirmed": "confirmé",
@@ -533,6 +707,7 @@ CATALOG: dict[str, dict[str, str]] = {
             "/reschedule — phakamisa isikhathi esisha se-aphoyintimenti ezayo\n"
             "/settimezone — setha izoni yesikhathi sakho yezikhathi eziboniswayo\n"
             "/language — khetha ulimi lwakho\n"
+            "/notifications — khetha ukuthi yiziphi izikhumbuzo ozitholayo\n"
             "/stop — yekisa ukubhalisa ezaziswayweni"
         ),
         "share_contact_prompt": (
@@ -656,6 +831,64 @@ CATALOG: dict[str, dict[str, str]] = {
         # -- /language --
         "lang_prompt": "*Khetha ulimi lwakho*",
         "lang_set": "✅ Ulimi lusethelwe ku-*{language}*.",
+
+        # -- /notifications (izikhumbuzo zomuntu siqu ozikhethayo) --
+        "notif_cat_convocations": "ISabatha neminye iMihlangano eNgcwele",
+        "notif_cat_sunday_prayer": "Umthandazo waNgeSonto Ekuseni",
+        "notif_cat_special": "Imicimbi ekhethekile",
+        "notif_prefs_prompt": (
+            "*Izikhumbuzo zomuntu siqu*\n\n"
+            "Khetha izikhumbuzo ofuna ukuzithola ngqo. "
+            "Kuwusizo uma ungekho eqenjini lengxoxo lebandla. "
+            "Thepha ukuvula/ukuvala ngayinye, bese uthepha okuthi Kwenziwe."
+        ),
+        "notif_prefs_done": "✔️ Kwenziwe",
+        "notif_prefs_none": (
+            "Uvale zonke izikhumbuzo zomuntu siqu. "
+            "Ungaphinda uzivule noma nini nge-/notifications."
+        ),
+        "notif_prefs_saved": "✅ Uzothola izikhumbuzo zomuntu siqu ze-:\n{list}",
+
+        # -- izihloko ze-/help --
+        "help_topic_hint": "Ukuthola imininingwane ngomyalo, thumela `/help <umyalo>` (isb. `/help appointment`).",
+        "help_unknown_topic": "Anginalo usizo ngalokho. Zama okukodwa kwalokhu: {topics}",
+        "help_appointment": (
+            "*/appointment* — Cela umhlangano nesikhulu sebandla.\n\n"
+            "Khetha isikhulu, bese ufaka usuku nesikhathi. Sona (noma ummeleli waso) "
+            "sizoqinisekisa, senqabe, noma siphakamise esinye isikhathi. Uma sekuqinisekisiwe "
+            "uthola ifayela lekhalenda."
+        ),
+        "help_myappointments": (
+            "*/myappointments* — Bonisa ama-aphoyintimenti akho azayo nadlule kanye nesimo sawo."
+        ),
+        "help_cancelappointment": (
+            "*/cancelappointment* — Khansela i-aphoyintimenti ezayo. Yikhethe ohlwini bese uqinisekisa. "
+            "Elinye iqembu liyaziswa. Ama-aphoyintimenti adlule ngeke akhanselwe."
+        ),
+        "help_reschedule": (
+            "*/reschedule* — Phakamisa isikhathi esisha se-aphoyintimenti ezayo. Yikhethe, faka "
+            "usuku/isikhathi esisha, bese elinye iqembu liyamukela noma linqabe. Uma kunqatshelwe, "
+            "kugcinwa isikhathi sokuqala. Izikhathi ezintsha ngeke zibe sesikhathini esidlule."
+        ),
+        "help_events": (
+            "*/events* — Bonisa imihlangano, izinkonzo nemicimbi yezinsuku ezingu-30 ezizayo, "
+            "kanye nezixhumanisi zokujoyina."
+        ),
+        "help_exportcalendar": (
+            "*/exportcalendar* — Landa ifayela lekhalenda le-ICS lemicimbi ezayo ukuze ulingenise "
+            "kuhlelo lwakho lwekhalenda."
+        ),
+        "help_settimezone": (
+            "*/settimezone* — Setha izoni yesikhathi sakho ukuze izinsuku nezikhathi zibonakale "
+            "ngesikhathi sendawo yakho. Thepha izoni evamile noma uthayiphe igama le-IANA "
+            "(isb. `America/New_York`)."
+        ),
+        "help_language": "*/language* — Khetha ulimi i-bhothi elilusebenzisayo uma likhuluma nawe.",
+        "help_notifications": (
+            "*/notifications* — Khetha izikhumbuzo ozithola njengemilayezo yomuntu siqu "
+            "(iSabatha neMihlangano eNgcwele, uMthandazo waNgeSonto Ekuseni, Imicimbi ekhethekile). "
+            "Kuwusizo uma ungekho eqenjini lengxoxo lebandla."
+        ),
 
         # -- appointment statuses --
         "status_pending": "kulindile",
