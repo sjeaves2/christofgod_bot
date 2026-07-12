@@ -1275,8 +1275,8 @@ async def cmd_userlist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     lines = [f"👥 *Registered Users ({len(users)}):*\n"]
     for i, u in enumerate(users, 1):
-        dn = u.get("display_name") or "—"
-        un = ("@" + u["username"]) if u.get("username") else "—"
+        dn = escape_markdown(u.get("display_name") or "—", version=1)
+        un = ("@" + escape_markdown(u["username"], version=1)) if u.get("username") else "—"
         lines.append(f"{i}. {dn} ({un})")
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
 
