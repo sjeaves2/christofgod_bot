@@ -173,6 +173,14 @@ CATALOG: dict[str, dict[str, str]] = {
             "You've reached the limit of {max} appointments with {official} "
             "in any {days}-day period. Request not submitted."
         ),
+        "appt_cooldown": (
+            "⏳ You've just made an appointment change. Please wait about "
+            "{seconds} more second(s) before submitting another request."
+        ),
+        "appt_too_many_pending": (
+            "📋 You already have {max} pending request(s) awaiting a response. "
+            "Please wait for one to be confirmed or declined before submitting another."
+        ),
         "appt_submitted": (
             "✅ *Request submitted!* (ID: `{id}`)\n"
             "I will notify you when your request is accepted, declined, "
@@ -380,6 +388,14 @@ CATALOG: dict[str, dict[str, str]] = {
         "appt_limit_not_submitted": (
             "Has alcanzado el límite de {max} citas con {official} "
             "en cualquier período de {days} días. Solicitud no enviada."
+        ),
+        "appt_cooldown": (
+            "⏳ Acabas de hacer un cambio de cita. Espera unos "
+            "{seconds} segundo(s) más antes de enviar otra solicitud."
+        ),
+        "appt_too_many_pending": (
+            "📋 Ya tienes {max} solicitud(es) pendiente(s) esperando respuesta. "
+            "Espera a que una sea confirmada o rechazada antes de enviar otra."
         ),
         "appt_submitted": (
             "✅ *¡Solicitud enviada!* (ID: `{id}`)\n"
@@ -590,6 +606,14 @@ CATALOG: dict[str, dict[str, str]] = {
             "Vous avez atteint la limite de {max} rendez-vous avec {official} "
             "sur toute période de {days} jours. Demande non envoyée."
         ),
+        "appt_cooldown": (
+            "⏳ Vous venez de modifier un rendez-vous. Veuillez patienter environ "
+            "{seconds} seconde(s) de plus avant d'envoyer une autre demande."
+        ),
+        "appt_too_many_pending": (
+            "📋 Vous avez déjà {max} demande(s) en attente de réponse. "
+            "Attendez qu'une soit confirmée ou refusée avant d'en envoyer une autre."
+        ),
         "appt_submitted": (
             "✅ *Demande envoyée !* (ID : `{id}`)\n"
             "Je vous informerai lorsque votre demande sera acceptée, refusée "
@@ -799,6 +823,14 @@ CATALOG: dict[str, dict[str, str]] = {
         "appt_limit_not_submitted": (
             "Usufinyelele umkhawulo wama-aphoyintimenti angu-{max} no-{official} "
             "kunoma yisiphi isikhathi sezinsuku ezingu-{days}. Isicelo asithunyelwanga."
+        ),
+        "appt_cooldown": (
+            "⏳ Usanda kwenza ushintsho lwe-aphoyintimenti. Sicela ulinde cishe "
+            "amasekhondi angu-{seconds} ngaphambi kokuthumela esinye isicelo."
+        ),
+        "appt_too_many_pending": (
+            "📋 Usuvele une-{max} izicelo ezilindile impendulo. "
+            "Sicela ulinde kuze kuqinisekiswe noma kwenqatshelwe esinye ngaphambi kokuthumela."
         ),
         "appt_submitted": (
             "✅ *Isicelo sithunyelwe!* (I-ID: `{id}`)\n"
