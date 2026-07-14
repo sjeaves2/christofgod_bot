@@ -625,6 +625,47 @@ def _max_request_datetime() -> datetime:
 APPOINTMENT_MAX_PER_WINDOW = 4
 APPOINTMENT_WINDOW_HALF_DAYS = 15
 
+# Request-rate limiting on /appointment (option E): a short cooldown between
+# actions plus a cap on outstanding pending requests. Admins are exempt.
+APPOINTMENT_COOLDOWN_SECONDS = 120
+APPOINTMENT_MAX_PENDING = 5
+
+
+def _stamp_appt_action(appt: dict[str, Any]) -> None:
+    """Record the time of the latest action on an appointment (create, confirm,
+    cancel, reschedule) so the per-user request cooldown can be measured."""
+    appt["last_action_at"] = now_tz().isoformat()
+
+
+def _user_last_action_at(
+    appts: list[dict[str, Any]], user_id: int
+) -> "datetime | None":
+    """Most recent last_action_at across this user's appointments, or None."""
+    latest: "datetime | None" = None
+    for a in appts:
+        if a.get("user_chat_id") != user_id:
+            continue
+        ts = a.get("last_action_at")
+        if not ts:
+            continue
+        try:
+            dt = datetime.fromisoformat(ts)
+        except (ValueError, TypeError):
+            continue
+        if dt.tzinfo is None:
+            dt = TZ.localize(dt)
+        if latest is None or dt > latest:
+            latest = dt
+    return latest
+
+
+def _count_pending_appts(appts: list[dict[str, Any]], user_id: int) -> int:
+    """How many of the user's requests are still awaiting a response."""
+    return sum(
+        1 for a in appts
+        if a.get("user_chat_id") == user_id and a.get("status") == "pending"
+    )
+
 
 def _count_active_appts_with_official(
     appts: list[dict[str, Any]],
@@ -2204,6 +2245,26 @@ async def ap_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     appts = await get_appointments()
 
+    # Request-rate limits (admins exempt): a short cooldown after any recent
+    # appointment action, and a cap on outstanding pending requests.
+    if not is_admin(update):
+        last_action = _user_last_action_at(appts, uid)
+        if last_action is not None:
+            elapsed = (now_tz() - last_action).total_seconds()
+            if elapsed < APPOINTMENT_COOLDOWN_SECONDS:
+                wait = int(APPOINTMENT_COOLDOWN_SECONDS - elapsed) or 1
+                await update.message.reply_text(
+                    t("appt_cooldown", lang, seconds=wait),
+                    parse_mode=ParseMode.MARKDOWN,
+                )
+                return ConversationHandler.END
+        if _count_pending_appts(appts, uid) >= APPOINTMENT_MAX_PENDING:
+            await update.message.reply_text(
+                t("appt_too_many_pending", lang, max=APPOINTMENT_MAX_PENDING),
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            return ConversationHandler.END
+
     # Final guard: per-official frequency limit within ±15 days of now.
     if _count_active_appts_with_official(appts, uid, off["id"], now_tz()) >= APPOINTMENT_MAX_PER_WINDOW:
         await update.message.reply_text(
@@ -2235,6 +2296,7 @@ async def ap_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "status": "pending",
         "duration_minutes": DEFAULT_APPT_DURATION_MIN,
     }
+    _stamp_appt_action(appt)
     appts.append(appt)
     await save_appointments(appts)
 
@@ -2516,6 +2578,7 @@ async def _finalize_appointment(
     context: ContextTypes.DEFAULT_TYPE, appt: dict, appts: list
 ) -> None:
     """Save confirmed appointment and send ICS to both the user and the official."""
+    _stamp_appt_action(appt)
     for i, a in enumerate(appts):
         if a["id"] == appt["id"]:
             appts[i] = appt
@@ -2603,6 +2666,7 @@ async def handle_counter_propose_message(
 
     if role == "user" and text.lower() == "cancel":
         appt["status"] = "cancelled"
+        _stamp_appt_action(appt)
         for i, a in enumerate(appts):
             if a["id"] == appt_id:
                 appts[i] = appt
@@ -2850,6 +2914,7 @@ async def ca_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     for i, a in enumerate(appts):
         if a["id"] == appt["id"]:
             appts[i]["status"] = "cancelled"
+            _stamp_appt_action(appts[i])
             break
     await save_appointments(appts)
 
@@ -3038,6 +3103,7 @@ async def rs_newtime(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     # Record the proposal WITHOUT touching the confirmed status/time.
     appt["reschedule_proposed_datetime"] = new_dt.isoformat()
     appt["reschedule_proposed_by"] = role
+    _stamp_appt_action(appt)
     off = _official_by_id(appt["official_id"])
     if role == "official" and off:
         name, is_proxy = _acting_identity(off, uid, uname)
