@@ -277,15 +277,15 @@ CATALOG: dict[str, dict[str, str]] = {
 
         # -- /donate --
         "donate_message": (
-            "🙏 *Support the Congregation*\n\n"
+            "🙏 *Support Christ of God Ministries*\n\n"
             "Your generosity helps sustain our ministry and outreach. "
             "If you'd like to contribute, tap the button below — "
-            "thank you, and may God bless you!"
+            "thank you, and may The LORD bless you!"
         ),
-        "donate_button": "💝 Give now",
+        "donate_button": "💝 Donate now",
         "donate_not_configured": (
-            "Online giving isn't set up yet. Please speak with a church "
-            "official about ways to contribute."
+            "Online giving isn't set up yet. Please speak with Elder L. "
+            "Williams about ways to contribute."
         ),
 
         # -- appointment statuses --
@@ -511,15 +511,15 @@ CATALOG: dict[str, dict[str, str]] = {
 
         # -- /donate --
         "donate_message": (
-            "🙏 *Apoya a la Congregación*\n\n"
+            "🙏 *Apoya a Christ of God Ministries*\n\n"
             "Tu generosidad ayuda a sostener nuestro ministerio y alcance. "
             "Si deseas contribuir, toca el botón de abajo — "
-            "¡gracias, y que Dios te bendiga!"
+            "¡gracias, y que el SEÑOR te bendiga!"
         ),
         "donate_button": "💝 Donar ahora",
         "donate_not_configured": (
-            "Las donaciones en línea aún no están configuradas. Habla con un "
-            "oficial de la iglesia sobre las formas de contribuir."
+            "Las donaciones en línea aún no están configuradas. Habla con el "
+            "Anciano L. Williams sobre las formas de contribuir."
         ),
 
         # -- appointment statuses --
@@ -746,15 +746,15 @@ CATALOG: dict[str, dict[str, str]] = {
 
         # -- /donate --
         "donate_message": (
-            "🙏 *Soutenez la Congrégation*\n\n"
+            "🙏 *Soutenez Christ of God Ministries*\n\n"
             "Votre générosité aide à soutenir notre ministère et notre mission. "
             "Si vous souhaitez contribuer, appuyez sur le bouton ci-dessous — "
-            "merci, et que Dieu vous bénisse !"
+            "merci, et que l'Éternel vous bénisse !"
         ),
-        "donate_button": "💝 Donner maintenant",
+        "donate_button": "💝 Faire un don",
         "donate_not_configured": (
-            "Les dons en ligne ne sont pas encore configurés. Parlez à un "
-            "responsable de l'église des façons de contribuer."
+            "Les dons en ligne ne sont pas encore configurés. Parlez à "
+            "l'Ancien L. Williams des façons de contribuer."
         ),
 
         # -- appointment statuses --
@@ -983,15 +983,15 @@ CATALOG: dict[str, dict[str, str]] = {
 
         # -- /donate --
         "donate_message": (
-            "🙏 *Sekela iBandla*\n\n"
+            "🙏 *Sekela i-Christ of God Ministries*\n\n"
             "Ukupha kwakho kusiza ukusekela inkonzo yethu nomsebenzi wokufinyelela. "
             "Uma ufisa ukunikela, thepha inkinobho engezansi — "
-            "siyabonga, futhi uNkulunkulu akubusise!"
+            "siyabonga, futhi iNKOSI ikubusise!"
         ),
         "donate_button": "💝 Nikela manje",
         "donate_not_configured": (
             "Ukupha nge-inthanethi akukalungiselelwa okwamanje. Sicela ukhulume "
-            "nesikhulu sebandla ngezindlela zokunikela."
+            "noMdala u-L. Williams ngezindlela zokunikela."
         ),
 
         # -- appointment statuses --
