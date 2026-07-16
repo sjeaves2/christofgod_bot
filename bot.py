@@ -3475,8 +3475,30 @@ async def _ignore_group_messages(update: Update, context: ContextTypes.DEFAULT_T
     raise ApplicationHandlerStop
 
 
+async def _refresh_user_identity(uid: int, uname: "str | None", dname: str) -> None:
+    """Keep the stored user record's username/display_name in sync with Telegram.
+
+    A user may create, change, or remove their @username (or rename themselves)
+    after registering; without this, the record written at /start goes stale
+    forever (e.g. /userlist showing '—'). No-op if the user has no record yet —
+    registration remains /start's job.
+    """
+    users = await get_all_users()
+    rec = next((u for u in users if u.get("chat_id") == uid), None)
+    if rec is None:
+        return
+    if rec.get("username") == uname and rec.get("display_name") == dname:
+        return
+    rec["username"] = uname
+    rec["display_name"] = dname
+    await save_users(users)
+    logger.info("Refreshed identity for user %s: username=%s, display_name=%s",
+                uid, uname, dname)
+
+
 async def _log_command_invocation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Log every private command at INFO. Runs in group -1 before real handlers."""
+    """Log every private command at INFO, and keep the sender's stored
+    username/display_name fresh. Runs in group -1 before real handlers."""
     msg = update.effective_message
     if not msg or not msg.text:
         return
@@ -3485,6 +3507,9 @@ async def _log_command_invocation(update: Update, context: ContextTypes.DEFAULT_
     who = (u.full_name if u else None) or "unknown"
     uid = u.id if u else "?"
     logger.info("Command %s executed by %s (id=%s)", command, who, uid)
+    if u:
+        uid_i, uname, dname = user_info(update)
+        await _refresh_user_identity(uid_i, uname, dname)
 
 
 _ACTIVE_MEMBER_STATUSES = ("member", "administrator", "creator")
