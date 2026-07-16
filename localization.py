@@ -81,6 +81,7 @@ CATALOG: dict[str, dict[str, str]] = {
             "/settimezone — set your time zone for displayed times\n"
             "/language — choose your language\n"
             "/notifications — choose which reminders you receive\n"
+            "/donate — support the congregation with a gift\n"
             "/stop — unsubscribe from notifications"
         ),
         "share_contact_prompt": (
@@ -269,6 +270,23 @@ CATALOG: dict[str, dict[str, str]] = {
             "(Sabbath and Holy Convocations, Sunday Morning Prayer, Special events). Useful "
             "if you're not in a church group chat."
         ),
+        "help_donate": (
+            "*/donate* — Support the congregation with a gift. Opens a secure giving "
+            "page where you can contribute."
+        ),
+
+        # -- /donate --
+        "donate_message": (
+            "🙏 *Support Christ of God Ministries*\n\n"
+            "Your generosity helps sustain our ministry and outreach. "
+            "If you'd like to contribute, tap the button below — "
+            "thank you, and may The LORD bless you!"
+        ),
+        "donate_button": "💝 Donate now",
+        "donate_not_configured": (
+            "Online giving isn't set up yet. Please speak with Elder L. "
+            "Williams about ways to contribute."
+        ),
 
         # -- appointment statuses --
         "status_pending": "pending",
@@ -297,6 +315,7 @@ CATALOG: dict[str, dict[str, str]] = {
             "/settimezone — establecer tu zona horaria para las horas mostradas\n"
             "/language — elegir tu idioma\n"
             "/notifications — elegir qué recordatorios recibes\n"
+            "/donate — apoyar a la congregación con una ofrenda\n"
             "/stop — cancelar la suscripción a las notificaciones"
         ),
         "share_contact_prompt": (
@@ -485,6 +504,23 @@ CATALOG: dict[str, dict[str, str]] = {
             "(Sábado y Santas Convocaciones, Oración del domingo por la mañana, Eventos especiales). "
             "Útil si no estás en un chat de grupo de la iglesia."
         ),
+        "help_donate": (
+            "*/donate* — Apoya a la congregación con una ofrenda. Abre una página "
+            "segura de donaciones donde puedes contribuir."
+        ),
+
+        # -- /donate --
+        "donate_message": (
+            "🙏 *Apoya a Christ of God Ministries*\n\n"
+            "Tu generosidad ayuda a sostener nuestro ministerio y alcance. "
+            "Si deseas contribuir, toca el botón de abajo — "
+            "¡gracias, y que el SEÑOR te bendiga!"
+        ),
+        "donate_button": "💝 Donar ahora",
+        "donate_not_configured": (
+            "Las donaciones en línea aún no están configuradas. Habla con el "
+            "Anciano L. Williams sobre las formas de contribuir."
+        ),
 
         # -- appointment statuses --
         "status_pending": "pendiente",
@@ -513,6 +549,7 @@ CATALOG: dict[str, dict[str, str]] = {
             "/settimezone — définir votre fuseau horaire pour les heures affichées\n"
             "/language — choisir votre langue\n"
             "/notifications — choisir les rappels que vous recevez\n"
+            "/donate — soutenir la congrégation par un don\n"
             "/stop — vous désabonner des notifications"
         ),
         "share_contact_prompt": (
@@ -702,6 +739,23 @@ CATALOG: dict[str, dict[str, str]] = {
             "(Sabbat et Saintes Convocations, Prière du dimanche matin, Événements spéciaux). "
             "Utile si vous n'êtes pas dans un groupe de discussion de l'église."
         ),
+        "help_donate": (
+            "*/donate* — Soutenez la congrégation par un don. Ouvre une page "
+            "de don sécurisée où vous pouvez contribuer."
+        ),
+
+        # -- /donate --
+        "donate_message": (
+            "🙏 *Soutenez Christ of God Ministries*\n\n"
+            "Votre générosité aide à soutenir notre ministère et notre mission. "
+            "Si vous souhaitez contribuer, appuyez sur le bouton ci-dessous — "
+            "merci, et que l'Éternel vous bénisse !"
+        ),
+        "donate_button": "💝 Faire un don",
+        "donate_not_configured": (
+            "Les dons en ligne ne sont pas encore configurés. Parlez à "
+            "l'Ancien L. Williams des façons de contribuer."
+        ),
 
         # -- appointment statuses --
         "status_pending": "en attente",
@@ -732,6 +786,7 @@ CATALOG: dict[str, dict[str, str]] = {
             "/settimezone — setha izoni yesikhathi sakho yezikhathi eziboniswayo\n"
             "/language — khetha ulimi lwakho\n"
             "/notifications — khetha ukuthi yiziphi izikhumbuzo ozitholayo\n"
+            "/donate — sekela ibandla ngomnikelo\n"
             "/stop — yekisa ukubhalisa ezaziswayweni"
         ),
         "share_contact_prompt": (
@@ -920,6 +975,23 @@ CATALOG: dict[str, dict[str, str]] = {
             "*/notifications* — Khetha izikhumbuzo ozithola njengemilayezo yomuntu siqu "
             "(iSabatha neMihlangano eNgcwele, uMthandazo waNgeSonto Ekuseni, Imicimbi ekhethekile). "
             "Kuwusizo uma ungekho eqenjini lengxoxo lebandla."
+        ),
+        "help_donate": (
+            "*/donate* — Sekela ibandla ngomnikelo. Kuvula ikhasi lokupha "
+            "eliphephile lapho ungakhona ukunikela."
+        ),
+
+        # -- /donate --
+        "donate_message": (
+            "🙏 *Sekela i-Christ of God Ministries*\n\n"
+            "Ukupha kwakho kusiza ukusekela inkonzo yethu nomsebenzi wokufinyelela. "
+            "Uma ufisa ukunikela, thepha inkinobho engezansi — "
+            "siyabonga, futhi iNKOSI ikubusise!"
+        ),
+        "donate_button": "💝 Nikela manje",
+        "donate_not_configured": (
+            "Ukupha nge-inthanethi akukalungiselelwa okwamanje. Sicela ukhulume "
+            "noMdala u-L. Williams ngezindlela zokunikela."
         ),
 
         # -- appointment statuses --
