@@ -43,7 +43,7 @@ class TestDonate:
     def test_configured_sends_message_with_link_button(self):
         upd = _run_donate("https://paypal.me/example")
         text = upd.message.reply_text.call_args[0][0]
-        assert "Support the Congregation" in text
+        assert "Support Christ of God Ministries" in text
         markup = upd.message.reply_text.call_args.kwargs["reply_markup"]
         btn = markup.inline_keyboard[0][0]
         assert btn.url == "https://paypal.me/example"
@@ -60,7 +60,7 @@ class TestDonate:
             users=[{"chat_id": 111, "language": "es"}],
         )
         text = upd.message.reply_text.call_args[0][0]
-        assert "Apoya a la Congregación" in text
+        assert "Apoya a Christ of God Ministries" in text
 
     def test_help_topic_exists(self):
         import bot
