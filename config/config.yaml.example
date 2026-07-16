@@ -22,6 +22,11 @@ bot:
 notifications:
   default_minutes_before: 90
 
+donations:
+  # Optional link surfaced by /donate (e.g. a PayPal.me or giving-page URL).
+  # Leave blank to have /donate reply that online giving isn't set up yet.
+  url: "https://www.paypal.com/qrcodes/managed/14713709-55d0-4d15-8301-578338aefe5c"
+
 paths:
   data_dir: "data"
   logs_dir: "logs"

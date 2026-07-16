@@ -92,6 +92,8 @@ LOG_RETENTION = _CFG["log"]["retention_days"]
 # broadcasts; DEBUG additionally shows the underlying Telegram API calls.
 LOG_LEVEL = getattr(logging, str(_CFG["log"].get("level", "INFO")).upper(), logging.INFO)
 DEFAULT_NOTIF_MIN: int = _CFG["notifications"]["default_minutes_before"]
+# Optional donation link surfaced by /donate (e.g. a PayPal or giving-page URL).
+DONATION_URL: str = ((_CFG.get("donations") or {}).get("url") or "").strip()
 
 for _d in (DATA_DIR, LOGS_DIR, GEN_DIR):
     _d.mkdir(parents=True, exist_ok=True)
@@ -1204,6 +1206,7 @@ HELP_TOPICS = {
     "settimezone": "help_settimezone",
     "language": "help_language",
     "notifications": "help_notifications",
+    "donate": "help_donate",
 }
 
 
@@ -1230,6 +1233,23 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Hint that per-command help is available.
     text += "\n\n" + t("help_topic_hint", lang)
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+
+
+async def cmd_donate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    uid, uname, dname = user_info(update)
+    activity.log_command("donate", uid, uname, dname)
+    _, lang = await get_user_prefs(uid)
+    if not DONATION_URL:
+        await update.message.reply_text(t("donate_not_configured", lang))
+        return
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton(t("donate_button", lang), url=DONATION_URL)
+    ]])
+    await update.message.reply_text(
+        t("donate_message", lang),
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=kb,
+    )
 
 
 async def cmd_events(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -3542,6 +3562,7 @@ async def post_init(app: Application) -> None:
         BotCommand("settimezone", "Set your time zone for displayed times"),
         BotCommand("language", "Choose your language"),
         BotCommand("notifications", "Choose which reminders you receive"),
+        BotCommand("donate", "Support the congregation with a gift"),
         BotCommand("stop", "Unsubscribe from notifications"),
     ])
 
@@ -3724,6 +3745,7 @@ def main() -> None:
     app.add_handler(settimezone_conv)
     app.add_handler(language_conv)
     app.add_handler(CommandHandler("notifications", cmd_notifications))
+    app.add_handler(CommandHandler("donate", cmd_donate))
     app.add_handler(CallbackQueryHandler(
         notif_prefs_callback, pattern=f"^{re.escape(CB_NOTIFPREF_PREFIX)}"))
 
