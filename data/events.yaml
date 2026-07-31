@@ -46,6 +46,14 @@ convocation_announcements: {}
 convocation_urls:
   sabbath::Eve: https://us06web.zoom.us/j/81594253541?pwd=e3BzF98vLF2t2biXwRGbCVaRUUOrVN.1
   sabbath::Morning: https://us06web.zoom.us/j/81977710637?pwd=7n8cMom08dSCWhBxMMtTWYf7KGkXMb
+  rosh_hashanah::Eve: https://us06web.zoom.us/j/81594253541?pwd=e3BzF98vLF2t2biXwRGbCVaRUUOrVN.1
+  rosh_hashanah::Morning: https://us06web.zoom.us/j/81977710637?pwd=7n8cMom08dSCWhBxMMtTWYf7KGkXMb.1
+  yom_kippur::Eve: https://us06web.zoom.us/j/82236413869?pwd=bD67cY0qARNtkIme8r42yQQoOvqcx3.1
+  yom_kippur::Morning: https://us06web.zoom.us/j/82272051160?pwd=MHi4c6y9khb5wTQJOb0Zxs4v8lwQ8a.1
+  succoth_opening::Eve: https://us06web.zoom.us/j/81594253541?pwd=e3BzF98vLF2t2biXwRGbCVaRUUOrVN.1
+  succoth_closing::Eve: https://us06web.zoom.us/j/81594253541?pwd=e3BzF98vLF2t2biXwRGbCVaRUUOrVN.1
+  succoth_opening::Day: https://us06web.zoom.us/j/81977710637?pwd=7n8cMom08dSCWhBxMMtTWYf7KGkXMb
+  succoth_closing::Day: https://us06web.zoom.us/j/81977710637?pwd=7n8cMom08dSCWhBxMMtTWYf7KGkXMb
 
 # Optional per-service media, keyed by phase_key (like convocation_urls). Each
 # value is a public https URL or a local file path (media/...). Example:

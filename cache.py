@@ -3,6 +3,12 @@
 Checks the file's mtime on every access (throttled to once per 5 s) and
 reloads if the file was modified within the last 60 seconds, so manual edits
 to YAML files are picked up automatically.
+
+Two serialization modes:
+  - default: PyYAML safe_load/dump — for machine-owned files.
+  - round_trip=True: ruamel.yaml round-trip mode — preserves comments,
+    quoting, and indentation across load/save, for files admins also edit
+    by hand (e.g. events.yaml).
 """
 
 from __future__ import annotations
@@ -13,6 +19,16 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from ruamel.yaml import YAML
+
+
+def _make_rt_yaml() -> YAML:
+    rt = YAML(typ="rt")  # round-trip: keeps comments and formatting
+    rt.preserve_quotes = True
+    rt.indent(mapping=2, sequence=4, offset=2)
+    rt.allow_unicode = True
+    rt.width = 4096  # don't wrap long lines (e.g. Zoom URLs)
+    return rt
 
 
 class FileCache:
@@ -21,12 +37,13 @@ class FileCache:
     _MTIME_CHECK_INTERVAL = 5  # seconds between stat() calls
     _RELOAD_WINDOW = 60        # reload if file was modified within this many seconds
 
-    def __init__(self, filepath: str | Path) -> None:
+    def __init__(self, filepath: str | Path, round_trip: bool = False) -> None:
         self.filepath = Path(filepath)
         self._data: Any = None
         self._last_mtime: float = 0.0
         self._last_check: float = 0.0
         self._lock = asyncio.Lock()
+        self._rt = _make_rt_yaml() if round_trip else None
 
     async def get(self) -> Any:
         async with self._lock:
@@ -62,16 +79,25 @@ class FileCache:
     def _reload(self) -> None:
         try:
             with open(self.filepath, encoding="utf-8") as fh:
-                self._data = yaml.safe_load(fh) or {}
+                if self._rt is not None:
+                    self._data = self._rt.load(fh) or {}
+                else:
+                    self._data = yaml.safe_load(fh) or {}
         except Exception:
             self._data = {}
+
+    def _dump(self, data: Any, fh) -> None:
+        if self._rt is not None:
+            self._rt.dump(data, fh)
+        else:
+            yaml.dump(data, fh, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
     async def save(self, data: Any) -> None:
         async with self._lock:
             self._data = data
             self.filepath.parent.mkdir(parents=True, exist_ok=True)
             with open(self.filepath, "w", encoding="utf-8") as fh:
-                yaml.dump(data, fh, default_flow_style=False, allow_unicode=True, sort_keys=False)
+                self._dump(data, fh)
             try:
                 self._last_mtime = self.filepath.stat().st_mtime
             except FileNotFoundError:
@@ -82,7 +108,7 @@ class FileCache:
         self._data = data
         self.filepath.parent.mkdir(parents=True, exist_ok=True)
         with open(self.filepath, "w", encoding="utf-8") as fh:
-            yaml.dump(data, fh, default_flow_style=False, allow_unicode=True, sort_keys=False)
+            self._dump(data, fh)
         try:
             self._last_mtime = self.filepath.stat().st_mtime
         except FileNotFoundError:
