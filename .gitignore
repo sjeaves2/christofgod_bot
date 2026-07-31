@@ -11,6 +11,7 @@ logs/
 # User and appointment data (contains personal information)
 data/users.yaml
 data/appointments.yaml
+data/appointments_archive.yaml
 
 # Python cache
 __pycache__/
