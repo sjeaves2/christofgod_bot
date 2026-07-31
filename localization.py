@@ -288,6 +288,16 @@ CATALOG: dict[str, dict[str, str]] = {
             "Williams about ways to contribute."
         ),
 
+        # -- appointment reminder DMs --
+        "appt_reminder_user": (
+            "⏰ *Appointment reminder*\n\n"
+            "Your appointment with *{counterparty}* is {when}.\n_ID: {id}_"
+        ),
+        "appt_reminder_official": (
+            "⏰ *Appointment reminder*\n\n"
+            "Your appointment with *{counterparty}* is {when}.\n_ID: {id}_"
+        ),
+
         # -- appointment statuses --
         "status_pending": "pending",
         "status_confirmed": "confirmed",
@@ -520,6 +530,16 @@ CATALOG: dict[str, dict[str, str]] = {
         "donate_not_configured": (
             "Las donaciones en línea aún no están configuradas. Habla con el "
             "Anciano L. Williams sobre las formas de contribuir."
+        ),
+
+        # -- recordatorios de citas --
+        "appt_reminder_user": (
+            "⏰ *Recordatorio de cita*\n\n"
+            "Tu cita con *{counterparty}* es {when}.\n_ID: {id}_"
+        ),
+        "appt_reminder_official": (
+            "⏰ *Recordatorio de cita*\n\n"
+            "Tu cita con *{counterparty}* es {when}.\n_ID: {id}_"
         ),
 
         # -- appointment statuses --
@@ -757,6 +777,16 @@ CATALOG: dict[str, dict[str, str]] = {
             "l'Ancien L. Williams des façons de contribuer."
         ),
 
+        # -- rappels de rendez-vous --
+        "appt_reminder_user": (
+            "⏰ *Rappel de rendez-vous*\n\n"
+            "Votre rendez-vous avec *{counterparty}* est {when}.\n_ID : {id}_"
+        ),
+        "appt_reminder_official": (
+            "⏰ *Rappel de rendez-vous*\n\n"
+            "Votre rendez-vous avec *{counterparty}* est {when}.\n_ID : {id}_"
+        ),
+
         # -- appointment statuses --
         "status_pending": "en attente",
         "status_confirmed": "confirmé",
@@ -992,6 +1022,16 @@ CATALOG: dict[str, dict[str, str]] = {
         "donate_not_configured": (
             "Ukupha nge-inthanethi akukalungiselelwa okwamanje. Sicela ukhulume "
             "noMdala u-L. Williams ngezindlela zokunikela."
+        ),
+
+        # -- izikhumbuzo zama-aphoyintimenti --
+        "appt_reminder_user": (
+            "⏰ *Isikhumbuzo se-aphoyintimenti*\n\n"
+            "I-aphoyintimenti yakho no-*{counterparty}* ngo-{when}.\n_I-ID: {id}_"
+        ),
+        "appt_reminder_official": (
+            "⏰ *Isikhumbuzo se-aphoyintimenti*\n\n"
+            "I-aphoyintimenti yakho no-*{counterparty}* ngo-{when}.\n_I-ID: {id}_"
         ),
 
         # -- appointment statuses --
