@@ -171,6 +171,8 @@ activity = ActivityLogger(LOGS_DIR, retention_days=LOG_RETENTION, tz=TZ)
 events_cache = FileCache(DATA_DIR / "events.yaml", round_trip=True)
 users_cache = FileCache(DATA_DIR / "users.yaml")
 appts_cache = FileCache(DATA_DIR / "appointments.yaml")
+# Long-term storage for appointments archived out of the live file.
+appts_archive_cache = FileCache(DATA_DIR / "appointments_archive.yaml")
 # Tracks which recipients have already been notified for each event, so a
 # missed/partial broadcast can be retried later without duplicate sends.
 notif_state_cache = FileCache(DATA_DIR / "notification_state.yaml")
@@ -316,6 +318,73 @@ async def save_appointments(appts: list[dict[str, Any]]) -> None:
     data = appts_cache._data or {}
     data["appointments"] = appts
     await appts_cache.save(data)
+
+
+# Appointments whose date passed this many days ago are moved out of the live
+# file into data/appointments_archive.yaml (any status — a request still
+# "pending" 90 days after its date is dead).
+APPT_ARCHIVE_AFTER_DAYS = 90
+
+
+async def archive_old_appointments() -> int:
+    """Move long-past appointments to the archive file. Returns how many moved.
+
+    Records with unparseable dates are kept in the live file (never silently
+    discarded). The archive is append-only.
+    """
+    cutoff = now_tz() - timedelta(days=APPT_ARCHIVE_AFTER_DAYS)
+    appts = await get_appointments()
+    keep: list[dict[str, Any]] = []
+    old: list[dict[str, Any]] = []
+    for a in appts:
+        dt = _appt_datetime(a)
+        (old if dt is not None and dt < cutoff else keep).append(a)
+    if not old:
+        return 0
+    archive_data = await appts_archive_cache.get() or {}
+    archive = archive_data.get("appointments") or []
+    archive.extend(old)
+    archive_data["appointments"] = archive
+    await appts_archive_cache.save(archive_data)
+    await save_appointments(keep)
+    logger.info("Archived %d appointment(s) older than %d days (%d remain live).",
+                len(old), APPT_ARCHIVE_AFTER_DAYS, len(keep))
+    return len(old)
+
+
+# Archived appointments are permanently deleted once their date is this far in
+# the past, bounding the archive's growth (and how long congregants' meeting
+# records are retained).
+APPT_ARCHIVE_RETENTION_DAYS = 2 * 365
+
+
+async def purge_archived_appointments() -> int:
+    """Delete archived appointments past the retention window. Returns count.
+
+    Records with unparseable dates are kept (never silently discarded).
+    """
+    cutoff = now_tz() - timedelta(days=APPT_ARCHIVE_RETENTION_DAYS)
+    data = await appts_archive_cache.get() or {}
+    archive = data.get("appointments") or []
+    keep = []
+    for a in archive:
+        dt = _appt_datetime(a)
+        if dt is None or dt >= cutoff:
+            keep.append(a)
+    purged = len(archive) - len(keep)
+    if purged:
+        data["appointments"] = keep
+        await appts_archive_cache.save(data)
+        logger.info("Purged %d archived appointment(s) older than %d days.",
+                    purged, APPT_ARCHIVE_RETENTION_DAYS)
+    return purged
+
+
+async def appointment_archive_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Daily: move long-past appointments to the archive, then purge the
+    archive of anything past the retention window."""
+    await archive_old_appointments()
+    await purge_archived_appointments()
 
 
 def format_dt(dt: datetime, tz: "pytz.BaseTzInfo | None" = None, lang: "str | None" = None) -> str:
@@ -3691,6 +3760,15 @@ async def post_init(app: Application) -> None:
         interval=timedelta(minutes=5),
         first=timedelta(seconds=30),
         name="appointment_reminders",
+    )
+
+    # Move long-past appointments out of the live file (daily, and shortly
+    # after each startup).
+    app.job_queue.run_repeating(
+        appointment_archive_job,
+        interval=timedelta(days=1),
+        first=timedelta(seconds=60),
+        name="appointment_archive",
     )
 
 
