@@ -166,7 +166,9 @@ activity = ActivityLogger(LOGS_DIR, retention_days=LOG_RETENTION, tz=TZ)
 # File caches
 # ---------------------------------------------------------------------------
 
-events_cache = FileCache(DATA_DIR / "events.yaml")
+# Round-trip mode: admins hand-edit events.yaml, so comments/formatting must
+# survive the bot's own saves (e.g. /setservicelink).
+events_cache = FileCache(DATA_DIR / "events.yaml", round_trip=True)
 users_cache = FileCache(DATA_DIR / "users.yaml")
 appts_cache = FileCache(DATA_DIR / "appointments.yaml")
 # Tracks which recipients have already been notified for each event, so a
@@ -404,6 +406,80 @@ def _appt_datetime(appt: dict[str, Any]) -> "datetime | None":
     if dt_obj.tzinfo is None:
         dt_obj = TZ.localize(dt_obj)
     return dt_obj
+
+
+# Reminder DMs before a confirmed appointment, farthest first: (stage, minutes).
+APPT_REMINDER_STAGES: list[tuple[str, int]] = [("24h", 24 * 60), ("2h", 2 * 60)]
+
+
+async def _appt_reminder_recipients(appt: dict[str, Any]) -> dict:
+    """Both parties of an appointment as {chat_id: (tz, lang)}."""
+    recipients: dict = {}
+    user_cid = appt.get("user_chat_id")
+    if user_cid:
+        recipients[user_cid] = await get_user_prefs(user_cid)
+    off = _official_by_id(appt.get("official_id"))
+    off_cid = (off or {}).get("chat_id")
+    if off_cid:
+        recipients[off_cid] = await get_user_prefs(off_cid)
+    return recipients
+
+
+async def appointment_reminder_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send reminder DMs for confirmed appointments (24h and 2h before).
+
+    Runs on a short repeating interval. Idempotent: delivered chat_ids are
+    recorded per stage on the appointment record itself, so restarts and
+    partial failures retry only what's missing. If more than one stage is due
+    at once (e.g. the bot was offline, or the appointment was booked close in),
+    only the closest stage is sent — the farther ones are marked superseded.
+    Rescheduling re-arms reminders (state is cleared on re-confirmation).
+    """
+    now = now_tz()
+    appts = await get_appointments()
+    changed = False
+    for appt in appts:
+        if appt.get("status") != "confirmed":
+            continue
+        dt = _appt_datetime(appt)
+        if dt is None or dt <= now:
+            continue
+        due = [s for s, mins in APPT_REMINDER_STAGES
+               if now >= dt - timedelta(minutes=mins)]
+        if not due:
+            continue
+        closest = due[-1]  # stages are ordered farthest-first
+        recipients = await _appt_reminder_recipients(appt)
+        sent_map: dict = appt.setdefault("reminders_sent", {})
+        for stage in due:
+            done = set(sent_map.get(stage, []))
+            for chat_id, (u_tz, u_lang) in recipients.items():
+                if chat_id in done:
+                    continue
+                if stage != closest:
+                    done.add(chat_id)  # superseded by a closer stage
+                    changed = True
+                    continue
+                is_requester = chat_id == appt.get("user_chat_id")
+                key = "appt_reminder_user" if is_requester else "appt_reminder_official"
+                counterparty = (appt.get("official_name") if is_requester
+                                else appt.get("user_display_name")
+                                or appt.get("user_username") or "the requester")
+                try:
+                    await context.bot.send_message(
+                        chat_id,
+                        t(key, u_lang, id=appt["id"], counterparty=counterparty,
+                          when=format_dt(dt, u_tz, u_lang)),
+                        parse_mode=ParseMode.MARKDOWN,
+                    )
+                    done.add(chat_id)
+                    changed = True
+                except TelegramError as exc:
+                    logger.warning("Appointment reminder failed for chat %s (appt %s): %s",
+                                   chat_id, appt["id"], exc)
+            sent_map[stage] = sorted(done)
+    if changed:
+        await save_appointments(appts)
 
 
 def _appt_dt_label(appt: dict[str, Any], tz: "pytz.BaseTzInfo | None" = None,
@@ -2599,6 +2675,7 @@ async def _finalize_appointment(
 ) -> None:
     """Save confirmed appointment and send ICS to both the user and the official."""
     _stamp_appt_action(appt)
+    appt.pop("reminders_sent", None)  # re-arm reminder DMs for the (new) time
     for i, a in enumerate(appts):
         if a["id"] == appt["id"]:
             appts[i] = appt
@@ -3606,6 +3683,14 @@ async def post_init(app: Application) -> None:
         interval=timedelta(minutes=2),
         first=timedelta(seconds=20),
         name="notification_catchup",
+    )
+
+    # Appointment reminder DMs (24h and 2h before each confirmed appointment).
+    app.job_queue.run_repeating(
+        appointment_reminder_job,
+        interval=timedelta(minutes=5),
+        first=timedelta(seconds=30),
+        name="appointment_reminders",
     )
 
 
