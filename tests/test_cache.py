@@ -136,3 +136,72 @@ class TestFileCacheAsync:
 
         result = asyncio.get_event_loop().run_until_complete(run())
         assert result["n"] == 42
+
+
+# ---------------------------------------------------------------------------
+# Round-trip mode (comment/format preservation for hand-edited files)
+# ---------------------------------------------------------------------------
+
+_COMMENTED = """\
+# Header comment explaining the file.
+targets:
+  main: -100123
+# Trailing note about targets.
+urls:
+  sabbath::Eve: https://example.org/eve
+settings:
+  - alpha
+  # inline list comment
+  - beta
+"""
+
+
+class TestRoundTripMode:
+    def _cache(self, tmp_path):
+        p = tmp_path / "events.yaml"
+        p.write_text(_COMMENTED)
+        return p, FileCache(p, round_trip=True)
+
+    def test_load_save_preserves_comments(self, tmp_path):
+        p, cache = self._cache(tmp_path)
+        data = cache.get_sync()
+        cache.save_sync(data)
+        text = p.read_text()
+        assert "# Header comment explaining the file." in text
+        assert "# Trailing note about targets." in text
+        assert "# inline list comment" in text
+
+    def test_edit_preserved_alongside_comments(self, tmp_path):
+        p, cache = self._cache(tmp_path)
+        data = cache.get_sync()
+        data["urls"]["sabbath::Eve"] = "https://example.org/CHANGED"
+        data["urls"]["yom_kippur::Eve"] = "https://example.org/new"
+        cache.save_sync(data)
+        text = p.read_text()
+        assert "https://example.org/CHANGED" in text
+        assert "yom_kippur::Eve" in text
+        assert "# Header comment explaining the file." in text
+
+    def test_output_remains_pyyaml_parseable(self, tmp_path):
+        p, cache = self._cache(tmp_path)
+        data = cache.get_sync()
+        data["urls"]["x"] = "y"
+        cache.save_sync(data)
+        parsed = yaml.safe_load(p.read_text())
+        assert parsed["urls"]["x"] == "y"
+        assert parsed["targets"]["main"] == -100123
+
+    def test_sequence_indentation_preserved(self, tmp_path):
+        p, cache = self._cache(tmp_path)
+        cache.save_sync(cache.get_sync())
+        assert "  - alpha" in p.read_text()
+
+    def test_default_mode_still_plain_yaml(self, tmp_path):
+        p = tmp_path / "plain.yaml"
+        cache = FileCache(p)
+        cache.save_sync({"a": 1})
+        assert yaml.safe_load(p.read_text()) == {"a": 1}
+
+    def test_missing_file_round_trip(self, tmp_path):
+        cache = FileCache(tmp_path / "missing.yaml", round_trip=True)
+        assert cache.get_sync() == {}
