@@ -14,6 +14,7 @@ Usage:
 
 from __future__ import annotations
 
+import asyncio
 import calendar
 import io
 import logging
@@ -50,6 +51,7 @@ from telegram.ext import (
     filters,
 )
 
+import translation
 from activity_logger import ActivityLogger
 from cache import FileCache
 from hebrew_calendar import (
@@ -173,6 +175,8 @@ users_cache = FileCache(DATA_DIR / "users.yaml")
 appts_cache = FileCache(DATA_DIR / "appointments.yaml")
 # Long-term storage for appointments archived out of the live file.
 appts_archive_cache = FileCache(DATA_DIR / "appointments_archive.yaml")
+# General announcements shown by /announcements (state derived from expires).
+ann_cache = FileCache(DATA_DIR / "announcements.yaml")
 # Tracks which recipients have already been notified for each event, so a
 # missed/partial broadcast can be retried later without duplicate sends.
 notif_state_cache = FileCache(DATA_DIR / "notification_state.yaml")
@@ -380,11 +384,70 @@ async def purge_archived_appointments() -> int:
     return purged
 
 
-async def appointment_archive_job(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Daily: move long-past appointments to the archive, then purge the
-    archive of anything past the retention window."""
+async def get_announcements() -> list[dict[str, Any]]:
+    data = await ann_cache.get()
+    return data.get("announcements") or [] if data else []
+
+
+async def save_announcements(anns: list[dict[str, Any]]) -> None:
+    data = ann_cache._data or {}
+    data["announcements"] = anns
+    await ann_cache.save(data)
+
+
+# Expired announcements stay in the file (hidden from /announcements) for this
+# many days, then the daily maintenance job deletes them.
+ANNOUNCEMENT_PURGE_AFTER_DAYS = 30
+
+
+def _ann_expiry_dt(ann: dict[str, Any]) -> "datetime | None":
+    """An announcement expires at the END of its `expires` day, church time."""
+    try:
+        d = datetime.strptime(str(ann.get("expires", "")), "%Y-%m-%d")
+    except (ValueError, TypeError):
+        return None
+    return TZ.localize(d.replace(hour=23, minute=59, second=59))
+
+
+def _ann_is_active(ann: dict[str, Any], now: "datetime | None" = None) -> bool:
+    exp = _ann_expiry_dt(ann)
+    return exp is not None and (now or now_tz()) <= exp
+
+
+def active_announcements(anns: list[dict[str, Any]],
+                         now: "datetime | None" = None) -> list[dict[str, Any]]:
+    """Active announcements, newest first."""
+    now = now or now_tz()
+    live = [a for a in anns if _ann_is_active(a, now)]
+    return sorted(live, key=lambda a: str(a.get("created", "")), reverse=True)
+
+
+async def purge_old_announcements() -> int:
+    """Delete announcements expired more than the retention window ago.
+
+    Records with unparseable expiry dates are kept (never silently discarded).
+    """
+    cutoff = now_tz() - timedelta(days=ANNOUNCEMENT_PURGE_AFTER_DAYS)
+    anns = await get_announcements()
+    keep = []
+    for a in anns:
+        exp = _ann_expiry_dt(a)
+        if exp is None or exp >= cutoff:
+            keep.append(a)
+    purged = len(anns) - len(keep)
+    if purged:
+        await save_announcements(keep)
+        logger.info("Purged %d announcement(s) expired more than %d days ago.",
+                    purged, ANNOUNCEMENT_PURGE_AFTER_DAYS)
+    return purged
+
+
+async def daily_maintenance_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Daily: archive long-past appointments, purge the appointment archive,
+    and purge long-expired announcements."""
     await archive_old_appointments()
     await purge_archived_appointments()
+    await purge_old_announcements()
 
 
 def format_dt(dt: datetime, tz: "pytz.BaseTzInfo | None" = None, lang: "str | None" = None) -> str:
@@ -1229,6 +1292,9 @@ ADMIN_COMMANDS_TEXT = """\
 /deleteevent — remove or annotate an event
 /setservicelink — set the join link for a convocation/Sabbath service
 /broadcast — send a message to groups and/or all subscribers
+/addannouncement — create an announcement (title, body, expiration)
+/listannouncements — list active and recently-expired announcements
+/delannouncement — expire an active announcement now
 /listevents — events in the next 30 days (admin view)
 /usercount — number of registered users
 /userlist — list registered users
@@ -1352,6 +1418,7 @@ HELP_TOPICS = {
     "language": "help_language",
     "notifications": "help_notifications",
     "donate": "help_donate",
+    "announcements": "help_announcements",
 }
 
 
@@ -1443,6 +1510,236 @@ def admin_only(handler):
         return await handler(update, context)
     wrapper.__name__ = handler.__name__
     return wrapper
+
+
+# ---------------------------------------------------------------------------
+# /announcements — general announcements (user view + admin management)
+# ---------------------------------------------------------------------------
+
+ANN_TITLE_MAX = 64
+ANN_BODY_MAX = 1024
+
+# Conversation states. Offset past the BC_* constants (0-2) because the
+# add-announcement conversation re-enters the broadcast target-selection
+# states after saving.
+AN_TITLE, AN_BODY, AN_EXPIRES, AN_CONFIRM = range(3, 7)
+DA_SELECT = 7
+
+
+def _render_announcement(ann: dict[str, Any]) -> str:
+    """Markdown-safe '📢 title + body' block (admin-typed text is escaped)."""
+    title = escape_markdown(str(ann.get("title", "")), version=1)
+    body = escape_markdown(str(ann.get("body", "")), version=1)
+    return f"📢 *{title}*\n\n{body}"
+
+
+async def _announcement_for_lang(ann: dict[str, Any], lang: str) -> dict[str, Any]:
+    """The announcement with title/body in *lang*, machine-translating and
+    caching on first request.
+
+    Returns the record itself when no translation is needed (same language, or
+    a legacy record without a source lang), and falls back to the original text
+    whenever translation fails — announcements must never break because the
+    translator did.
+    """
+    src = ann.get("lang")
+    if not src or src == lang:
+        return ann
+    cached = (ann.get("translations") or {}).get(lang)
+    if cached:
+        return {**ann, "title": cached.get("title") or ann.get("title"),
+                "body": cached.get("body") or ann.get("body")}
+
+    loop = asyncio.get_event_loop()
+    title = await loop.run_in_executor(
+        None, translation.translate, str(ann.get("title", "")), src, lang)
+    body = await loop.run_in_executor(
+        None, translation.translate, str(ann.get("body", "")), src, lang)
+    if title is None and body is None:
+        return ann  # translator unavailable — show the original
+
+    entry = {"title": title or ann.get("title"), "body": body or ann.get("body")}
+    # Persist the translation on the stored record so it's done once per language.
+    anns = await get_announcements()
+    for a in anns:
+        if a.get("id") == ann.get("id"):
+            a.setdefault("translations", {})[lang] = entry
+            await save_announcements(anns)
+            break
+    return {**ann, **entry}
+
+
+async def cmd_announcements(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    uid, uname, dname = user_info(update)
+    activity.log_command("announcements", uid, uname, dname)
+    _, lang = await get_user_prefs(uid)
+    live = active_announcements(await get_announcements())
+    if not live:
+        await update.message.reply_text(t("ann_none", lang))
+        return
+    parts = [t("ann_header", lang)]
+    for a in live:
+        localized = await _announcement_for_lang(a, lang)
+        parts.append(
+            _render_announcement(localized) + "\n"
+            + t("ann_until", lang, date=a.get("expires", "?"))
+        )
+    await update.message.reply_text("\n\n".join(parts), parse_mode=ParseMode.MARKDOWN)
+
+
+@admin_only
+async def cmd_addannouncement(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    uid, uname, dname = user_info(update)
+    activity.log_command("addannouncement", uid, uname, dname)
+    context.user_data.clear()
+    await update.message.reply_text(
+        f"📢 *Add Announcement*\n\nTitle (max {ANN_TITLE_MAX} characters):",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return AN_TITLE
+
+
+async def an_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    title = update.message.text.strip()
+    if not title or len(title) > ANN_TITLE_MAX:
+        await update.message.reply_text(
+            f"Please send a title of 1–{ANN_TITLE_MAX} characters:")
+        return AN_TITLE
+    context.user_data["an_title"] = title
+    await update.message.reply_text(f"Body (max {ANN_BODY_MAX} characters):")
+    return AN_BODY
+
+
+async def an_body(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    body = update.message.text.strip()
+    if not body or len(body) > ANN_BODY_MAX:
+        await update.message.reply_text(
+            f"Please send a body of 1–{ANN_BODY_MAX} characters:")
+        return AN_BODY
+    context.user_data["an_body"] = body
+    await update.message.reply_text("Expiration date (YYYY-MM-DD) — the announcement "
+                                    "shows through the end of that day:")
+    return AN_EXPIRES
+
+
+async def an_expires(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text.strip()
+    try:
+        d = datetime.strptime(text, "%Y-%m-%d")
+    except ValueError:
+        await update.message.reply_text("Please use YYYY-MM-DD format:")
+        return AN_EXPIRES
+    if TZ.localize(d.replace(hour=23, minute=59, second=59)) < now_tz():
+        await update.message.reply_text(
+            "That date is in the past. Please enter today or a future date (YYYY-MM-DD):")
+        return AN_EXPIRES
+    context.user_data["an_expires"] = text
+    preview = _render_announcement(
+        {"title": context.user_data["an_title"], "body": context.user_data["an_body"]})
+    await update.message.reply_text(
+        f"{preview}\n\n_Expires: {text} (end of day)_\n\nSave this announcement? (yes/no)",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return AN_CONFIRM
+
+
+async def an_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    uid, uname, dname = user_info(update)
+    _, lang = await get_user_prefs(uid)
+    if not _is_affirmative(update.message.text):
+        await update.message.reply_text("Announcement discarded.")
+        return ConversationHandler.END
+
+    ann = {
+        "id": uuid.uuid4().hex[:8].upper(),
+        "title": context.user_data["an_title"],
+        "body": context.user_data["an_body"],
+        "lang": lang,  # source language; viewers in other languages get a
+                       # cached machine translation (see _announcement_for_lang)
+        "created": now_tz().isoformat(),
+        "created_by": dname,
+        "expires": context.user_data["an_expires"],
+    }
+    anns = await get_announcements()
+    anns.append(ann)
+    await save_announcements(anns)
+    activity.log_command("addannouncement", uid, uname, dname,
+                         details=f"Created announcement {ann['id']}")
+
+    # Hand off to the broadcast target-selection flow so the new announcement
+    # can be pushed out immediately (Cancel skips the push; it's already saved).
+    context.user_data["bc_message"] = _append_sender(_render_announcement(ann), dname)
+    context.user_data.pop("bc_media", None)
+    options = await _broadcast_target_options(context.bot, lang)
+    context.user_data["bc_options"] = options
+    context.user_data["bc_selected"] = set()
+    await update.message.reply_text(
+        f"✅ Announcement saved (ID: `{ann['id']}`).\n\n"
+        "Now choose where to broadcast it, then tap *Send* "
+        "(or *Cancel* to skip broadcasting — it will still appear in /announcements):",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=_bc_keyboard(options, set()),
+    )
+    return BC_SELECT
+
+
+@admin_only
+async def cmd_listannouncements(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    uid, uname, dname = user_info(update)
+    activity.log_command("listannouncements", uid, uname, dname)
+    anns = await get_announcements()
+    if not anns:
+        await update.message.reply_text("No announcements on record.")
+        return
+    now = now_tz()
+    lines = ["*Announcements (admin view):*\n"]
+    for a in sorted(anns, key=lambda x: str(x.get("created", "")), reverse=True):
+        mark = "🟢" if _ann_is_active(a, now) else "⚪️ expired"
+        title = escape_markdown(str(a.get("title", "?")), version=1)
+        lines.append(f"{mark} *{title}* — until {a.get('expires', '?')} (ID: `{a.get('id')}`)")
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+
+
+@admin_only
+async def cmd_delannouncement(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    uid, uname, dname = user_info(update)
+    activity.log_command("delannouncement", uid, uname, dname)
+    live = active_announcements(await get_announcements())
+    if not live:
+        await update.message.reply_text("There are no active announcements to remove.")
+        return ConversationHandler.END
+    context.user_data["da_anns"] = live
+    lines = ["*Remove an Announcement*\nReply with the number to expire it now:\n"]
+    for i, a in enumerate(live, 1):
+        title = escape_markdown(str(a.get("title", "?")), version=1)
+        lines.append(f"{i}. *{title}* — until {a.get('expires', '?')}")
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+    return DA_SELECT
+
+
+async def da_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    uid, uname, dname = user_info(update)
+    live: list = context.user_data.get("da_anns", [])
+    text = update.message.text.strip()
+    if not text.isdigit() or not (1 <= int(text) <= len(live)):
+        await update.message.reply_text("Please reply with one of the listed numbers:")
+        return DA_SELECT
+    target = live[int(text) - 1]
+    anns = await get_announcements()
+    yesterday = (now_tz() - timedelta(days=1)).strftime("%Y-%m-%d")
+    for a in anns:
+        if a.get("id") == target.get("id"):
+            a["expires"] = yesterday  # expires immediately; purged after 30 days
+            break
+    await save_announcements(anns)
+    activity.log_command("delannouncement", uid, uname, dname,
+                         details=f"Expired announcement {target.get('id')}")
+    await update.message.reply_text(
+        f"✅ Announcement `{target.get('id')}` is no longer shown. "
+        f"It will be permanently deleted after {ANNOUNCEMENT_PURGE_AFTER_DAYS} days.",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return ConversationHandler.END
 
 
 # ---------------------------------------------------------------------------
@@ -3734,6 +4031,7 @@ async def post_init(app: Application) -> None:
         BotCommand("language", "Choose your language"),
         BotCommand("notifications", "Choose which reminders you receive"),
         BotCommand("donate", "Support the congregation with a gift"),
+        BotCommand("announcements", "View current announcements"),
         BotCommand("stop", "Unsubscribe from notifications"),
     ])
 
@@ -3762,13 +4060,13 @@ async def post_init(app: Application) -> None:
         name="appointment_reminders",
     )
 
-    # Move long-past appointments out of the live file (daily, and shortly
-    # after each startup).
+    # Daily maintenance: archive/purge old appointments and purge long-expired
+    # announcements (runs shortly after each startup, then every 24h).
     app.job_queue.run_repeating(
-        appointment_archive_job,
+        daily_maintenance_job,
         interval=timedelta(days=1),
         first=timedelta(seconds=60),
-        name="appointment_archive",
+        name="daily_maintenance",
     )
 
 
@@ -3934,6 +4232,32 @@ def main() -> None:
     app.add_handler(language_conv)
     app.add_handler(CommandHandler("notifications", cmd_notifications))
     app.add_handler(CommandHandler("donate", cmd_donate))
+    app.add_handler(CommandHandler("announcements", cmd_announcements))
+    app.add_handler(CommandHandler("listannouncements", cmd_listannouncements))
+
+    add_announcement_conv = ConversationHandler(
+        entry_points=[CommandHandler("addannouncement", cmd_addannouncement)],
+        states={
+            AN_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, an_title)],
+            AN_BODY: [MessageHandler(filters.TEXT & ~filters.COMMAND, an_body)],
+            AN_EXPIRES: [MessageHandler(filters.TEXT & ~filters.COMMAND, an_expires)],
+            AN_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, an_confirm)],
+            # After saving, the flow re-uses the broadcast target selection.
+            BC_SELECT: [CallbackQueryHandler(bc_select, pattern=f"^{re.escape(CB_BC_PREFIX)}")],
+            BC_RETRY: [CallbackQueryHandler(bc_retry, pattern=f"^{re.escape(CB_BC_PREFIX)}retry:")],
+        },
+        fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
+    )
+    app.add_handler(add_announcement_conv)
+
+    del_announcement_conv = ConversationHandler(
+        entry_points=[CommandHandler("delannouncement", cmd_delannouncement)],
+        states={
+            DA_SELECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, da_select)],
+        },
+        fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
+    )
+    app.add_handler(del_announcement_conv)
     app.add_handler(CallbackQueryHandler(
         notif_prefs_callback, pattern=f"^{re.escape(CB_NOTIFPREF_PREFIX)}"))
 

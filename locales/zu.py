@@ -23,6 +23,7 @@ STRINGS: dict[str, str] = {
         "/language — khetha ulimi lwakho\n"
         "/notifications — khetha ukuthi yiziphi izikhumbuzo ozitholayo\n"
         "/donate — sekela ibandla ngomnikelo\n"
+        "/announcements — buka izimemezelo zamanje\n"
         "/stop — yekisa ukubhalisa ezaziswayweni"
     ),
     "share_contact_prompt": (
@@ -228,6 +229,15 @@ STRINGS: dict[str, str] = {
     "donate_not_configured": (
         "Ukupha nge-inthanethi akukalungiselelwa okwamanje. Sicela ukhulume "
         "noMdala u-L. Williams ngezindlela zokunikela."
+    ),
+
+    # -- /announcements --
+    "ann_header": "📣 *Izimemezelo*",
+    "ann_none": "Azikho izimemezelo okwamanje.",
+    "ann_until": "_Isebenza kuze kube ngu-{date}_",
+    "help_announcements": (
+        "*/announcements* — Buka izimemezelo zamanje zebandla. "
+        "Ngasinye siboniswa kuze kudlule usuku laso lokuphelelwa yisikhathi."
     ),
 
     # -- izikhumbuzo zama-aphoyintimenti --
