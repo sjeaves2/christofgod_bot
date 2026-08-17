@@ -20,6 +20,7 @@ STRINGS: dict[str, str] = {
         "/language — elegir tu idioma\n"
         "/notifications — elegir qué recordatorios recibes\n"
         "/donate — apoyar a la congregación con una ofrenda\n"
+        "/announcements — ver los anuncios actuales\n"
         "/stop — cancelar la suscripción a las notificaciones"
     ),
     "share_contact_prompt": (
@@ -224,6 +225,15 @@ STRINGS: dict[str, str] = {
     "donate_not_configured": (
         "Las donaciones en línea aún no están configuradas. Habla con el "
         "Anciano L. Williams sobre las formas de contribuir."
+    ),
+
+    # -- /announcements --
+    "ann_header": "📣 *Anuncios*",
+    "ann_none": "No hay anuncios en este momento.",
+    "ann_until": "_Válido hasta el {date}_",
+    "help_announcements": (
+        "*/announcements* — Ver los anuncios actuales de la congregación. "
+        "Cada uno se muestra hasta que pase su fecha de expiración."
     ),
 
     # -- recordatorios de citas --

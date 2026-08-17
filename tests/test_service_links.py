@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -18,6 +18,12 @@ import pytz
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 TZ = pytz.timezone("America/New_York")
+
+
+def _day(days_ahead: int, hour: int, minute: int):
+    """A time of day N days out — relative so it never rots."""
+    base = datetime.now(TZ) + timedelta(days=days_ahead)
+    return base.replace(hour=hour, minute=minute, second=0, microsecond=0)
 
 
 def _run(coro):
@@ -54,21 +60,21 @@ class TestUrlAttachment:
         import bot
 
         sabbath_eve = {
-            "key": "sabbath_eve_2099-01-02",
+            "key": "sabbath_eve_test",
             "phase_key": "sabbath::Eve",
             "name": "God's Holy Convocation—Sabbath Eve",
-            "service_time": TZ.localize(datetime(2099, 1, 2, 18, 0)),
-            "notification_time": TZ.localize(datetime(2099, 1, 2, 16, 30)),
+            "service_time": _day(30, 18, 0),
+            "notification_time": _day(30, 16, 30),
             "duration_minutes": 90,
             "type": "convocation",
             "announcements": [],
         }
         sabbath_morning = {
-            "key": "sabbath_morning_2099-01-03",
+            "key": "sabbath_morning_test",
             "phase_key": "sabbath::Morning",
             "name": "God's Holy Convocation—Sabbath Morning",
-            "service_time": TZ.localize(datetime(2099, 1, 3, 11, 0)),
-            "notification_time": TZ.localize(datetime(2099, 1, 3, 9, 30)),
+            "service_time": _day(31, 11, 0),
+            "notification_time": _day(31, 9, 30),
             "duration_minutes": 90,
             "type": "convocation",
             "announcements": [],
@@ -176,7 +182,7 @@ class TestNotificationLink:
     def _event(self, **extra):
         ev = {
             "name": "God's Holy Convocation—Sabbath Eve",
-            "service_time": TZ.localize(datetime(2099, 1, 2, 18, 0)),
+            "service_time": _day(30, 18, 0),
             "announcements": [],
         }
         ev.update(extra)
