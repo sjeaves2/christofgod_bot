@@ -19,6 +19,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 TZ = pytz.timezone("America/New_York")
 
 
+def _future(hour: int, minute: int):
+    """A fixed time of day on a day ~30 days out — relative so it never rots."""
+    base = datetime.now(TZ) + timedelta(days=30)
+    return base.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+
 def _run(coro):
     return asyncio.get_event_loop().run_until_complete(coro)
 
@@ -143,56 +149,56 @@ class TestOverlapHelper:
 
     def test_exact_same_time_overlaps(self):
         from bot import _overlapping_appt
-        t = TZ.localize(datetime(2099, 6, 1, 10, 0))
+        t = _future(10, 0)
         appts = [self._appt_at(t)]
         assert _overlapping_appt(appts, 111, t, 30) is not None
 
     def test_partial_overlap_detected(self):
         from bot import _overlapping_appt
-        existing = TZ.localize(datetime(2099, 6, 1, 10, 0))  # 10:00–10:30
-        new = TZ.localize(datetime(2099, 6, 1, 10, 15))       # 10:15–10:45
+        existing = _future(10, 0)  # 10:00–10:30
+        new = _future(10, 15)       # 10:15–10:45
         assert _overlapping_appt([self._appt_at(existing)], 111, new, 30) is not None
 
     def test_adjacent_back_to_back_does_not_overlap(self):
         from bot import _overlapping_appt
-        existing = TZ.localize(datetime(2099, 6, 1, 10, 0))   # 10:00–10:30
-        new = TZ.localize(datetime(2099, 6, 1, 10, 30))        # 10:30–11:00
+        existing = _future(10, 0)   # 10:00–10:30
+        new = _future(10, 30)        # 10:30–11:00
         assert _overlapping_appt([self._appt_at(existing)], 111, new, 30) is None
 
     def test_non_overlapping_times_ok(self):
         from bot import _overlapping_appt
-        existing = TZ.localize(datetime(2099, 6, 1, 10, 0))
-        new = TZ.localize(datetime(2099, 6, 1, 14, 0))
+        existing = _future(10, 0)
+        new = _future(14, 0)
         assert _overlapping_appt([self._appt_at(existing)], 111, new, 30) is None
 
     def test_overlap_across_different_officials(self):
         from bot import _overlapping_appt
-        t = TZ.localize(datetime(2099, 6, 1, 10, 0))
+        t = _future(10, 0)
         appts = [self._appt_at(t, official_id="off2")]
         assert _overlapping_appt(appts, 111, t, 30) is not None
 
     def test_other_users_overlap_ignored(self):
         from bot import _overlapping_appt
-        t = TZ.localize(datetime(2099, 6, 1, 10, 0))
+        t = _future(10, 0)
         appts = [self._appt_at(t, user_chat_id=222)]
         assert _overlapping_appt(appts, 111, t, 30) is None
 
     def test_cancelled_overlap_ignored(self):
         from bot import _overlapping_appt
-        t = TZ.localize(datetime(2099, 6, 1, 10, 0))
+        t = _future(10, 0)
         appts = [self._appt_at(t, status="cancelled")]
         assert _overlapping_appt(appts, 111, t, 30) is None
 
     def test_exclude_id_skips_self(self):
         from bot import _overlapping_appt
-        t = TZ.localize(datetime(2099, 6, 1, 10, 0))
+        t = _future(10, 0)
         appts = [self._appt_at(t, appt_id="SELF")]
         assert _overlapping_appt(appts, 111, t, 30, exclude_id="SELF") is None
 
     def test_longer_existing_duration_overlaps(self):
         from bot import _overlapping_appt
-        existing = TZ.localize(datetime(2099, 6, 1, 10, 0))    # 10:00–11:00 (60 min)
-        new = TZ.localize(datetime(2099, 6, 1, 10, 45))         # 10:45–11:15
+        existing = _future(10, 0)    # 10:00–11:00 (60 min)
+        new = _future(10, 45)         # 10:45–11:15
         assert _overlapping_appt([self._appt_at(existing, duration=60)], 111, new, 30) is not None
 
 

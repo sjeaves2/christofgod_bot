@@ -12,6 +12,7 @@ logs/
 data/users.yaml
 data/appointments.yaml
 data/appointments_archive.yaml
+data/announcements.yaml
 
 # Python cache
 __pycache__/

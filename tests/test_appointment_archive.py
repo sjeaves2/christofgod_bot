@@ -141,13 +141,16 @@ class TestRetentionPurge:
         purged, saved = self._run_purge([bad])
         assert purged == 0
 
-    def test_job_runs_archive_then_purge(self):
+    def test_job_runs_archive_then_purges(self):
         import bot
         from unittest.mock import AsyncMock, MagicMock
         arch = AsyncMock(return_value=0)
         purge = AsyncMock(return_value=0)
+        ann_purge = AsyncMock(return_value=0)
         with patch("bot.archive_old_appointments", arch), \
-             patch("bot.purge_archived_appointments", purge):
-            _run(bot.appointment_archive_job(MagicMock()))
+             patch("bot.purge_archived_appointments", purge), \
+             patch("bot.purge_old_announcements", ann_purge):
+            _run(bot.daily_maintenance_job(MagicMock()))
         arch.assert_awaited_once()
         purge.assert_awaited_once()
+        ann_purge.assert_awaited_once()

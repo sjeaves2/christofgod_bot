@@ -28,7 +28,9 @@ def _make_appt(
     official_name: str = "Pastor Test",
     official_chat_id: int | None = 999,
 ) -> dict:
-    dt = TZ.localize(datetime(2026, 8, 1, 10, 0))
+    # Always in the future — a fixed date would rot as the calendar passes it.
+    dt = (datetime.now(TZ) + timedelta(days=5)).replace(
+        hour=10, minute=0, second=0, microsecond=0)
     return {
         "id": appt_id,
         "user_chat_id": user_chat_id,
