@@ -52,8 +52,6 @@ from telegram.ext import (
 )
 
 import translation
-from activity_logger import ActivityLogger
-from cache import FileCache
 from hebrew_calendar import (
     all_upcoming_events,
     service_phases,
@@ -74,115 +72,37 @@ from ics_generator import (
 from pdf_generator import generate_user_list_pdf
 
 # ---------------------------------------------------------------------------
-# Boot-time configuration
+# Boot-time configuration and data stores (extracted modules; names are
+# re-imported here so existing code and tests keep addressing them as bot.*)
 # ---------------------------------------------------------------------------
 
-BASE_DIR = Path(__file__).parent
-CONFIG_DIR = BASE_DIR / "config"
+from settings import (
+    BASE_DIR,
+    BOT_DISPLAY_NAME,
+    BOT_TOKEN,
+    CONFIG_DIR,
+    DEFAULT_NOTIF_MIN,
+    DONATION_URL,
+    TZ,
+    activity,
+)
+from storage import (
+    _load_known_groups,
+    _load_notif_state,
+    _save_known_groups,
+    _save_notif_state,
+    appts_archive_cache,
+    get_all_events_data,
+    get_all_users,
+    get_announcements,
+    get_appointments,
+    save_announcements,
+    save_appointments,
+    save_events_data,
+    save_users,
+)
 
-with open(CONFIG_DIR / "config.yaml", encoding="utf-8") as _f:
-    _CFG = yaml.safe_load(_f)
-
-BOT_TOKEN: str = _CFG["bot"]["token"]
-TZ = pytz.timezone(_CFG["bot"]["timezone"])
-BOT_DISPLAY_NAME: str = _CFG["bot"].get("display_name", "Kingdom Events Bot")
-DATA_DIR = BASE_DIR / _CFG["paths"]["data_dir"]
-LOGS_DIR = BASE_DIR / _CFG["paths"]["logs_dir"]
-GEN_DIR = BASE_DIR / _CFG["paths"]["generated_dir"]
-LOG_RETENTION = _CFG["log"]["retention_days"]
-# Console/file log verbosity. INFO shows command execution + notification
-# broadcasts; DEBUG additionally shows the underlying Telegram API calls.
-LOG_LEVEL = getattr(logging, str(_CFG["log"].get("level", "INFO")).upper(), logging.INFO)
-DEFAULT_NOTIF_MIN: int = _CFG["notifications"]["default_minutes_before"]
-# Optional donation link surfaced by /donate (e.g. a PayPal or giving-page URL).
-DONATION_URL: str = ((_CFG.get("donations") or {}).get("url") or "").strip()
-
-for _d in (DATA_DIR, LOGS_DIR, GEN_DIR):
-    _d.mkdir(parents=True, exist_ok=True)
-
-_LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-_log_file = LOGS_DIR / "bot.log"
-
-# Console handler — always on
-_console_handler = logging.StreamHandler()
-_console_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
-_console_handler.setLevel(LOG_LEVEL)
-
-# File handler — appends across restarts
-_file_handler = logging.FileHandler(_log_file, mode="a", encoding="utf-8")
-_file_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
-_file_handler.setLevel(LOG_LEVEL)
-
-# Root at DEBUG so demoted-to-DEBUG records can reach handlers; the handlers'
-# own levels (LOG_LEVEL) decide what is actually emitted.
-logging.basicConfig(level=logging.DEBUG, handlers=[_console_handler, _file_handler])
 logger = logging.getLogger(__name__)
-logger.info("---- Bot process started ----")
-
-
-class _HttpxApiLogFilter(logging.Filter):
-    """Keep the Telegram API call logs out of the way at INFO level.
-
-    - The very first getUpdates poll is replaced with a friendly INFO notice.
-    - Any HTTP 4xx/5xx response is left at its original level so API errors
-      always surface.
-    - Every other successful API request line (getUpdates polls, sendMessage,
-      etc.) is demoted to DEBUG, so it only appears when LOG_LEVEL=DEBUG.
-      This also keeps the bot token (embedded in request URLs) out of the
-      INFO-level logs.
-    """
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._seen_first = False
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        msg = record.getMessage()
-        if "HTTP Request" not in msg and "getUpdates" not in msg:
-            return True  # unrelated record — pass through unchanged
-
-        status_match = re.search(r'"HTTP/[\d.]+ (\d{3})', msg)
-        if status_match and int(status_match.group(1)) >= 400:
-            return True  # always surface API errors at their original level
-
-        if "getUpdates" in msg and not self._seen_first:
-            self._seen_first = True
-            record.msg = (
-                "Long polling started — using getUpdates to check for incoming messages"
-            )
-            record.args = ()
-            return True  # friendly one-time INFO notice
-
-        # Successful API calls → DEBUG (hidden unless LOG_LEVEL=DEBUG)
-        record.levelno = logging.DEBUG
-        record.levelname = "DEBUG"
-        return True
-
-
-_httpx_api_filter = _HttpxApiLogFilter()
-logging.getLogger("httpx").addFilter(_httpx_api_filter)
-
-activity = ActivityLogger(LOGS_DIR, retention_days=LOG_RETENTION, tz=TZ)
-
-# ---------------------------------------------------------------------------
-# File caches
-# ---------------------------------------------------------------------------
-
-# Round-trip mode: admins hand-edit events.yaml, so comments/formatting must
-# survive the bot's own saves (e.g. /setservicelink).
-events_cache = FileCache(DATA_DIR / "events.yaml", round_trip=True)
-users_cache = FileCache(DATA_DIR / "users.yaml")
-appts_cache = FileCache(DATA_DIR / "appointments.yaml")
-# Long-term storage for appointments archived out of the live file.
-appts_archive_cache = FileCache(DATA_DIR / "appointments_archive.yaml")
-# General announcements shown by /announcements (state derived from expires).
-ann_cache = FileCache(DATA_DIR / "announcements.yaml")
-# Tracks which recipients have already been notified for each event, so a
-# missed/partial broadcast can be retried later without duplicate sends.
-notif_state_cache = FileCache(DATA_DIR / "notification_state.yaml")
-# Groups/channels the bot has been added to (discovered via membership events),
-# used to populate the /broadcast target list.
-groups_cache = FileCache(DATA_DIR / "known_groups.yaml")
 
 # Admins are loaded once at startup and kept in memory.
 # Each entry may carry a `username`, a `phone`, or both.
@@ -293,37 +213,6 @@ def user_info(update: Update) -> tuple[int, str | None, str]:
     return u.id, u.username, u.full_name or u.first_name or str(u.id)
 
 
-async def get_all_users() -> list[dict[str, Any]]:
-    data = await users_cache.get()
-    return data.get("users") or [] if data else []
-
-
-async def save_users(users: list[dict[str, Any]]) -> None:
-    data = users_cache._data or {}
-    data["users"] = users
-    await users_cache.save(data)
-
-
-async def get_all_events_data() -> dict[str, Any]:
-    data = await events_cache.get()
-    return data or {}
-
-
-async def save_events_data(data: dict[str, Any]) -> None:
-    await events_cache.save(data)
-
-
-async def get_appointments() -> list[dict[str, Any]]:
-    data = await appts_cache.get()
-    return data.get("appointments") or [] if data else []
-
-
-async def save_appointments(appts: list[dict[str, Any]]) -> None:
-    data = appts_cache._data or {}
-    data["appointments"] = appts
-    await appts_cache.save(data)
-
-
 # Appointments whose date passed this many days ago are moved out of the live
 # file into data/appointments_archive.yaml (any status — a request still
 # "pending" 90 days after its date is dead).
@@ -382,17 +271,6 @@ async def purge_archived_appointments() -> int:
         logger.info("Purged %d archived appointment(s) older than %d days.",
                     purged, APPT_ARCHIVE_RETENTION_DAYS)
     return purged
-
-
-async def get_announcements() -> list[dict[str, Any]]:
-    data = await ann_cache.get()
-    return data.get("announcements") or [] if data else []
-
-
-async def save_announcements(anns: list[dict[str, Any]]) -> None:
-    data = ann_cache._data or {}
-    data["announcements"] = anns
-    await ann_cache.save(data)
 
 
 # Expired announcements stay in the file (hidden from /announcements) for this
@@ -1055,15 +933,6 @@ def _render_notification(event: dict[str, Any], tz: "pytz.BaseTzInfo", lang: str
         lines.append("\n" + t("notif_announcements_header", lang))
         lines.extend(f"• {a}" for a in event["announcements"])
     return "\n".join(lines)
-
-
-async def _load_notif_state() -> dict[str, Any]:
-    data = await notif_state_cache.get()
-    return (data or {}).get("states") or {}
-
-
-async def _save_notif_state(states: dict[str, Any]) -> None:
-    await notif_state_cache.save({"states": states})
 
 
 # ---------------------------------------------------------------------------
@@ -3956,15 +3825,6 @@ async def _log_command_invocation(update: Update, context: ContextTypes.DEFAULT_
 
 
 _ACTIVE_MEMBER_STATUSES = ("member", "administrator", "creator")
-
-
-async def _load_known_groups() -> dict[str, Any]:
-    data = await groups_cache.get()
-    return (data or {}).get("groups") or {}
-
-
-async def _save_known_groups(groups: dict[str, Any]) -> None:
-    await groups_cache.save({"groups": groups})
 
 
 async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
