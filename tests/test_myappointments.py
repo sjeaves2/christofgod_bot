@@ -81,8 +81,8 @@ def _run_cmd(appts, officials, chat_id=111, username="requester"):
     async def _fake_get():
         return appts
 
-    with patch("bot.get_appointments", side_effect=_fake_get), \
-         patch("bot.OFFICIALS", officials):
+    with patch("storage.get_appointments", side_effect=_fake_get), \
+         patch("permissions.OFFICIALS", officials):
         _run(cmd_myappointments(upd, ctx))
     return upd.message.reply_text.call_args[0][0]
 

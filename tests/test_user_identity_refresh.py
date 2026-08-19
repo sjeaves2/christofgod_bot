@@ -26,8 +26,8 @@ def _patched(users, saved):
     async def _save(u):
         saved["users"] = u
 
-    return patch("bot.get_all_users", side_effect=_get), \
-        patch("bot.save_users", side_effect=_save)
+    return patch("storage.get_all_users", side_effect=_get), \
+        patch("storage.save_users", side_effect=_save)
 
 
 class TestRefreshHelper:

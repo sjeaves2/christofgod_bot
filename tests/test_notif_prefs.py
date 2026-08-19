@@ -98,7 +98,7 @@ class TestNotificationRecipients:
         async def _fake_users():
             return users
 
-        with patch("bot.get_all_users", side_effect=_fake_users):
+        with patch("storage.get_all_users", side_effect=_fake_users):
             return _run(bot._notification_recipients(event))
 
     def test_groups_only_when_nobody_opted_in(self):
@@ -150,8 +150,8 @@ class TestSetGetPrefs:
         async def _save(u):
             saved["users"] = u
 
-        with patch("bot.get_all_users", side_effect=_get), \
-             patch("bot.save_users", side_effect=_save):
+        with patch("storage.get_all_users", side_effect=_get), \
+             patch("storage.save_users", side_effect=_save):
             _run(bot._set_user_notif_prefs(111, "friend", "Church Friend",
                                            {"convocations"}))
         rec = saved["users"][0]
@@ -169,8 +169,8 @@ class TestSetGetPrefs:
         async def _save(u):
             saved["users"] = u
 
-        with patch("bot.get_all_users", side_effect=_get), \
-             patch("bot.save_users", side_effect=_save):
+        with patch("storage.get_all_users", side_effect=_get), \
+             patch("storage.save_users", side_effect=_save):
             _run(bot._set_user_notif_prefs(111, "friend", "Church Friend",
                                            {"special", "convocations"}))
         assert saved["users"][0]["notif_prefs"] == ["convocations", "special"]
@@ -182,7 +182,7 @@ class TestSetGetPrefs:
         async def _get():
             return users
 
-        with patch("bot.get_all_users", side_effect=_get):
+        with patch("storage.get_all_users", side_effect=_get):
             prefs = _run(bot._get_user_notif_prefs(111))
         assert prefs == {"sunday_prayer"}
 
@@ -200,7 +200,7 @@ class TestCmdNotifications:
         async def _get():
             return [{"chat_id": 111}]
 
-        with patch("bot.get_all_users", side_effect=_get):
+        with patch("storage.get_all_users", side_effect=_get):
             _run(bot.cmd_notifications(upd, ctx))
         markup = upd.message.reply_text.call_args.kwargs["reply_markup"]
         cbs = [b.callback_data for row in markup.inline_keyboard for b in row]
@@ -221,8 +221,8 @@ class TestNotifCallback:
         async def _save(u):
             saved["users"] = u
 
-        with patch("bot.get_all_users", side_effect=_get), \
-             patch("bot.save_users", side_effect=_save):
+        with patch("storage.get_all_users", side_effect=_get), \
+             patch("storage.save_users", side_effect=_save):
             _run(bot.notif_prefs_callback(upd, ctx))
         return q, saved
 
@@ -280,10 +280,10 @@ class TestDeliveryToOptedIn:
             sent.append(chat_id)
             return True
 
-        with patch("bot.get_all_users", side_effect=_get_users), \
-             patch("bot._load_notif_state", side_effect=_load_state), \
-             patch("bot._save_notif_state", side_effect=_save_state), \
-             patch("bot._send_notification_payload", side_effect=_send_payload):
+        with patch("storage.get_all_users", side_effect=_get_users), \
+             patch("storage._load_notif_state", side_effect=_load_state), \
+             patch("storage._save_notif_state", side_effect=_save_state), \
+             patch("handlers.notifications._send_notification_payload", side_effect=_send_payload):
             count = _run(bot.deliver_event_notifications(MagicMock(), event))
         assert count == 1
         assert sent == [111]
@@ -303,8 +303,8 @@ class TestHelpTopics:
         async def _get():
             return [{"chat_id": 111}]
 
-        with patch("bot.get_all_users", side_effect=_get), \
-             patch("bot.is_admin", return_value=False):
+        with patch("storage.get_all_users", side_effect=_get), \
+             patch("permissions.is_admin", return_value=False):
             _run(bot.cmd_help(upd, ctx))
         return upd.message.reply_text.call_args[0][0]
 

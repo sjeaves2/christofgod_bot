@@ -216,8 +216,8 @@ def _run_ap_time(date_str, time_str, existing_appts=None):
     async def _fake_get():
         return list(existing_appts or [])
 
-    with patch("bot.get_appointments", side_effect=_fake_get), \
-         patch("bot.OFFICIALS", _officials()):
+    with patch("storage.get_appointments", side_effect=_fake_get), \
+         patch("permissions.OFFICIALS", _officials()):
         result = _run(ap_time(upd, ctx))
     return result, upd, ctx
 
@@ -325,8 +325,8 @@ class TestApOfficialSelection:
         async def _fake_get():
             return appts
 
-        with patch("bot.get_appointments", side_effect=_fake_get), \
-             patch("bot.OFFICIALS", _officials()):
+        with patch("storage.get_appointments", side_effect=_fake_get), \
+             patch("permissions.OFFICIALS", _officials()):
             result = _run(ap_official(upd, ctx))
         return result, q, ctx
 
@@ -386,8 +386,8 @@ class TestPerOfficialWindowLimit:
         async def _fake_get():
             return list(existing)
 
-        with patch("bot.get_appointments", side_effect=_fake_get), \
-             patch("bot.OFFICIALS", _officials()):
+        with patch("storage.get_appointments", side_effect=_fake_get), \
+             patch("permissions.OFFICIALS", _officials()):
             result = _run(ap_official(upd, ctx))
         return result, q, ctx
 
@@ -460,10 +460,10 @@ class TestConfirmGuard:
         async def _fake_notify(context, appt, update):
             pass
 
-        with patch("bot.get_appointments", side_effect=_fake_get), \
-             patch("bot.save_appointments", side_effect=_fake_save), \
-             patch("bot.OFFICIALS", _officials()), \
-             patch("bot._notify_official_of_request", side_effect=_fake_notify):
+        with patch("storage.get_appointments", side_effect=_fake_get), \
+             patch("storage.save_appointments", side_effect=_fake_save), \
+             patch("permissions.OFFICIALS", _officials()), \
+             patch("handlers.appointments._notify_official_of_request", side_effect=_fake_notify):
             result = _run(ap_confirm(upd, ctx))
         return result, upd, saved
 
@@ -579,10 +579,10 @@ class TestCallbackOverlapGuard:
         async def _fake_save(a):
             saved.extend(a)
 
-        with patch("bot.get_appointments", side_effect=_fake_get), \
-             patch("bot.save_appointments", side_effect=_fake_save), \
-             patch("bot.OFFICIALS", _officials()), \
-             patch("bot._finalize_appointment", finalize):
+        with patch("storage.get_appointments", side_effect=_fake_get), \
+             patch("storage.save_appointments", side_effect=_fake_save), \
+             patch("permissions.OFFICIALS", _officials()), \
+             patch("handlers.appointments._finalize_appointment", finalize):
             _run(appt_callback(upd, ctx))
         return query, finalize
 
@@ -659,10 +659,10 @@ class TestCallbackOverlapGuard:
             query.from_user.username = None
             upd = MagicMock()
             upd.callback_query = query
-            with patch("bot.get_appointments", side_effect=_fake_get), \
-                 patch("bot.save_appointments", side_effect=_fake_save), \
-                 patch("bot.OFFICIALS", _officials()), \
-                 patch("bot._finalize_appointment", side_effect=_fake_finalize):
+            with patch("storage.get_appointments", side_effect=_fake_get), \
+                 patch("storage.save_appointments", side_effect=_fake_save), \
+                 patch("permissions.OFFICIALS", _officials()), \
+                 patch("handlers.appointments._finalize_appointment", side_effect=_fake_finalize):
                 _run(appt_callback(upd, ctx))
 
         _one_tap()
@@ -768,8 +768,8 @@ class TestReschedulePastGuards:
             saved.extend(a)
 
         try:
-            with patch("bot.get_appointments", side_effect=_get), \
-                 patch("bot.save_appointments", side_effect=_save):
+            with patch("storage.get_appointments", side_effect=_get), \
+                 patch("storage.save_appointments", side_effect=_save):
                 _run(bot.handle_counter_propose_message(upd, ctx))
         finally:
             bot._counter_propose_state.pop(appt["id"], None)
@@ -805,8 +805,8 @@ class TestReschedulePastGuards:
         async def _get():
             return [past]
 
-        with patch("bot.get_appointments", side_effect=_get), \
-             patch("bot.OFFICIALS", _officials()):
+        with patch("storage.get_appointments", side_effect=_get), \
+             patch("permissions.OFFICIALS", _officials()):
             _run(bot.appt_callback(upd, ctx))
         assert "PASTR" not in bot._counter_propose_state
         assert "passed" in q.edit_message_text.call_args[0][0].lower()

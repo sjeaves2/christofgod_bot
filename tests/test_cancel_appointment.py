@@ -109,8 +109,8 @@ class TestCmdCancelAppointment:
         async def _fake_get():
             return appts
 
-        with patch("bot.get_appointments", side_effect=_fake_get), \
-             patch("bot.OFFICIALS", _make_officials()):
+        with patch("storage.get_appointments", side_effect=_fake_get), \
+             patch("permissions.OFFICIALS", _make_officials()):
             result = _run(cmd_cancelappointment(upd, ctx))
         return result, upd, ctx
 
@@ -256,10 +256,10 @@ class TestCaConfirmRequester:
         async def _fake_save(appts):
             saved.extend(appts)
 
-        with patch("bot.get_appointments", side_effect=_fake_get), \
-             patch("bot.save_appointments", side_effect=_fake_save), \
-             patch("bot.OFFICIALS", officials), \
-             patch("bot._is_known_official", return_value=False):
+        with patch("storage.get_appointments", side_effect=_fake_get), \
+             patch("storage.save_appointments", side_effect=_fake_save), \
+             patch("permissions.OFFICIALS", officials), \
+             patch("permissions._is_known_official", return_value=False):
             result = _run(ca_confirm(upd, ctx))
         return result, q, ctx, saved
 
@@ -345,10 +345,10 @@ class TestCaConfirmOfficial:
         async def _fake_save(appts):
             saved.extend(appts)
 
-        with patch("bot.get_appointments", side_effect=_fake_get), \
-             patch("bot.save_appointments", side_effect=_fake_save), \
-             patch("bot.OFFICIALS", officials), \
-             patch("bot._is_known_official", return_value=True):
+        with patch("storage.get_appointments", side_effect=_fake_get), \
+             patch("storage.save_appointments", side_effect=_fake_save), \
+             patch("permissions.OFFICIALS", officials), \
+             patch("permissions._is_known_official", return_value=True):
             result = _run(ca_confirm(upd, ctx))
         return result, q, ctx, saved
 
@@ -410,10 +410,10 @@ class TestCancellationIcs:
         async def _fake_save(appts):
             pass
 
-        with patch("bot.get_appointments", side_effect=_fake_get), \
-             patch("bot.save_appointments", side_effect=_fake_save), \
-             patch("bot.OFFICIALS", officials), \
-             patch("bot._is_known_official", return_value=False):
+        with patch("storage.get_appointments", side_effect=_fake_get), \
+             patch("storage.save_appointments", side_effect=_fake_save), \
+             patch("permissions.OFFICIALS", officials), \
+             patch("permissions._is_known_official", return_value=False):
             _run(ca_confirm(upd, ctx))
         return ctx
 
@@ -429,10 +429,10 @@ class TestCancellationIcs:
         async def _fake_save(appts):
             pass
 
-        with patch("bot.get_appointments", side_effect=_fake_get), \
-             patch("bot.save_appointments", side_effect=_fake_save), \
-             patch("bot.OFFICIALS", officials), \
-             patch("bot._is_known_official", return_value=True):
+        with patch("storage.get_appointments", side_effect=_fake_get), \
+             patch("storage.save_appointments", side_effect=_fake_save), \
+             patch("permissions.OFFICIALS", officials), \
+             patch("permissions._is_known_official", return_value=True):
             _run(ca_confirm(upd, ctx))
         return ctx
 

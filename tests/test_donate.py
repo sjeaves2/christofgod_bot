@@ -33,8 +33,8 @@ def _run_donate(url, users=None):
     async def _fake_users():
         return users if users is not None else [{"chat_id": 111}]
 
-    with patch("bot.DONATION_URL", url), \
-         patch("bot.get_all_users", side_effect=_fake_users):
+    with patch("handlers.user_basics.DONATION_URL", url), \
+         patch("storage.get_all_users", side_effect=_fake_users):
         _run(bot.cmd_donate(upd, ctx))
     return upd
 

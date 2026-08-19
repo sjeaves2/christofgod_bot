@@ -32,6 +32,7 @@ def _appt(days_ago, status="confirmed", appt_id="A1"):
 
 def _run_archive(appts, existing_archive=None):
     import bot
+    import storage
     saved: dict = {}
     archive_data = {"appointments": list(existing_archive or [])}
 
@@ -47,10 +48,10 @@ def _run_archive(appts, existing_archive=None):
     async def _arch_save(d):
         saved["archive"] = d
 
-    with patch("bot.get_appointments", side_effect=_get), \
-         patch("bot.save_appointments", side_effect=_save), \
-         patch.object(bot.appts_archive_cache, "get", side_effect=_arch_get), \
-         patch.object(bot.appts_archive_cache, "save", side_effect=_arch_save):
+    with patch("storage.get_appointments", side_effect=_get), \
+         patch("storage.save_appointments", side_effect=_save), \
+         patch.object(storage.appts_archive_cache, "get", side_effect=_arch_get), \
+         patch.object(storage.appts_archive_cache, "save", side_effect=_arch_save):
         moved = _run(bot.archive_old_appointments())
     return moved, saved
 
@@ -102,6 +103,7 @@ class TestArchive:
 class TestRetentionPurge:
     def _run_purge(self, archive):
         import bot
+        import storage
         data = {"appointments": list(archive)}
         saved: dict = {}
 
@@ -111,8 +113,8 @@ class TestRetentionPurge:
         async def _save(d):
             saved["archive"] = d
 
-        with patch.object(bot.appts_archive_cache, "get", side_effect=_get), \
-             patch.object(bot.appts_archive_cache, "save", side_effect=_save):
+        with patch.object(storage.appts_archive_cache, "get", side_effect=_get), \
+             patch.object(storage.appts_archive_cache, "save", side_effect=_save):
             purged = _run(bot.purge_archived_appointments())
         return purged, saved
 

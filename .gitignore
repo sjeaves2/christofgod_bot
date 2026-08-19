@@ -28,3 +28,6 @@ data/notification_state.yaml
 
 # Discovered group/channel memberships (for /broadcast)
 data/known_groups.yaml
+
+# Coverage output
+.coverage
