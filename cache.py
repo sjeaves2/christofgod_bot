@@ -22,7 +22,12 @@ import yaml
 from ruamel.yaml import YAML
 
 
-def _make_rt_yaml() -> YAML:
+def make_rt_yaml() -> YAML:
+    """A ruamel round-trip YAML configured for this project's files.
+
+    Shared with permissions.py so every hand-edited YAML file (events.yaml,
+    officials.yaml) keeps its comments and formatting across bot writes.
+    """
     rt = YAML(typ="rt")  # round-trip: keeps comments and formatting
     rt.preserve_quotes = True
     rt.indent(mapping=2, sequence=4, offset=2)
@@ -43,7 +48,7 @@ class FileCache:
         self._last_mtime: float = 0.0
         self._last_check: float = 0.0
         self._lock = asyncio.Lock()
-        self._rt = _make_rt_yaml() if round_trip else None
+        self._rt = make_rt_yaml() if round_trip else None
 
     async def get(self) -> Any:
         async with self._lock:

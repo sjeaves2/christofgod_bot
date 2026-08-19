@@ -54,10 +54,10 @@ def _run_job(appts):
     async def _prefs(chat_id):
         return bot.TZ, bot.DEFAULT_LANG
 
-    with patch("bot.get_appointments", side_effect=_get), \
-         patch("bot.save_appointments", side_effect=_save), \
-         patch("bot.get_user_prefs", side_effect=_prefs), \
-         patch("bot.OFFICIALS", _officials()):
+    with patch("storage.get_appointments", side_effect=_get), \
+         patch("storage.save_appointments", side_effect=_save), \
+         patch("handlers.appointments.get_user_prefs", side_effect=_prefs), \
+         patch("permissions.OFFICIALS", _officials()):
         _run(bot.appointment_reminder_job(ctx))
     return ctx, saved
 
@@ -132,10 +132,10 @@ class TestReminderIdempotency:
         async def _prefs(chat_id):
             return bot.TZ, bot.DEFAULT_LANG
 
-        with patch("bot.get_appointments", side_effect=_get), \
-             patch("bot.save_appointments", side_effect=_save), \
-             patch("bot.get_user_prefs", side_effect=_prefs), \
-             patch("bot.OFFICIALS", _officials()):
+        with patch("storage.get_appointments", side_effect=_get), \
+             patch("storage.save_appointments", side_effect=_save), \
+             patch("handlers.appointments.get_user_prefs", side_effect=_prefs), \
+             patch("permissions.OFFICIALS", _officials()):
             _run(bot.appointment_reminder_job(ctx))
         # Official recorded; user left pending for the next tick.
         assert saved["appts"][0]["reminders_sent"]["24h"] == [999]
@@ -174,8 +174,8 @@ class TestRearmOnReconfirm:
         async def _prefs(chat_id):
             return bot.TZ, bot.DEFAULT_LANG
 
-        with patch("bot.save_appointments", side_effect=_save), \
-             patch("bot.get_user_prefs", side_effect=_prefs), \
-             patch("bot.OFFICIALS", _officials()):
+        with patch("storage.save_appointments", side_effect=_save), \
+             patch("handlers.appointments.get_user_prefs", side_effect=_prefs), \
+             patch("permissions.OFFICIALS", _officials()):
             _run(bot._finalize_appointment(ctx, appt, appts))
         assert "reminders_sent" not in saved["appts"][0]
