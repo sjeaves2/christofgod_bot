@@ -59,8 +59,8 @@ class TestDeliverEventNotifications:
 
         bot_obj = _bot_with(send_side_effect)
         ctx_patches = [
-            patch("bot._load_notif_state", side_effect=_load_state),
-            patch("bot._save_notif_state", side_effect=_save_state),
+            patch("storage._load_notif_state", side_effect=_load_state),
+            patch("storage._save_notif_state", side_effect=_save_state),
         ]
         return bot, bot_obj, saved_state, ctx_patches
 
@@ -180,10 +180,10 @@ class TestCatchupJob:
         ctx = MagicMock()
         ctx.bot = MagicMock()
 
-        with patch("bot.all_upcoming", side_effect=_fake_all_upcoming), \
-             patch("bot.deliver_event_notifications", side_effect=_fake_deliver), \
-             patch("bot._load_notif_state", side_effect=_load_state), \
-             patch("bot._save_notif_state", side_effect=_save_state):
+        with patch("handlers.notifications.all_upcoming", side_effect=_fake_all_upcoming), \
+             patch("handlers.notifications.deliver_event_notifications", side_effect=_fake_deliver), \
+             patch("storage._load_notif_state", side_effect=_load_state), \
+             patch("storage._save_notif_state", side_effect=_save_state):
             _run(bot.notification_catchup_job(ctx))
 
         # Only the in-window event triggers delivery.
@@ -275,8 +275,8 @@ class TestGroupGate:
         async def _save(g):
             saved["groups"] = dict(g)
 
-        with patch("bot._load_known_groups", side_effect=_load), \
-             patch("bot._save_known_groups", side_effect=_save), \
+        with patch("storage._load_known_groups", side_effect=_load), \
+             patch("storage._save_known_groups", side_effect=_save), \
              caplog.at_level(logging.INFO, logger="bot"):
             _run(bot.on_my_chat_member(upd, ctx))
 

@@ -7,8 +7,8 @@
 #   proxies:
 #     - name: Jane Secretary
 #       telegram_username: janesec
-# NOTE: the bot rewrites this file when it auto-fills chat_ids, which strips
-# these comments — keep a copy of the proxy config elsewhere if needed.
+# The bot rewrites this file when it auto-fills chat_ids or toggles proxies;
+# it is saved in round-trip mode, so these comments are preserved.
 officials:
 - chat_id: 516225991
   id: pastor_crowdy

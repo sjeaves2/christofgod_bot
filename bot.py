@@ -14,31 +14,17 @@ Usage:
 
 from __future__ import annotations
 
-import asyncio
-import calendar
-import io
 import logging
 import re
-import uuid
-from datetime import datetime, timedelta
-from pathlib import Path
-from typing import Any
+from datetime import timedelta
 
-import pytz
-import yaml
 from telegram import (
     BotCommand,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    InputFile,
-    KeyboardButton,
-    ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
     Update,
 )
 from telegram.constants import ChatType, ParseMode
-from telegram.error import BadRequest, TelegramError
-from telegram.helpers import escape_markdown
+from telegram.error import TelegramError
 from telegram.ext import (
     Application,
     ApplicationHandlerStop,
@@ -51,33 +37,19 @@ from telegram.ext import (
     filters,
 )
 
-import translation
-from hebrew_calendar import (
-    all_upcoming_events,
-    service_phases,
-)
-from localization import (
+from localization import (  # noqa: F401
     AVAILABLE_LANGUAGES,
-    CATALOG,
     DEFAULT_LANG,
-    localized_datetime,
     status_label,
     t,
 )
-from ics_generator import (
-    appointment_cancellation_to_ics,
-    appointment_to_ics,
-    events_to_ics,
-)
-from pdf_generator import generate_user_list_pdf
 
 # ---------------------------------------------------------------------------
 # Boot-time configuration and data stores (extracted modules; names are
 # re-imported here so existing code and tests keep addressing them as bot.*)
 # ---------------------------------------------------------------------------
 
-from settings import (
-    BASE_DIR,
+from settings import (  # noqa: F401
     BOT_DISPLAY_NAME,
     BOT_TOKEN,
     CONFIG_DIR,
@@ -86,85 +58,251 @@ from settings import (
     TZ,
     activity,
 )
-from storage import (
-    _load_known_groups,
-    _load_notif_state,
-    _save_known_groups,
-    _save_notif_state,
-    appts_archive_cache,
-    get_all_events_data,
-    get_all_users,
-    get_announcements,
-    get_appointments,
-    save_announcements,
-    save_appointments,
-    save_events_data,
-    save_users,
+import permissions
+import storage
+
+# Facade re-exports: these names live in the extracted modules but are imported
+# here so existing call sites — and the test suite, which addresses them as
+# `bot.X` — keep working while the refactor proceeds in phases. Ruff's F401 is
+# silenced deliberately; do not "clean up" these imports.
+from permissions import (  # noqa: F401
+    ADMIN_PHONES,
+    ADMIN_USERNAMES,
+    OFFICIALS,
+    _acting_identity,
+    _enabled_proxies,
+    _is_known_official,
+    _official_by_id,
+    _official_side_recipients,
+    _person_matches,
+    _register_admin_by_phone,
+    _register_admin_by_username,
+    _save_officials,
+    _user_can_act_for_appt,
+    _user_can_act_for_official,
+    admin_only,
+    is_admin,
+    user_info,
+)
+from handlers.broadcast import (  # noqa: F401
+    BC_MAX_RETRIES,
+    BC_MESSAGE,
+    BC_RETRY,
+    BC_SELECT,
+    CB_BC_PREFIX,
+    _append_sender,
+    _bc_attempt_and_prompt,
+    _bc_expand_recipients,
+    _bc_keyboard,
+    _bc_send_pending,
+    _broadcast_target_options,
+    _reconcile_registry_into_known_groups,
+    bc_media,
+    bc_message,
+    bc_retry,
+    bc_select,
+    cmd_broadcast,
+)
+from handlers.announcements import (  # noqa: F401
+    ANN_BODY_MAX,
+    ANN_TITLE_MAX,
+    ANNOUNCEMENT_PURGE_AFTER_DAYS,
+    AN_BODY,
+    AN_CONFIRM,
+    AN_EXPIRES,
+    AN_TITLE,
+    DA_SELECT,
+    _ann_expiry_dt,
+    _ann_is_active,
+    _announcement_for_lang,
+    _render_announcement,
+    active_announcements,
+    an_body,
+    an_confirm,
+    an_expires,
+    an_title,
+    cmd_addannouncement,
+    cmd_announcements,
+    cmd_delannouncement,
+    cmd_listannouncements,
+    da_select,
+    purge_old_announcements,
+)
+from handlers.events_admin import (  # noqa: F401
+    AE_CONFIRM,
+    AE_DATE,
+    AE_DESC,
+    AE_DURATION,
+    AE_NAME,
+    AE_NOTIF,
+    AE_TIME,
+    AE_URL,
+    DE_ANNOT,
+    DE_CONFIRM,
+    DE_SELECT,
+    ME_FIELD,
+    ME_SELECT,
+    ME_VALUE,
+    SL_SELECT,
+    SL_URL,
+    ae_confirm,
+    ae_date,
+    ae_desc,
+    ae_duration,
+    ae_name,
+    ae_notif,
+    ae_time,
+    ae_url,
+    cmd_addevent,
+    cmd_deleteevent,
+    cmd_modifyevent,
+    cmd_setservicelink,
+    de_annot,
+    de_confirm,
+    de_select,
+    me_field,
+    me_select,
+    me_value,
+    sl_select,
+    sl_url,
+)
+from handlers.appointments import (  # noqa: F401
+    CB_APSEL_PREFIX,
+    CB_CANCEL_PREFIX,
+    CB_RESCHED_PREFIX,
+    ACTIVE_APPT_STATUSES,
+    APPOINTMENT_COOLDOWN_SECONDS,
+    APPOINTMENT_MAX_PENDING,
+    APPOINTMENT_MAX_PER_WINDOW,
+    APPOINTMENT_WINDOW_HALF_DAYS,
+    APPT_ARCHIVE_AFTER_DAYS,
+    APPT_ARCHIVE_RETENTION_DAYS,
+    APPT_REMINDER_STAGES,
+    AP_CONFIRM,
+    AP_DATE,
+    AP_DESC,
+    AP_OFFICIAL,
+    AP_TIME,
+    CA_CONFIRM,
+    CA_SELECT,
+    CB_APPT_PREFIX,
+    DEFAULT_APPT_DURATION_MIN,
+    OFFICIAL_SIDE_ACTIONS,
+    RS_NEWTIME,
+    RS_SELECT,
+    TERMINAL_APPT_STATUSES,
+    _appt_datetime,
+    _appt_dt_label,
+    _appt_is_past,
+    _appt_reminder_recipients,
+    _confirmed_overlap,
+    _count_active_appts_with_official,
+    _count_pending_appts,
+    _counter_propose_state,
+    _datetime_is_past,
+    _finalize_appointment,
+    _max_request_datetime,
+    _notify_negotiation_started,
+    _notify_official_of_request,
+    _overlapping_appt,
+    _requester_proxy_note,
+    _send_cancellation_ics,
+    _stamp_appt_action,
+    _user_is_appt_official,
+    _user_last_action_at,
+    ap_confirm,
+    ap_date,
+    ap_desc,
+    ap_official,
+    ap_time,
+    appointment_reminder_job,
+    appt_callback,
+    archive_old_appointments,
+    ca_confirm,
+    ca_select,
+    cmd_appointment,
+    cmd_cancelappointment,
+    cmd_enable_appt_proxies,
+    cmd_myappointments,
+    cmd_reschedule,
+    handle_counter_propose_message,
+    purge_archived_appointments,
+    rs_newtime,
+    rs_select,
+)
+from handlers.user_basics import (  # noqa: F401
+    ADMIN_COMMANDS_TEXT,
+    CB_LANG_PREFIX,
+    CB_NOTIFPREF_PREFIX,
+    CB_TZ_PREFIX,
+    COMMON_TIMEZONES,
+    HELP_TOPICS,
+    LANG_SELECT,
+    TZ_SELECT,
+    _apply_timezone,
+    _commands_text,
+    _get_user_notif_prefs,
+    _notif_prefs_keyboard,
+    _notif_prefs_summary,
+    _register_official_if_known,
+    _set_user_field,
+    _set_user_notif_prefs,
+    cmd_adminhelp,
+    cmd_donate,
+    cmd_events,
+    cmd_export_calendar,
+    cmd_help,
+    cmd_language,
+    cmd_listevents,
+    cmd_notifications,
+    cmd_settimezone,
+    cmd_start,
+    cmd_stop,
+    cmd_usercount,
+    cmd_userlist,
+    lang_select,
+    notif_prefs_callback,
+    tz_button,
+    tz_typed,
+)
+from common import (  # noqa: F401
+    NOTIF_CATEGORIES,
+    md,
+    _AFFIRMATIVE_WORDS,
+    _is_affirmative,
+    _answer_cb,
+    _coerce_tz,
+    _event_category,
+    _NOTIF_CATEGORY_KEYS,
+    format_dt,
+    get_user_prefs,
+    now_tz,
+    user_lang_of,
+    user_notif_prefs,
+    user_tz_of,
+)
+from events import _merge_special_events, _resolve_targets, all_upcoming  # noqa: F401
+from handlers.notifications import (  # noqa: F401
+    CAPTION_LIMIT,
+    _is_media_url,
+    _looks_like_path,
+    _notification_recipients,
+    _render_notification,
+    _resolve_local_media,
+    _send_media,
+    _send_notification_payload,
+    deliver_event_notifications,
+    notification_catchup_job,
+    schedule_all_upcoming,
+    schedule_event_notification,
+    send_notification,
 )
 
 logger = logging.getLogger(__name__)
 
-# Admins are loaded once at startup and kept in memory.
-# Each entry may carry a `username`, a `phone`, or both.
-_admins_raw = yaml.safe_load((CONFIG_DIR / "admins.yaml").read_text()) or {}
-ADMIN_USERNAMES: set[str] = {
-    a["username"].lstrip("@").lower()
-    for a in _admins_raw.get("admins", [])
-    if a.get("username")
-}
-ADMIN_PHONES: set[str] = {
-    re.sub(r"\D", "", a["phone"])
-    for a in _admins_raw.get("admins", [])
-    if a.get("phone")
-}
-# chat_id → True for admins identified by phone after they /start the bot
-_admin_chat_ids: set[int] = set()
-
-# Officials
-_officials_raw = yaml.safe_load((CONFIG_DIR / "officials.yaml").read_text()) or {}
-OFFICIALS: list[dict[str, Any]] = _officials_raw.get("officials", [])
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def is_admin(update: Update) -> bool:
-    """Return True if the user is listed in admins.yaml by username or phone."""
-    u = update.effective_user
-    if (u.username or "").lower() in ADMIN_USERNAMES:
-        return True
-    if u.id in _admin_chat_ids:
-        return True
-    return False
-
-
-async def _register_admin_by_phone(user_id: int, phone: str | None) -> None:
-    """Cache chat_id when a phone-number-only admin shares their contact."""
-    if not phone:
-        return
-    normalized = re.sub(r"\D", "", phone)
-    if normalized in ADMIN_PHONES:
-        _admin_chat_ids.add(user_id)
-
-
-async def _register_admin_by_username(user_id: int, username: str | None) -> None:
-    """Cache chat_id for username-based admins (no-op if already in set)."""
-    if (username or "").lower() in ADMIN_USERNAMES:
-        _admin_chat_ids.add(user_id)
-
-
-def _is_known_official(user_id: int, username: str | None) -> bool:
-    """Return True if this user is already linked to an official entry."""
-    uname_lower = (username or "").lstrip("@").lower()
-    for off in OFFICIALS:
-        if off.get("chat_id") == user_id:
-            return True
-        if uname_lower:
-            oname = (off.get("telegram_username") or "").lstrip("@").lower()
-            if oname and oname == uname_lower:
-                return True
-    return False
 
 
 async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -181,22 +319,22 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     uid, uname, dname = user_info(update)
     phone = contact.phone_number  # e.g. "+17572863574" or "17572863574"
 
-    await _register_admin_by_phone(uid, phone)
+    await permissions._register_admin_by_phone(uid, phone)
     await _register_official_if_known(uid, uname, phone)
 
     # Store phone in user record
-    users = await get_all_users()
+    users = await storage.get_all_users()
     for u in users:
         if u["chat_id"] == uid and not u.get("phone"):
             u["phone"] = re.sub(r"\D", "", phone)
-            await save_users(users)
+            await storage.save_users(users)
             break
 
     _, lang = await get_user_prefs(uid)
-    is_adm = is_admin(update)
+    is_adm = permissions.is_admin(update)
     if is_adm:
         reply = "✅ Contact received. You have been recognised as an administrator."
-    elif _is_known_official(uid, uname):
+    elif permissions._is_known_official(uid, uname):
         reply = "✅ Contact received. You have been recognised as an official."
     else:
         reply = "✅ Contact received. Thank you!"
@@ -208,116 +346,6 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     activity.log_command("contact_share", uid, uname, dname, details=f"phone={phone_digits}")
 
 
-def user_info(update: Update) -> tuple[int, str | None, str]:
-    u = update.effective_user
-    return u.id, u.username, u.full_name or u.first_name or str(u.id)
-
-
-# Appointments whose date passed this many days ago are moved out of the live
-# file into data/appointments_archive.yaml (any status — a request still
-# "pending" 90 days after its date is dead).
-APPT_ARCHIVE_AFTER_DAYS = 90
-
-
-async def archive_old_appointments() -> int:
-    """Move long-past appointments to the archive file. Returns how many moved.
-
-    Records with unparseable dates are kept in the live file (never silently
-    discarded). The archive is append-only.
-    """
-    cutoff = now_tz() - timedelta(days=APPT_ARCHIVE_AFTER_DAYS)
-    appts = await get_appointments()
-    keep: list[dict[str, Any]] = []
-    old: list[dict[str, Any]] = []
-    for a in appts:
-        dt = _appt_datetime(a)
-        (old if dt is not None and dt < cutoff else keep).append(a)
-    if not old:
-        return 0
-    archive_data = await appts_archive_cache.get() or {}
-    archive = archive_data.get("appointments") or []
-    archive.extend(old)
-    archive_data["appointments"] = archive
-    await appts_archive_cache.save(archive_data)
-    await save_appointments(keep)
-    logger.info("Archived %d appointment(s) older than %d days (%d remain live).",
-                len(old), APPT_ARCHIVE_AFTER_DAYS, len(keep))
-    return len(old)
-
-
-# Archived appointments are permanently deleted once their date is this far in
-# the past, bounding the archive's growth (and how long congregants' meeting
-# records are retained).
-APPT_ARCHIVE_RETENTION_DAYS = 2 * 365
-
-
-async def purge_archived_appointments() -> int:
-    """Delete archived appointments past the retention window. Returns count.
-
-    Records with unparseable dates are kept (never silently discarded).
-    """
-    cutoff = now_tz() - timedelta(days=APPT_ARCHIVE_RETENTION_DAYS)
-    data = await appts_archive_cache.get() or {}
-    archive = data.get("appointments") or []
-    keep = []
-    for a in archive:
-        dt = _appt_datetime(a)
-        if dt is None or dt >= cutoff:
-            keep.append(a)
-    purged = len(archive) - len(keep)
-    if purged:
-        data["appointments"] = keep
-        await appts_archive_cache.save(data)
-        logger.info("Purged %d archived appointment(s) older than %d days.",
-                    purged, APPT_ARCHIVE_RETENTION_DAYS)
-    return purged
-
-
-# Expired announcements stay in the file (hidden from /announcements) for this
-# many days, then the daily maintenance job deletes them.
-ANNOUNCEMENT_PURGE_AFTER_DAYS = 30
-
-
-def _ann_expiry_dt(ann: dict[str, Any]) -> "datetime | None":
-    """An announcement expires at the END of its `expires` day, church time."""
-    try:
-        d = datetime.strptime(str(ann.get("expires", "")), "%Y-%m-%d")
-    except (ValueError, TypeError):
-        return None
-    return TZ.localize(d.replace(hour=23, minute=59, second=59))
-
-
-def _ann_is_active(ann: dict[str, Any], now: "datetime | None" = None) -> bool:
-    exp = _ann_expiry_dt(ann)
-    return exp is not None and (now or now_tz()) <= exp
-
-
-def active_announcements(anns: list[dict[str, Any]],
-                         now: "datetime | None" = None) -> list[dict[str, Any]]:
-    """Active announcements, newest first."""
-    now = now or now_tz()
-    live = [a for a in anns if _ann_is_active(a, now)]
-    return sorted(live, key=lambda a: str(a.get("created", "")), reverse=True)
-
-
-async def purge_old_announcements() -> int:
-    """Delete announcements expired more than the retention window ago.
-
-    Records with unparseable expiry dates are kept (never silently discarded).
-    """
-    cutoff = now_tz() - timedelta(days=ANNOUNCEMENT_PURGE_AFTER_DAYS)
-    anns = await get_announcements()
-    keep = []
-    for a in anns:
-        exp = _ann_expiry_dt(a)
-        if exp is None or exp >= cutoff:
-            keep.append(a)
-    purged = len(anns) - len(keep)
-    if purged:
-        await save_announcements(keep)
-        logger.info("Purged %d announcement(s) expired more than %d days ago.",
-                    purged, ANNOUNCEMENT_PURGE_AFTER_DAYS)
-    return purged
 
 
 async def daily_maintenance_job(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -328,3451 +356,9 @@ async def daily_maintenance_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     await purge_old_announcements()
 
 
-def format_dt(dt: datetime, tz: "pytz.BaseTzInfo | None" = None, lang: "str | None" = None) -> str:
-    return localized_datetime(dt.astimezone(tz or TZ), lang or DEFAULT_LANG)
-
-
-def _coerce_tz(name: "str | None") -> "pytz.BaseTzInfo":
-    """Return a pytz timezone for *name*, falling back to the church timezone."""
-    if name:
-        try:
-            return pytz.timezone(name)
-        except Exception:
-            pass
-    return TZ
-
-
-def user_tz_of(record: "dict | None") -> "pytz.BaseTzInfo":
-    """Timezone for a user record, defaulting to the configured church timezone."""
-    return _coerce_tz((record or {}).get("timezone"))
-
-
-def user_lang_of(record: "dict | None") -> str:
-    """Language code for a user record, defaulting to the catalog default."""
-    lang = (record or {}).get("language")
-    return lang if lang in CATALOG else DEFAULT_LANG
-
-
-async def get_user_prefs(chat_id: int) -> "tuple[pytz.BaseTzInfo, str]":
-    """Return (timezone, language) preferences for a user (with safe defaults)."""
-    users = await get_all_users()
-    record = next((u for u in users if u.get("chat_id") == chat_id), None)
-    return user_tz_of(record), user_lang_of(record)
-
-
-# ---------------------------------------------------------------------------
-# Opt-in personal notification preferences (by event category)
-# ---------------------------------------------------------------------------
-
-# Category key -> catalog label key. Order defines the /notifications layout.
-NOTIF_CATEGORIES: list[tuple[str, str]] = [
-    ("convocations", "notif_cat_convocations"),   # Sabbath + the annual feasts
-    ("sunday_prayer", "notif_cat_sunday_prayer"),
-    ("special", "notif_cat_special"),
-]
-_NOTIF_CATEGORY_KEYS = {k for k, _ in NOTIF_CATEGORIES}
-
-
-def _event_category(event: dict[str, Any]) -> str:
-    """Classify an event into a notification category (see NOTIF_CATEGORIES)."""
-    if event.get("type") == "convocation":
-        return "convocations"
-    if event.get("special_id") == "sunday_morning_prayer":
-        return "sunday_prayer"
-    return "special"
-
-
-def user_notif_prefs(record: "dict | None") -> set:
-    """Set of event categories a user has opted into for personal reminders."""
-    return {c for c in ((record or {}).get("notif_prefs") or []) if c in _NOTIF_CATEGORY_KEYS}
-
-
-def now_tz() -> datetime:
-    return datetime.now(TZ)
-
-
-async def _answer_cb(query) -> None:
-    """Acknowledge a callback query, tolerating a stale/expired one.
-
-    If the bot was briefly offline when the button was tapped, Telegram expires
-    the callback query and answer() raises BadRequest ("query is too old").
-    That must not abort the handler — edit_message_text and the real work that
-    follow are not subject to the callback's ~15s timeout, so we swallow it and
-    let the handler complete (graceful recovery on wake).
-    """
-    try:
-        await query.answer()
-    except BadRequest:
-        pass
-
-
-def _appt_datetime(appt: dict[str, Any]) -> "datetime | None":
-    """Best-effort tz-aware datetime for an appointment (confirmed, else requested)."""
-    dt_raw = appt.get("confirmed_datetime") or appt.get("requested_datetime", "")
-    try:
-        dt_obj = datetime.fromisoformat(dt_raw)
-    except (ValueError, TypeError):
-        return None
-    if dt_obj.tzinfo is None:
-        dt_obj = TZ.localize(dt_obj)
-    return dt_obj
-
-
-# Reminder DMs before a confirmed appointment, farthest first: (stage, minutes).
-APPT_REMINDER_STAGES: list[tuple[str, int]] = [("24h", 24 * 60), ("2h", 2 * 60)]
-
-
-async def _appt_reminder_recipients(appt: dict[str, Any]) -> dict:
-    """Both parties of an appointment as {chat_id: (tz, lang)}."""
-    recipients: dict = {}
-    user_cid = appt.get("user_chat_id")
-    if user_cid:
-        recipients[user_cid] = await get_user_prefs(user_cid)
-    off = _official_by_id(appt.get("official_id"))
-    off_cid = (off or {}).get("chat_id")
-    if off_cid:
-        recipients[off_cid] = await get_user_prefs(off_cid)
-    return recipients
-
-
-async def appointment_reminder_job(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send reminder DMs for confirmed appointments (24h and 2h before).
-
-    Runs on a short repeating interval. Idempotent: delivered chat_ids are
-    recorded per stage on the appointment record itself, so restarts and
-    partial failures retry only what's missing. If more than one stage is due
-    at once (e.g. the bot was offline, or the appointment was booked close in),
-    only the closest stage is sent — the farther ones are marked superseded.
-    Rescheduling re-arms reminders (state is cleared on re-confirmation).
-    """
-    now = now_tz()
-    appts = await get_appointments()
-    changed = False
-    for appt in appts:
-        if appt.get("status") != "confirmed":
-            continue
-        dt = _appt_datetime(appt)
-        if dt is None or dt <= now:
-            continue
-        due = [s for s, mins in APPT_REMINDER_STAGES
-               if now >= dt - timedelta(minutes=mins)]
-        if not due:
-            continue
-        closest = due[-1]  # stages are ordered farthest-first
-        recipients = await _appt_reminder_recipients(appt)
-        sent_map: dict = appt.setdefault("reminders_sent", {})
-        for stage in due:
-            done = set(sent_map.get(stage, []))
-            for chat_id, (u_tz, u_lang) in recipients.items():
-                if chat_id in done:
-                    continue
-                if stage != closest:
-                    done.add(chat_id)  # superseded by a closer stage
-                    changed = True
-                    continue
-                is_requester = chat_id == appt.get("user_chat_id")
-                key = "appt_reminder_user" if is_requester else "appt_reminder_official"
-                counterparty = (appt.get("official_name") if is_requester
-                                else appt.get("user_display_name")
-                                or appt.get("user_username") or "the requester")
-                try:
-                    await context.bot.send_message(
-                        chat_id,
-                        t(key, u_lang, id=appt["id"], counterparty=counterparty,
-                          when=format_dt(dt, u_tz, u_lang)),
-                        parse_mode=ParseMode.MARKDOWN,
-                    )
-                    done.add(chat_id)
-                    changed = True
-                except TelegramError as exc:
-                    logger.warning("Appointment reminder failed for chat %s (appt %s): %s",
-                                   chat_id, appt["id"], exc)
-            sent_map[stage] = sorted(done)
-    if changed:
-        await save_appointments(appts)
-
-
-def _appt_dt_label(appt: dict[str, Any], tz: "pytz.BaseTzInfo | None" = None,
-                   lang: "str | None" = None) -> str:
-    """Human-readable date/time for an appointment, falling back to the raw value."""
-    dt_obj = _appt_datetime(appt)
-    if dt_obj is None:
-        return appt.get("confirmed_datetime") or appt.get("requested_datetime") or "—"
-    return format_dt(dt_obj, tz, lang)
-
-
-def _datetime_is_past(value) -> bool:
-    """True if an ISO string / datetime is in the past (naive values are localized)."""
-    if value is None:
-        return False
-    try:
-        dt = datetime.fromisoformat(value) if isinstance(value, str) else value
-    except (TypeError, ValueError):
-        return False
-    if dt.tzinfo is None:
-        dt = TZ.localize(dt)
-    return dt <= now_tz()
-
-
-def _appt_is_past(appt: dict[str, Any]) -> bool:
-    """True if the appointment's scheduled time is in the past."""
-    dt_obj = _appt_datetime(appt)
-    return dt_obj is not None and dt_obj <= now_tz()
-
-
-def _user_is_appt_official(appt: dict[str, Any], user_id: int, username: "str | None") -> bool:
-    """True if this user is the official assigned to the given appointment."""
-    off = next((o for o in OFFICIALS if o.get("id") == appt.get("official_id")), None)
-    if not off:
-        return False
-    if off.get("chat_id") == user_id:
-        return True
-    uname_lower = (username or "").lstrip("@").lower()
-    oname = (off.get("telegram_username") or "").lstrip("@").lower()
-    return bool(uname_lower) and oname == uname_lower
-
-
-# ---------------------------------------------------------------------------
-# Officials' appointment proxies (secretaries who can negotiate on their behalf)
-# ---------------------------------------------------------------------------
-
-def _save_officials() -> None:
-    """Persist the OFFICIALS list (with any auto-populated chat_ids / flags)."""
-    with open(CONFIG_DIR / "officials.yaml", "w", encoding="utf-8") as fh:
-        yaml.dump({"officials": OFFICIALS}, fh, default_flow_style=False, allow_unicode=True)
-
-
-def _official_by_id(official_id: "str | None") -> "dict | None":
-    return next((o for o in OFFICIALS if o.get("id") == official_id), None)
-
-
-def _person_matches(rec: dict, user_id: int, uname_lower: str) -> bool:
-    """Match a person record (official or proxy) by chat_id or telegram_username."""
-    if rec.get("chat_id") == user_id:
-        return True
-    rname = (rec.get("telegram_username") or "").lstrip("@").lower()
-    return bool(uname_lower) and rname == uname_lower
-
-
-def _enabled_proxies(off: "dict | None") -> list[dict]:
-    """Proxy records for an official, only if proxies are enabled."""
-    if not off or not off.get("proxies_enabled"):
-        return []
-    return off.get("proxies") or []
-
-
-def _user_can_act_for_official(off: "dict | None", user_id: int, username: "str | None") -> bool:
-    """True if the user is the official, or an enabled proxy for that official."""
-    if not off:
-        return False
-    uname_lower = (username or "").lstrip("@").lower()
-    if _person_matches(off, user_id, uname_lower):
-        return True
-    return any(_person_matches(p, user_id, uname_lower) for p in _enabled_proxies(off))
-
-
-def _user_can_act_for_appt(appt: dict, user_id: int, username: "str | None") -> bool:
-    return _user_can_act_for_official(_official_by_id(appt.get("official_id")), user_id, username)
-
-
-def _acting_identity(off: dict, user_id: int, username: "str | None") -> "tuple[str | None, bool]":
-    """Return (display_name, is_proxy) for the acting official/proxy, else (None, False)."""
-    uname_lower = (username or "").lstrip("@").lower()
-    if _person_matches(off, user_id, uname_lower):
-        return off.get("name"), False
-    for p in _enabled_proxies(off):
-        if _person_matches(p, user_id, uname_lower):
-            return (p.get("name") or "A proxy"), True
-    return None, False
-
-
-def _official_side_recipients(off: dict) -> list[dict]:
-    """Chats that should receive an appointment request: the official + enabled
-    proxies that have started the bot. Each: {chat_id, is_proxy, name}."""
-    out: list[dict] = []
-    if off.get("chat_id"):
-        out.append({"chat_id": off["chat_id"], "is_proxy": False, "name": off.get("name")})
-    for p in _enabled_proxies(off):
-        if p.get("chat_id"):
-            out.append({"chat_id": p["chat_id"], "is_proxy": True, "name": p.get("name") or "Proxy"})
-    return out
-
-
-async def cmd_enable_appt_proxies(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Officer-only: enable/disable their appointment proxies. Usage: /enable_appt_proxies yes|no"""
-    uid, uname, dname = user_info(update)
-    uname_lower = (uname or "").lstrip("@").lower()
-    off = next((o for o in OFFICIALS if _person_matches(o, uid, uname_lower)), None)
-    if not off:
-        await update.message.reply_text("Only a church official can manage appointment proxies.")
-        return
-
-    arg = (context.args[0].strip().lower() if context.args else "")
-    if arg in ("yes", "y", "true", "on", "1", "sí", "si", "oui"):
-        enabled = True
-    elif arg in ("no", "n", "false", "off", "0", "non"):
-        enabled = False
-    else:
-        await update.message.reply_text("Usage: /enable_appt_proxies yes|no")
-        return
-
-    off["proxies_enabled"] = enabled
-    _save_officials()
-    activity.log_command("enable_appt_proxies", uid, uname, dname,
-                         details=f"{off.get('id')}={enabled}")
-
-    proxies = off.get("proxies") or []
-    if enabled:
-        names = ", ".join(p.get("name", "?") for p in proxies) or "none configured yet"
-        await update.message.reply_text(
-            f"✅ Appointment proxies *enabled*.\nYour proxies: {names}",
-            parse_mode=ParseMode.MARKDOWN,
-        )
-    else:
-        await update.message.reply_text("✅ Appointment proxies *disabled*.",
-                                        parse_mode=ParseMode.MARKDOWN)
-
-
-# Affirmative replies accepted for typed yes/no prompts, across supported languages.
-_AFFIRMATIVE_WORDS = {"yes", "y", "sí", "si", "s", "oui", "o"}
-
-
-def _is_affirmative(text: "str | None") -> bool:
-    return (text or "").strip().lower() in _AFFIRMATIVE_WORDS
-
-
-# Statuses that count as an appointment still "in play".
-ACTIVE_APPT_STATUSES = ("pending", "confirmed", "counter_proposed")
-# Once an appointment reaches one of these, callback actions on it are no-ops
-# (prevents duplicate confirmations/declines from repeated or replayed taps).
-TERMINAL_APPT_STATUSES = ("confirmed", "declined", "cancelled")
-
-# How far ahead an appointment may be requested.
-APPOINTMENT_HORIZON_MONTHS = 6
-
-# Default length of an appointment, used for overlap checks and new requests.
-DEFAULT_APPT_DURATION_MIN = 30
-
-
-def _overlapping_appt(
-    appts: list[dict[str, Any]],
-    user_id: int,
-    start: datetime,
-    duration_minutes: int,
-    exclude_id: "str | None" = None,
-) -> "dict | None":
-    """Return the user's active appointment whose time overlaps [start, start+duration)."""
-    end = start + timedelta(minutes=duration_minutes)
-    for a in appts:
-        if a.get("user_chat_id") != user_id:
-            continue
-        if a.get("status") not in ACTIVE_APPT_STATUSES:
-            continue
-        if exclude_id and a.get("id") == exclude_id:
-            continue
-        a_start = _appt_datetime(a)
-        if a_start is None:
-            continue
-        a_end = a_start + timedelta(minutes=int(a.get("duration_minutes", DEFAULT_APPT_DURATION_MIN)))
-        # Half-open intervals overlap when each starts before the other ends.
-        if start < a_end and a_start < end:
-            return a
-    return None
-
-
-def _confirmed_overlap(
-    appts: list[dict[str, Any]], appt: dict[str, Any], confirmed_iso: str
-) -> "dict | None":
-    """Check a to-be-confirmed time against the requester's *other* active appointments."""
-    start = datetime.fromisoformat(confirmed_iso)
-    if start.tzinfo is None:
-        start = TZ.localize(start)
-    return _overlapping_appt(
-        appts,
-        appt["user_chat_id"],
-        start,
-        int(appt.get("duration_minutes", DEFAULT_APPT_DURATION_MIN)),
-        exclude_id=appt["id"],
-    )
-
-
-def _max_request_datetime() -> datetime:
-    """Latest datetime an appointment may be requested for (6 calendar months out)."""
-    now = now_tz()
-    month_index = now.month - 1 + APPOINTMENT_HORIZON_MONTHS
-    year = now.year + month_index // 12
-    month = month_index % 12 + 1
-    day = min(now.day, calendar.monthrange(year, month)[1])
-    naive = datetime(year, month, day, now.hour, now.minute, now.second)
-    return TZ.localize(naive)
-
-
-# A user may hold at most this many active appointments with a given official
-# whose scheduled time falls within ±APPOINTMENT_WINDOW_HALF_DAYS of *now*
-# (a symmetric, now-anchored 30-day window).
-APPOINTMENT_MAX_PER_WINDOW = 4
-APPOINTMENT_WINDOW_HALF_DAYS = 15
-
-# Request-rate limiting on /appointment (option E): a short cooldown between
-# actions plus a cap on outstanding pending requests. Admins are exempt.
-APPOINTMENT_COOLDOWN_SECONDS = 120
-APPOINTMENT_MAX_PENDING = 5
-
-
-def _stamp_appt_action(appt: dict[str, Any]) -> None:
-    """Record the time of the latest action on an appointment (create, confirm,
-    cancel, reschedule) so the per-user request cooldown can be measured."""
-    appt["last_action_at"] = now_tz().isoformat()
-
-
-def _user_last_action_at(
-    appts: list[dict[str, Any]], user_id: int
-) -> "datetime | None":
-    """Most recent last_action_at across this user's appointments, or None."""
-    latest: "datetime | None" = None
-    for a in appts:
-        if a.get("user_chat_id") != user_id:
-            continue
-        ts = a.get("last_action_at")
-        if not ts:
-            continue
-        try:
-            dt = datetime.fromisoformat(ts)
-        except (ValueError, TypeError):
-            continue
-        if dt.tzinfo is None:
-            dt = TZ.localize(dt)
-        if latest is None or dt > latest:
-            latest = dt
-    return latest
-
-
-def _count_pending_appts(appts: list[dict[str, Any]], user_id: int) -> int:
-    """How many of the user's requests are still awaiting a response."""
-    return sum(
-        1 for a in appts
-        if a.get("user_chat_id") == user_id and a.get("status") == "pending"
-    )
-
-
-def _count_active_appts_with_official(
-    appts: list[dict[str, Any]],
-    user_id: int,
-    official_id: str,
-    center_dt: datetime,
-    half_days: int = APPOINTMENT_WINDOW_HALF_DAYS,
-) -> int:
-    """Count the user's active appointments with this official whose scheduled
-    time falls within *half_days* days before or after *center_dt*."""
-    start_dt = center_dt - timedelta(days=half_days)
-    end_dt = center_dt + timedelta(days=half_days)
-    count = 0
-    for a in appts:
-        if a.get("user_chat_id") != user_id:
-            continue
-        if a.get("official_id") != official_id:
-            continue
-        if a.get("status") not in ACTIVE_APPT_STATUSES:
-            continue
-        dt = _appt_datetime(a)
-        if dt is None:
-            continue
-        if start_dt <= dt <= end_dt:
-            count += 1
-    return count
-
-
-def _merge_special_events(
-    special_defs: list[dict[str, Any]],
-    announcements_map: dict[str, list[str]],
-    days_ahead: int = 90,
-) -> list[dict[str, Any]]:
-    """Expand special_events definitions into concrete upcoming event dicts.
-
-    All special events (including the weekly Sunday Morning Prayer) are driven
-    from events.yaml here; convocations/Sabbath come from hebrew_calendar.py.
-    """
-    now = now_tz()
-    cutoff = now + timedelta(days=days_ahead)
-    results: list[dict[str, Any]] = []
-    for defn in special_defs:
-        if not defn.get("active", True):
-            continue
-        etype = defn.get("type", "once")
-        if etype == "weekly":
-            wd_target = int(defn["weekday"])
-            current = now.date()
-            end = cutoff.date()
-            while current <= end:
-                if current.weekday() == wd_target:
-                    h, m = [int(x) for x in defn["time"].split(":")]
-                    svc_dt = TZ.localize(datetime(current.year, current.month, current.day, h, m))
-                    notif_dt = svc_dt - timedelta(minutes=int(defn.get("notification_minutes", DEFAULT_NOTIF_MIN)))
-                    if svc_dt > now:
-                        key = f"{defn['id']}_{current.isoformat()}"
-                        results.append({
-                            "key": key,
-                            "name": defn["name"],
-                            "type": "special",
-                            "service_time": svc_dt,
-                            "notification_time": notif_dt,
-                            "duration_minutes": defn.get("duration_minutes", 60),
-                            "description": defn.get("description", ""),
-                            "url": defn.get("url", ""),
-                            "image": defn.get("image", ""),
-                            "document": defn.get("document", ""),
-                            "targets": defn.get("targets", []),
-                            "announcements": announcements_map.get(key, []),
-                        })
-                current += timedelta(days=1)
-        elif etype == "once":
-            date_str = defn.get("date")
-            if not date_str:
-                continue
-            h, m = [int(x) for x in defn["time"].split(":")]
-            parts = [int(x) for x in date_str.split("-")]
-            svc_dt = TZ.localize(datetime(parts[0], parts[1], parts[2], h, m))
-            notif_dt = svc_dt - timedelta(minutes=int(defn.get("notification_minutes", DEFAULT_NOTIF_MIN)))
-            if now <= svc_dt <= cutoff:
-                results.append({
-                    "key": defn["id"],
-                    "name": defn["name"],
-                    "type": "special",
-                    "service_time": svc_dt,
-                    "notification_time": notif_dt,
-                    "duration_minutes": defn.get("duration_minutes", 60),
-                    "description": defn.get("description", ""),
-                    "url": defn.get("url", ""),
-                    "image": defn.get("image", ""),
-                    "document": defn.get("document", ""),
-                    "targets": defn.get("targets", []),
-                    "announcements": announcements_map.get(defn["id"], []),
-                })
-    return results
-
-
-def _resolve_targets(names: "list", registry: dict) -> list[int]:
-    """Map target names to chat_ids via the registry; pass through raw ids.
-
-    Accepts a list of registry names and/or literal chat ids (int, or a string
-    like a "@channelusername" / numeric id). Unknown names are dropped.
-    """
-    resolved: list = []
-    for n in names or []:
-        if isinstance(n, int):
-            resolved.append(n)
-        elif n in registry:
-            resolved.append(registry[n])
-        elif isinstance(n, str) and (n.startswith("@") or n.lstrip("-").isdigit()):
-            resolved.append(int(n) if n.lstrip("-").isdigit() else n)
-        # else: unknown name with no registry entry — skip
-    # De-duplicate, preserving order
-    seen = set()
-    out = []
-    for c in resolved:
-        if c not in seen:
-            seen.add(c)
-            out.append(c)
-    return out
-
-
-async def all_upcoming(days_ahead: int = 90) -> list[dict[str, Any]]:
-    """Return all events (convocations + special) sorted by service_time."""
-    evdata = await get_all_events_data()
-    announcements_map: dict[str, list[str]] = evdata.get("convocation_announcements", {})
-    urls_map: dict[str, str] = evdata.get("convocation_urls", {})
-    images_map: dict[str, str] = evdata.get("convocation_images", {}) or {}
-    documents_map: dict[str, str] = evdata.get("convocation_documents", {}) or {}
-    special_defs: list[dict[str, Any]] = evdata.get("special_events", [])
-
-    # Notification target registry + convocation target assignments
-    registry: dict = evdata.get("notification_targets", {}) or {}
-    convo_targets: dict = evdata.get("convocation_targets", {}) or {}
-    convo_targets_default: list = evdata.get("convocation_targets_default", []) or []
-
-    convocations = all_upcoming_events(TZ, days_ahead)
-    # Attach announcements, per-service join link, and notification target chats.
-    for ev in convocations:
-        ev["announcements"] = announcements_map.get(ev["key"], [])
-        phase_key = ev.get("phase_key")
-        if phase_key and urls_map.get(phase_key):
-            ev["url"] = urls_map[phase_key]
-        if phase_key and images_map.get(phase_key):
-            ev["image"] = images_map[phase_key]
-        if phase_key and documents_map.get(phase_key):
-            ev["document"] = documents_map[phase_key]
-        names = convo_targets.get(phase_key) if phase_key else None
-        if names is None:
-            names = convo_targets_default
-        ev["target_chat_ids"] = _resolve_targets(names, registry)
-
-    specials = _merge_special_events(special_defs, announcements_map, days_ahead)
-    for ev in specials:
-        ev["target_chat_ids"] = _resolve_targets(ev.get("targets", []), registry)
-
-    merged = convocations + specials
-    merged.sort(key=lambda e: e["service_time"])
-    return merged
-
-
-# ---------------------------------------------------------------------------
-# Notification sender
-# ---------------------------------------------------------------------------
-
-def _render_notification(event: dict[str, Any], tz: "pytz.BaseTzInfo", lang: str) -> str:
-    """Build a reminder message localized and time-zoned for one recipient."""
-    lines = [
-        t("notif_reminder_title", lang, name=event["name"]),
-        t("notif_service_begins", lang, when=format_dt(event["service_time"], tz, lang)),
-    ]
-    if event.get("description"):
-        lines.append(f"\n_{event['description']}_")
-    if event.get("url"):
-        lines.append("\n" + t("notif_join", lang, url=event["url"]))
-    if event.get("announcements"):
-        lines.append("\n" + t("notif_announcements_header", lang))
-        lines.extend(f"• {a}" for a in event["announcements"])
-    return "\n".join(lines)
-
-
-# ---------------------------------------------------------------------------
-# Media attachments (photos / documents) for notifications and broadcasts
-# ---------------------------------------------------------------------------
-
-CAPTION_LIMIT = 1024  # Telegram's caption length limit for photos/documents
-
-
-def _is_media_url(src: "str | None") -> bool:
-    return isinstance(src, str) and src.lower().startswith(("http://", "https://"))
-
-
-def _looks_like_path(src: str) -> bool:
-    """Heuristic: a local path has a separator or a file extension; a Telegram
-    file_id has neither."""
-    return "/" in src or "\\" in src or "." in src
-
-
-def _resolve_local_media(src: "str | None") -> "Path | None":
-    """Resolve a local media path (relative to the project root) to an existing file."""
-    if not src:
-        return None
-    p = Path(src)
-    if not p.is_absolute():
-        p = BASE_DIR / p
-    return p if p.is_file() else None
-
-
-async def _send_media(bot, chat_id, kind: str, source: str,
-                      caption: "str | None" = None, cache: "dict | None" = None):
-    """Send a photo or document to one chat.
-
-    *source* may be an https URL, a local file path, or a Telegram file_id.
-    Local files are uploaded and the returned file_id is stored in *cache* so
-    the same file is only uploaded once across many recipients. Returns the
-    file_id, or None. Raises TelegramError on send failure (caller retries).
-    """
-    parse_mode = ParseMode.MARKDOWN if caption else None
-    opened = None
-    if cache and cache.get("file_id"):
-        media = cache["file_id"]
-    elif _is_media_url(source):
-        media = source
-    else:
-        local = _resolve_local_media(source)
-        if local is not None:
-            opened = local.open("rb")
-            media = InputFile(opened, filename=local.name)
-        else:
-            media = source  # assume it's already a Telegram file_id
-    try:
-        if kind == "photo":
-            msg = await bot.send_photo(chat_id, media, caption=caption, parse_mode=parse_mode)
-            fid = msg.photo[-1].file_id if getattr(msg, "photo", None) else None
-        else:
-            msg = await bot.send_document(chat_id, media, caption=caption, parse_mode=parse_mode)
-            fid = msg.document.file_id if getattr(msg, "document", None) else None
-    finally:
-        if opened:
-            opened.close()
-    if cache is not None and fid:
-        cache["file_id"] = fid
-    return fid
-
-
-async def _send_notification_payload(bot, chat_id, media: dict, text: str, caches: dict) -> None:
-    """Deliver a notification to one chat: image/document with the reminder text as
-    a caption, plus the text as its own message if it exceeds the caption limit."""
-    image = media.get("image")
-    document = media.get("document")
-    if not image and not document:
-        await bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN)
-        return
-    caption = text if len(text) <= CAPTION_LIMIT else None
-    caption_used = False
-    if image:
-        await _send_media(bot, chat_id, "photo", image, caption=caption, cache=caches["image"])
-        caption_used = caption is not None
-    if document:
-        cap = None if caption_used else caption
-        await _send_media(bot, chat_id, "document", document, caption=cap, cache=caches["document"])
-        caption_used = caption_used or (cap is not None)
-    if caption is None:  # text too long to be a caption — send separately
-        await bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN)
-
-
-async def _notification_recipients(event: dict[str, Any]) -> dict:
-    """Map every recipient chat_id -> (tz, lang) for this event.
-
-    Recipients are the configured group/channel targets (rendered in the church
-    default tz/language) plus any individual subscribers who opted into this
-    event's category (rendered in their own tz/language).
-    """
-    recipients: dict = {}
-    for cid in event.get("target_chat_ids") or []:
-        recipients.setdefault(cid, (TZ, DEFAULT_LANG))
-    category = _event_category(event)
-    for u in await get_all_users():
-        if category in user_notif_prefs(u):
-            recipients[u["chat_id"]] = (user_tz_of(u), user_lang_of(u))
-    return recipients
-
-
-async def deliver_event_notifications(bot, event: dict[str, Any]) -> int:
-    """Post an event reminder to each recipient not yet notified.
-
-    Recipients are the configured groups/channels plus individual subscribers
-    who opted in (via /notifications) to this event's category. Idempotent:
-    tracks delivered chats in notification_state so a missed or partially-failed
-    broadcast can be retried later without duplicates. Does nothing once the
-    event's service time has passed. Returns the number of messages sent.
-    """
-    key = event["key"]
-    service_time = event["service_time"]
-    now = now_tz()
-    if now >= service_time:
-        return 0  # too late — the event has already started
-
-    recipients = await _notification_recipients(event)
-    if not recipients:
-        return 0  # no groups configured and nobody opted in
-
-    states = await _load_notif_state()
-    state = states.setdefault(
-        key,
-        {"name": event["name"], "service_time": service_time.isoformat(), "notified": []},
-    )
-    notified = set(state["notified"])
-    pending = [c for c in recipients if c not in notified]
-    if not pending:
-        return 0
-
-    # Configured media (image/document): URL or local path. Drop a local file
-    # that's missing so the reminder still goes out as text.
-    media = {"image": event.get("image") or "", "document": event.get("document") or ""}
-    for field, src in list(media.items()):
-        if src and not _is_media_url(src) and _looks_like_path(src) \
-                and _resolve_local_media(src) is None:
-            logger.warning("Event %r: media file not found, skipping: %s", event["name"], src)
-            media[field] = ""
-    caches = {"image": {}, "document": {}}
-
-    sent = 0
-    failed = 0
-    for chat_id in pending:
-        tz, lang = recipients[chat_id]
-        text = _render_notification(event, tz, lang)
-        try:
-            await _send_notification_payload(bot, chat_id, media, text, caches)
-            notified.add(chat_id)
-            sent += 1
-        except TelegramError as exc:
-            # Includes Forbidden (bot not in group) — leave pending for retry.
-            failed += 1
-            logger.warning("Notification post error for chat %s: %s", chat_id, exc)
-
-    state["notified"] = sorted(notified, key=lambda c: str(c))
-    states[key] = state
-    await _save_notif_state(states)
-
-    if sent:
-        activity.log_notification_sent(event["name"], sent)
-    logger.info(
-        "Notification broadcast %r: posted=%d, will_retry=%d",
-        event["name"], sent, failed,
-    )
-    return sent
-
-
-async def send_notification(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Scheduled one-shot job at an event's notification time."""
-    event: dict[str, Any] = context.job.data  # type: ignore[attr-defined]
-    await deliver_event_notifications(context.bot, event)
-
-
-async def notification_catchup_job(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Safety net: retry any due-but-undelivered notifications.
-
-    Covers reminders missed entirely (process asleep/offline at fire time) and
-    partial failures (network errors). Retries every recipient still pending
-    for any event currently inside its [notification_time, service_time) window,
-    then prunes state for events whose service time has passed.
-    """
-    now = now_tz()
-    events = await all_upcoming(days_ahead=3)
-    for ev in events:
-        if ev["notification_time"] <= now < ev["service_time"]:
-            await deliver_event_notifications(context.bot, ev)
-
-    # Prune state for events that have started or fallen out of the window.
-    states = await _load_notif_state()
-    live_keys = {ev["key"] for ev in events if now < ev["service_time"]}
-    pruned = {k: v for k, v in states.items() if k in live_keys}
-    if len(pruned) != len(states):
-        await _save_notif_state(pruned)
-
-
-def schedule_event_notification(app: Application, event: dict[str, Any]) -> None:
-    notif_time = event["notification_time"]
-    if notif_time <= now_tz():
-        return
-    job_id = f"notif_{event['key']}"
-    # Remove existing job with same id (if rescheduled)
-    existing = app.job_queue.get_jobs_by_name(job_id)
-    for j in existing:
-        j.schedule_removal()
-    app.job_queue.run_once(send_notification, when=notif_time, data=event, name=job_id)
-
-
-async def schedule_all_upcoming(app: Application) -> None:
-    events = await all_upcoming(days_ahead=400)
-    for ev in events:
-        schedule_event_notification(app, ev)
-    logger.info("Scheduled %d upcoming event notifications.", len(events))
-
-
 # ---------------------------------------------------------------------------
 # /start — user registration
 # ---------------------------------------------------------------------------
-
-ADMIN_COMMANDS_TEXT = """\
-*Admin commands:*
-/addevent — add a special event
-/modifyevent — modify an event
-/deleteevent — remove or annotate an event
-/setservicelink — set the join link for a convocation/Sabbath service
-/broadcast — send a message to groups and/or all subscribers
-/addannouncement — create an announcement (title, body, expiration)
-/listannouncements — list active and recently-expired announcements
-/delannouncement — expire an active announcement now
-/listevents — events in the next 30 days (admin view)
-/usercount — number of registered users
-/userlist — list registered users
-/adminhelp — show this list"""
-
-
-def _commands_text(lang: str, is_adm: bool) -> str:
-    """Localized user command list, with admin commands appended if applicable."""
-    text = t("user_commands", lang)
-    if is_adm:
-        text += "\n\n" + ADMIN_COMMANDS_TEXT
-    return text
-
-
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    uid, uname, dname = user_info(update)
-    users = await get_all_users()
-
-    is_new = not any(u["chat_id"] == uid for u in users)
-    if is_new:
-        users.append({
-            "chat_id": uid,
-            "username": uname,
-            "display_name": dname,
-            "joined": now_tz().isoformat(),
-        })
-        await save_users(users)
-        activity.log_user_joined(uid, uname, dname)
-
-    # Try to match by username first (no extra step needed)
-    await _register_official_if_known(uid, uname)
-    await _register_admin_by_username(uid, uname)
-
-    _, lang = await get_user_prefs(uid)
-
-    # If not yet identified as admin/official by username, request contact share
-    # so phone-number-only admins/officials can be recognised.
-    already_known = is_admin(update) or _is_known_official(uid, uname)
-    if not already_known:
-        kb = ReplyKeyboardMarkup(
-            [[KeyboardButton(t("share_contact_button", lang), request_contact=True)]],
-            one_time_keyboard=True,
-            resize_keyboard=True,
-        )
-        await update.message.reply_text(
-            t("share_contact_prompt", lang),
-            reply_markup=kb,
-        )
-
-    is_adm = is_admin(update)
-    cmd_text = _commands_text(lang, is_adm)
-
-    await update.message.reply_text(
-        t("welcome", lang, bot_name=BOT_DISPLAY_NAME, commands=cmd_text),
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=ReplyKeyboardRemove() if already_known else None,
-    )
-    activity.log_command("start", uid, uname, dname)
-
-
-async def _register_official_if_known(
-    user_id: int, username: str | None, phone: str | None = None
-) -> None:
-    """Store chat_id for officials/admins who have started the bot.
-
-    Matches on telegram_username or phone (digits-only comparison).
-    """
-    uname_lower = (username or "").lstrip("@").lower()
-    phone_norm = re.sub(r"\D", "", phone or "")
-
-    def _match_and_set(rec: dict) -> bool:
-        matched = False
-        if uname_lower:
-            rname = (rec.get("telegram_username") or "").lstrip("@").lower()
-            if rname and rname == uname_lower:
-                matched = True
-        if not matched and phone_norm:
-            rphone = re.sub(r"\D", "", rec.get("phone") or "")
-            if rphone and rphone == phone_norm:
-                matched = True
-        if matched and rec.get("chat_id") != user_id:
-            rec["chat_id"] = user_id
-            return True
-        return False
-
-    changed = False
-    for off in OFFICIALS:
-        if _match_and_set(off):
-            changed = True
-        for proxy in off.get("proxies") or []:
-            if _match_and_set(proxy):
-                changed = True
-    if changed:
-        _save_officials()
-
-
-async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    uid, uname, dname = user_info(update)
-    _, lang = await get_user_prefs(uid)
-    users = await get_all_users()
-    users = [u for u in users if u["chat_id"] != uid]
-    await save_users(users)
-    activity.log_user_left(uid, uname, dname)
-    activity.log_command("stop", uid, uname, dname)
-    await update.message.reply_text(t("unsubscribed", lang))
-
-
-# ---------------------------------------------------------------------------
-# /help  /events  /exportcalendar
-# ---------------------------------------------------------------------------
-
-# /help subtopics -> catalog key with a detailed explanation.
-HELP_TOPICS = {
-    "appointment": "help_appointment",
-    "myappointments": "help_myappointments",
-    "cancelappointment": "help_cancelappointment",
-    "reschedule": "help_reschedule",
-    "events": "help_events",
-    "exportcalendar": "help_exportcalendar",
-    "settimezone": "help_settimezone",
-    "language": "help_language",
-    "notifications": "help_notifications",
-    "donate": "help_donate",
-    "announcements": "help_announcements",
-}
-
-
-async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    uid, uname, dname = user_info(update)
-    _, lang = await get_user_prefs(uid)
-
-    topic = (context.args[0].lstrip("/").lower() if context.args else None)
-    if topic:
-        activity.log_command("help", uid, uname, dname, details=f"topic={topic}")
-        if topic in HELP_TOPICS:
-            await update.message.reply_text(t(HELP_TOPICS[topic], lang),
-                                            parse_mode=ParseMode.MARKDOWN)
-        else:
-            topics = ", ".join(f"`{x}`" for x in HELP_TOPICS)
-            await update.message.reply_text(
-                t("help_unknown_topic", lang, topics=topics),
-                parse_mode=ParseMode.MARKDOWN,
-            )
-        return
-
-    activity.log_command("help", uid, uname, dname)
-    text = _commands_text(lang, is_admin(update))
-    # Hint that per-command help is available.
-    text += "\n\n" + t("help_topic_hint", lang)
-    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
-
-
-async def cmd_donate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    uid, uname, dname = user_info(update)
-    activity.log_command("donate", uid, uname, dname)
-    _, lang = await get_user_prefs(uid)
-    if not DONATION_URL:
-        await update.message.reply_text(t("donate_not_configured", lang))
-        return
-    kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton(t("donate_button", lang), url=DONATION_URL)
-    ]])
-    await update.message.reply_text(
-        t("donate_message", lang),
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=kb,
-    )
-
-
-async def cmd_events(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    uid, uname, dname = user_info(update)
-    activity.log_command("events", uid, uname, dname)
-    tz, lang = await get_user_prefs(uid)
-    events = await all_upcoming(days_ahead=30)
-    if not events:
-        await update.message.reply_text(t("events_none", lang))
-        return
-    lines = [t("events_header", lang)]
-    for ev in events:
-        dt_str = format_dt(ev["service_time"], tz, lang)
-        lines.append(f"📅 *{ev['name']}*\n   {dt_str}")
-        if ev.get("url"):
-            lines.append(f"   🔗 {ev['url']}")
-        if ev.get("announcements"):
-            for a in ev["announcements"]:
-                lines.append(f"   ⚠️ {a}")
-        lines.append("")
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
-
-
-async def cmd_export_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    uid, uname, dname = user_info(update)
-    activity.log_command("exportcalendar", uid, uname, dname)
-    events = await all_upcoming(days_ahead=365)
-    ics_bytes = events_to_ics(events, calendar_name=BOT_DISPLAY_NAME)
-    bio = io.BytesIO(ics_bytes)
-    bio.name = "kingdom_events.ics"
-    await update.message.reply_document(
-        document=InputFile(bio, filename="kingdom_events.ics"),
-        caption=f"📅 {BOT_DISPLAY_NAME} — upcoming events calendar",
-    )
-
-
-# ---------------------------------------------------------------------------
-# Admin guard decorator
-# ---------------------------------------------------------------------------
-
-def admin_only(handler):
-    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not is_admin(update):
-            await update.message.reply_text("⛔ Unknown command.")
-            return ConversationHandler.END
-        return await handler(update, context)
-    wrapper.__name__ = handler.__name__
-    return wrapper
-
-
-# ---------------------------------------------------------------------------
-# /announcements — general announcements (user view + admin management)
-# ---------------------------------------------------------------------------
-
-ANN_TITLE_MAX = 64
-ANN_BODY_MAX = 1024
-
-# Conversation states. Offset past the BC_* constants (0-2) because the
-# add-announcement conversation re-enters the broadcast target-selection
-# states after saving.
-AN_TITLE, AN_BODY, AN_EXPIRES, AN_CONFIRM = range(3, 7)
-DA_SELECT = 7
-
-
-def _render_announcement(ann: dict[str, Any]) -> str:
-    """Markdown-safe '📢 title + body' block (admin-typed text is escaped)."""
-    title = escape_markdown(str(ann.get("title", "")), version=1)
-    body = escape_markdown(str(ann.get("body", "")), version=1)
-    return f"📢 *{title}*\n\n{body}"
-
-
-async def _announcement_for_lang(ann: dict[str, Any], lang: str) -> dict[str, Any]:
-    """The announcement with title/body in *lang*, machine-translating and
-    caching on first request.
-
-    Returns the record itself when no translation is needed (same language, or
-    a legacy record without a source lang), and falls back to the original text
-    whenever translation fails — announcements must never break because the
-    translator did.
-    """
-    src = ann.get("lang")
-    if not src or src == lang:
-        return ann
-    cached = (ann.get("translations") or {}).get(lang)
-    if cached:
-        return {**ann, "title": cached.get("title") or ann.get("title"),
-                "body": cached.get("body") or ann.get("body")}
-
-    loop = asyncio.get_event_loop()
-    title = await loop.run_in_executor(
-        None, translation.translate, str(ann.get("title", "")), src, lang)
-    body = await loop.run_in_executor(
-        None, translation.translate, str(ann.get("body", "")), src, lang)
-    if title is None and body is None:
-        return ann  # translator unavailable — show the original
-
-    entry = {"title": title or ann.get("title"), "body": body or ann.get("body")}
-    # Persist the translation on the stored record so it's done once per language.
-    anns = await get_announcements()
-    for a in anns:
-        if a.get("id") == ann.get("id"):
-            a.setdefault("translations", {})[lang] = entry
-            await save_announcements(anns)
-            break
-    return {**ann, **entry}
-
-
-async def cmd_announcements(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    uid, uname, dname = user_info(update)
-    activity.log_command("announcements", uid, uname, dname)
-    _, lang = await get_user_prefs(uid)
-    live = active_announcements(await get_announcements())
-    if not live:
-        await update.message.reply_text(t("ann_none", lang))
-        return
-    parts = [t("ann_header", lang)]
-    for a in live:
-        localized = await _announcement_for_lang(a, lang)
-        parts.append(
-            _render_announcement(localized) + "\n"
-            + t("ann_until", lang, date=a.get("expires", "?"))
-        )
-    await update.message.reply_text("\n\n".join(parts), parse_mode=ParseMode.MARKDOWN)
-
-
-@admin_only
-async def cmd_addannouncement(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    uid, uname, dname = user_info(update)
-    activity.log_command("addannouncement", uid, uname, dname)
-    context.user_data.clear()
-    await update.message.reply_text(
-        f"📢 *Add Announcement*\n\nTitle (max {ANN_TITLE_MAX} characters):",
-        parse_mode=ParseMode.MARKDOWN,
-    )
-    return AN_TITLE
-
-
-async def an_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    title = update.message.text.strip()
-    if not title or len(title) > ANN_TITLE_MAX:
-        await update.message.reply_text(
-            f"Please send a title of 1–{ANN_TITLE_MAX} characters:")
-        return AN_TITLE
-    context.user_data["an_title"] = title
-    await update.message.reply_text(f"Body (max {ANN_BODY_MAX} characters):")
-    return AN_BODY
-
-
-async def an_body(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    body = update.message.text.strip()
-    if not body or len(body) > ANN_BODY_MAX:
-        await update.message.reply_text(
-            f"Please send a body of 1–{ANN_BODY_MAX} characters:")
-        return AN_BODY
-    context.user_data["an_body"] = body
-    await update.message.reply_text("Expiration date (YYYY-MM-DD) — the announcement "
-                                    "shows through the end of that day:")
-    return AN_EXPIRES
-
-
-async def an_expires(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    text = update.message.text.strip()
-    try:
-        d = datetime.strptime(text, "%Y-%m-%d")
-    except ValueError:
-        await update.message.reply_text("Please use YYYY-MM-DD format:")
-        return AN_EXPIRES
-    if TZ.localize(d.replace(hour=23, minute=59, second=59)) < now_tz():
-        await update.message.reply_text(
-            "That date is in the past. Please enter today or a future date (YYYY-MM-DD):")
-        return AN_EXPIRES
-    context.user_data["an_expires"] = text
-    preview = _render_announcement(
-        {"title": context.user_data["an_title"], "body": context.user_data["an_body"]})
-    await update.message.reply_text(
-        f"{preview}\n\n_Expires: {text} (end of day)_\n\nSave this announcement? (yes/no)",
-        parse_mode=ParseMode.MARKDOWN,
-    )
-    return AN_CONFIRM
-
-
-async def an_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    uid, uname, dname = user_info(update)
-    _, lang = await get_user_prefs(uid)
-    if not _is_affirmative(update.message.text):
-        await update.message.reply_text("Announcement discarded.")
-        return ConversationHandler.END
-
-    ann = {
-        "id": uuid.uuid4().hex[:8].upper(),
-        "title": context.user_data["an_title"],
-        "body": context.user_data["an_body"],
-        "lang": lang,  # source language; viewers in other languages get a
-                       # cached machine translation (see _announcement_for_lang)
-        "created": now_tz().isoformat(),
-        "created_by": dname,
-        "expires": context.user_data["an_expires"],
-    }
-    anns = await get_announcements()
-    anns.append(ann)
-    await save_announcements(anns)
-    activity.log_command("addannouncement", uid, uname, dname,
-                         details=f"Created announcement {ann['id']}")
-
-    # Hand off to the broadcast target-selection flow so the new announcement
-    # can be pushed out immediately (Cancel skips the push; it's already saved).
-    context.user_data["bc_message"] = _append_sender(_render_announcement(ann), dname)
-    context.user_data.pop("bc_media", None)
-    options = await _broadcast_target_options(context.bot, lang)
-    context.user_data["bc_options"] = options
-    context.user_data["bc_selected"] = set()
-    await update.message.reply_text(
-        f"✅ Announcement saved (ID: `{ann['id']}`).\n\n"
-        "Now choose where to broadcast it, then tap *Send* "
-        "(or *Cancel* to skip broadcasting — it will still appear in /announcements):",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=_bc_keyboard(options, set()),
-    )
-    return BC_SELECT
-
-
-@admin_only
-async def cmd_listannouncements(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    uid, uname, dname = user_info(update)
-    activity.log_command("listannouncements", uid, uname, dname)
-    anns = await get_announcements()
-    if not anns:
-        await update.message.reply_text("No announcements on record.")
-        return
-    now = now_tz()
-    lines = ["*Announcements (admin view):*\n"]
-    for a in sorted(anns, key=lambda x: str(x.get("created", "")), reverse=True):
-        mark = "🟢" if _ann_is_active(a, now) else "⚪️ expired"
-        title = escape_markdown(str(a.get("title", "?")), version=1)
-        lines.append(f"{mark} *{title}* — until {a.get('expires', '?')} (ID: `{a.get('id')}`)")
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
-
-
-@admin_only
-async def cmd_delannouncement(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    uid, uname, dname = user_info(update)
-    activity.log_command("delannouncement", uid, uname, dname)
-    live = active_announcements(await get_announcements())
-    if not live:
-        await update.message.reply_text("There are no active announcements to remove.")
-        return ConversationHandler.END
-    context.user_data["da_anns"] = live
-    lines = ["*Remove an Announcement*\nReply with the number to expire it now:\n"]
-    for i, a in enumerate(live, 1):
-        title = escape_markdown(str(a.get("title", "?")), version=1)
-        lines.append(f"{i}. *{title}* — until {a.get('expires', '?')}")
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
-    return DA_SELECT
-
-
-async def da_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    uid, uname, dname = user_info(update)
-    live: list = context.user_data.get("da_anns", [])
-    text = update.message.text.strip()
-    if not text.isdigit() or not (1 <= int(text) <= len(live)):
-        await update.message.reply_text("Please reply with one of the listed numbers:")
-        return DA_SELECT
-    target = live[int(text) - 1]
-    anns = await get_announcements()
-    yesterday = (now_tz() - timedelta(days=1)).strftime("%Y-%m-%d")
-    for a in anns:
-        if a.get("id") == target.get("id"):
-            a["expires"] = yesterday  # expires immediately; purged after 30 days
-            break
-    await save_announcements(anns)
-    activity.log_command("delannouncement", uid, uname, dname,
-                         details=f"Expired announcement {target.get('id')}")
-    await update.message.reply_text(
-        f"✅ Announcement `{target.get('id')}` is no longer shown. "
-        f"It will be permanently deleted after {ANNOUNCEMENT_PURGE_AFTER_DAYS} days.",
-        parse_mode=ParseMode.MARKDOWN,
-    )
-    return ConversationHandler.END
-
-
-# ---------------------------------------------------------------------------
-# /adminhelp  /usercount  /userlist  /listevents
-# ---------------------------------------------------------------------------
-
-@admin_only
-async def cmd_adminhelp(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    uid, uname, dname = user_info(update)
-    activity.log_command("adminhelp", uid, uname, dname)
-    await update.message.reply_text(ADMIN_COMMANDS_TEXT, parse_mode=ParseMode.MARKDOWN)
-
-
-@admin_only
-async def cmd_usercount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    uid, uname, dname = user_info(update)
-    activity.log_command("usercount", uid, uname, dname)
-    users = await get_all_users()
-    await update.message.reply_text(f"👥 Total registered users: *{len(users)}*", parse_mode=ParseMode.MARKDOWN)
-
-
-@admin_only
-async def cmd_userlist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    uid, uname, dname = user_info(update)
-    activity.log_command("userlist", uid, uname, dname)
-    users = await get_all_users()
-    if not users:
-        await update.message.reply_text("No registered users.")
-        return
-    if len(users) > 100:
-        pdf_buf = generate_user_list_pdf(users)
-        await update.message.reply_document(
-            document=InputFile(pdf_buf, filename="user_list.pdf"),
-            caption=f"User list ({len(users)} users)",
-        )
-        return
-    lines = [f"👥 *Registered Users ({len(users)}):*\n"]
-    for i, u in enumerate(users, 1):
-        dn = escape_markdown(u.get("display_name") or "—", version=1)
-        un = ("@" + escape_markdown(u["username"], version=1)) if u.get("username") else "—"
-        lines.append(f"{i}. {dn} ({un})")
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
-
-
-@admin_only
-async def cmd_listevents(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    uid, uname, dname = user_info(update)
-    activity.log_command("listevents", uid, uname, dname)
-    events = await all_upcoming(days_ahead=30)
-    if not events:
-        await update.message.reply_text("No events in the next 30 days.")
-        return
-    lines = ["*Events — Next 30 Days (admin view):*\n"]
-    for ev in events:
-        dt_str = format_dt(ev["service_time"])
-        notif_str = format_dt(ev["notification_time"])
-        etype = ev.get("type", "?")
-        lines.append(
-            f"📅 *{ev['name']}*\n"
-            f"   Service: {dt_str}\n"
-            f"   Notify: {notif_str}\n"
-            f"   Type: {etype}"
-        )
-        if ev.get("announcements"):
-            for a in ev["announcements"]:
-                lines.append(f"   ⚠️ {a}")
-        lines.append("")
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
-
-
-# ---------------------------------------------------------------------------
-# /addevent — multi-step conversation
-# ---------------------------------------------------------------------------
-
-(
-    AE_NAME,
-    AE_DATE,
-    AE_TIME,
-    AE_DURATION,
-    AE_DESC,
-    AE_URL,
-    AE_NOTIF,
-    AE_CONFIRM,
-) = range(8)
-
-
-@admin_only
-async def cmd_addevent(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    uid, uname, dname = user_info(update)
-    activity.log_command("addevent", uid, uname, dname)
-    context.user_data.clear()
-    await update.message.reply_text("➕ *Add Special Event*\n\nEvent name:", parse_mode=ParseMode.MARKDOWN)
-    return AE_NAME
-
-
-async def ae_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["ae_name"] = update.message.text.strip()
-    await update.message.reply_text(
-        "Date (YYYY-MM-DD) for a one-time event, or 'weekly:N' where N=0 Mon … 6 Sun:"
-    )
-    return AE_DATE
-
-
-async def ae_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    text = update.message.text.strip()
-    context.user_data["ae_date"] = text
-    await update.message.reply_text("Time (HH:MM, 24-hour):")
-    return AE_TIME
-
-
-async def ae_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    t = update.message.text.strip()
-    if not re.match(r"^\d{1,2}:\d{2}$", t):
-        await update.message.reply_text("Please use HH:MM format (e.g. 19:00):")
-        return AE_TIME
-    context.user_data["ae_time"] = t
-    await update.message.reply_text("Duration in minutes (press Enter/0 to skip):")
-    return AE_DURATION
-
-
-async def ae_duration(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    text = update.message.text.strip()
-    context.user_data["ae_duration"] = int(text) if text.isdigit() else 60
-    await update.message.reply_text("Description (or '-' to skip):")
-    return AE_DESC
-
-
-async def ae_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    text = update.message.text.strip()
-    context.user_data["ae_desc"] = "" if text == "-" else text
-    await update.message.reply_text("Zoom / join URL (or '-' to skip):")
-    return AE_URL
-
-
-async def ae_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    text = update.message.text.strip()
-    context.user_data["ae_url"] = "" if text == "-" else text
-    await update.message.reply_text(
-        f"Notification minutes before event (default {DEFAULT_NOTIF_MIN}):"
-    )
-    return AE_NOTIF
-
-
-async def ae_notif(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    text = update.message.text.strip()
-    notif = int(text) if text.isdigit() else DEFAULT_NOTIF_MIN
-    context.user_data["ae_notif"] = notif
-    d = context.user_data
-    summary = (
-        f"*New event summary:*\n"
-        f"Name: {d['ae_name']}\n"
-        f"Schedule: {d['ae_date']} at {d['ae_time']}\n"
-        f"Duration: {d['ae_duration']} min\n"
-        f"Description: {d.get('ae_desc') or '—'}\n"
-        f"URL: {d.get('ae_url') or '—'}\n"
-        f"Notify: {notif} min before\n\n"
-        f"Confirm? (yes/no)"
-    )
-    await update.message.reply_text(summary, parse_mode=ParseMode.MARKDOWN)
-    return AE_CONFIRM
-
-
-async def ae_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if update.message.text.strip().lower() not in ("yes", "y"):
-        await update.message.reply_text("Cancelled.")
-        return ConversationHandler.END
-
-    d = context.user_data
-    date_raw: str = d["ae_date"]
-    new_id = f"special_{uuid.uuid4().hex[:8]}"
-
-    if date_raw.startswith("weekly:"):
-        wd = int(date_raw.split(":")[1])
-        new_defn = {
-            "id": new_id,
-            "name": d["ae_name"],
-            "type": "weekly",
-            "weekday": wd,
-            "time": d["ae_time"],
-            "duration_minutes": d["ae_duration"],
-            "notification_minutes": d["ae_notif"],
-            "description": d.get("ae_desc", ""),
-            "url": d.get("ae_url", ""),
-            "active": True,
-        }
-    else:
-        new_defn = {
-            "id": new_id,
-            "name": d["ae_name"],
-            "type": "once",
-            "date": date_raw,
-            "time": d["ae_time"],
-            "duration_minutes": d["ae_duration"],
-            "notification_minutes": d["ae_notif"],
-            "description": d.get("ae_desc", ""),
-            "url": d.get("ae_url", ""),
-            "active": True,
-        }
-
-    evdata = await get_all_events_data()
-    specials = evdata.get("special_events", [])
-    specials.append(new_defn)
-    evdata["special_events"] = specials
-    await save_events_data(evdata)
-
-    # Schedule notification for the new event
-    app: Application = context.application
-    fake_events = _merge_special_events([new_defn], {}, days_ahead=400)
-    for ev in fake_events:
-        schedule_event_notification(app, ev)
-
-    uid, uname, dname = user_info(update)
-    activity.log_command("addevent", uid, uname, dname, details=f"Added '{d['ae_name']}' (id:{new_id})")
-    await update.message.reply_text(f"✅ Event added (ID: `{new_id}`)", parse_mode=ParseMode.MARKDOWN)
-    return ConversationHandler.END
-
-
-# ---------------------------------------------------------------------------
-# /modifyevent
-# ---------------------------------------------------------------------------
-
-ME_SELECT, ME_FIELD, ME_VALUE = range(3)
-
-
-@admin_only
-async def cmd_modifyevent(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    uid, uname, dname = user_info(update)
-    activity.log_command("modifyevent", uid, uname, dname)
-    evdata = await get_all_events_data()
-    specials = evdata.get("special_events", [])
-    if not specials:
-        await update.message.reply_text("No special events to modify.")
-        return ConversationHandler.END
-    lines = ["*Special Events:*\n"]
-    for i, ev in enumerate(specials):
-        lines.append(f"{i+1}. [{ev['id']}] {ev['name']}")
-    lines.append("\nEnter the event number or ID to modify:")
-    context.user_data["me_specials"] = specials
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
-    return ME_SELECT
-
-
-async def me_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    text = update.message.text.strip()
-    specials: list[dict] = context.user_data["me_specials"]
-    ev = None
-    if text.isdigit():
-        idx = int(text) - 1
-        if 0 <= idx < len(specials):
-            ev = specials[idx]
-    else:
-        ev = next((e for e in specials if e["id"] == text), None)
-    if not ev:
-        await update.message.reply_text("Event not found. Please try again:")
-        return ME_SELECT
-    context.user_data["me_event"] = ev
-    await update.message.reply_text(
-        f"Modifying: *{ev['name']}*\n\n"
-        "Which field to change?\n"
-        "date | time | duration | description | url | notification | name | active",
-        parse_mode=ParseMode.MARKDOWN,
-    )
-    return ME_FIELD
-
-
-async def me_field(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    field = update.message.text.strip().lower()
-    valid = {"date", "time", "duration", "description", "notification", "name", "active", "url"}
-    if field not in valid:
-        await update.message.reply_text(f"Invalid field. Choose from: {', '.join(sorted(valid))}:")
-        return ME_FIELD
-    context.user_data["me_field"] = field
-    await update.message.reply_text(f"New value for *{field}*:", parse_mode=ParseMode.MARKDOWN)
-    return ME_VALUE
-
-
-async def me_value(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    value = update.message.text.strip()
-    field = context.user_data["me_field"]
-    ev: dict = context.user_data["me_event"]
-    field_map = {
-        "date": "date", "time": "time", "duration": "duration_minutes",
-        "description": "description", "notification": "notification_minutes",
-        "name": "name", "active": "active", "url": "url",
-    }
-    yaml_field = field_map[field]
-    if field in ("duration", "notification"):
-        ev[yaml_field] = int(value)
-    elif field == "active":
-        ev[yaml_field] = value.lower() in ("true", "yes", "1")
-    else:
-        ev[yaml_field] = value
-
-    evdata = await get_all_events_data()
-    specials = evdata.get("special_events", [])
-    for i, e in enumerate(specials):
-        if e["id"] == ev["id"]:
-            specials[i] = ev
-            break
-    evdata["special_events"] = specials
-    await save_events_data(evdata)
-
-    # Reschedule
-    app: Application = context.application
-    new_events = _merge_special_events([ev], {}, days_ahead=400)
-    for e in new_events:
-        schedule_event_notification(app, e)
-
-    uid, uname, dname = user_info(update)
-    activity.log_command("modifyevent", uid, uname, dname, details=f"Modified '{ev['name']}' field={field}")
-    await update.message.reply_text(f"✅ Updated *{field}* for *{ev['name']}*.", parse_mode=ParseMode.MARKDOWN)
-    return ConversationHandler.END
-
-
-# ---------------------------------------------------------------------------
-# /deleteevent — delete special event or annotate convocation
-# ---------------------------------------------------------------------------
-
-DE_SELECT, DE_CONFIRM, DE_ANNOT = range(3)
-
-
-@admin_only
-async def cmd_deleteevent(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    uid, uname, dname = user_info(update)
-    activity.log_command("deleteevent", uid, uname, dname)
-    events = await all_upcoming(days_ahead=30)
-    lines = ["*Events in next 30 days:*\n"]
-    context.user_data["de_events"] = events
-    for i, ev in enumerate(events):
-        lines.append(f"{i+1}. [{ev['type'][0].upper()}] {ev['name']}  ({format_dt(ev['service_time'])})")
-    lines.append(
-        "\nEnter number to select.\n"
-        "_Special events can be deleted; convocations get an urgent announcement added._"
-    )
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
-    return DE_SELECT
-
-
-async def de_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    text = update.message.text.strip()
-    events: list[dict] = context.user_data["de_events"]
-    if not text.isdigit() or not (1 <= int(text) <= len(events)):
-        await update.message.reply_text("Invalid selection. Enter a number:")
-        return DE_SELECT
-    ev = events[int(text) - 1]
-    context.user_data["de_ev"] = ev
-    if ev["type"] == "special":
-        await update.message.reply_text(
-            f"Delete *{ev['name']}*? (yes/no)", parse_mode=ParseMode.MARKDOWN
-        )
-        return DE_CONFIRM
-    else:
-        await update.message.reply_text(
-            f"*{ev['name']}* is a convocation (cannot be deleted).\n"
-            "Enter an urgent announcement to add (or '-' to cancel):",
-            parse_mode=ParseMode.MARKDOWN,
-        )
-        return DE_ANNOT
-
-
-async def de_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if update.message.text.strip().lower() not in ("yes", "y"):
-        await update.message.reply_text("Cancelled.")
-        return ConversationHandler.END
-    ev: dict = context.user_data["de_ev"]
-    evdata = await get_all_events_data()
-    specials = [e for e in evdata.get("special_events", []) if e["id"] != ev["key"]]
-    evdata["special_events"] = specials
-    await save_events_data(evdata)
-    uid, uname, dname = user_info(update)
-    activity.log_command("deleteevent", uid, uname, dname, details=f"Deleted '{ev['name']}'")
-    await update.message.reply_text(f"✅ *{ev['name']}* deleted.", parse_mode=ParseMode.MARKDOWN)
-    return ConversationHandler.END
-
-
-async def de_annot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    text = update.message.text.strip()
-    if text == "-":
-        await update.message.reply_text("Cancelled.")
-        return ConversationHandler.END
-    ev: dict = context.user_data["de_ev"]
-    evdata = await get_all_events_data()
-    ann_map: dict = evdata.setdefault("convocation_announcements", {})
-    ann_map.setdefault(ev["key"], []).append(text)
-    await save_events_data(evdata)
-    uid, uname, dname = user_info(update)
-    activity.log_command(
-        "deleteevent", uid, uname, dname,
-        details=f"Added announcement to '{ev['name']}': {text}"
-    )
-    await update.message.reply_text("⚠️ Announcement added to the convocation notification.", parse_mode=ParseMode.MARKDOWN)
-    return ConversationHandler.END
-
-
-# ---------------------------------------------------------------------------
-# /setservicelink — set a per-service (per-phase) join link for convocations
-# ---------------------------------------------------------------------------
-
-SL_SELECT, SL_URL = range(2)
-
-
-@admin_only
-async def cmd_setservicelink(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    uid, uname, dname = user_info(update)
-    activity.log_command("setservicelink", uid, uname, dname)
-    context.user_data.clear()
-
-    evdata = await get_all_events_data()
-    urls_map: dict[str, str] = evdata.get("convocation_urls", {})
-    phases = service_phases()
-    context.user_data["sl_phases"] = phases
-
-    lines = ["*Set a Service Join Link*\n", "Each service (phase) can have its own link.\n"]
-    for i, ph in enumerate(phases, 1):
-        current = urls_map.get(ph["phase_key"])
-        suffix = f"  🔗 {current}" if current else ""
-        lines.append(f"{i}. {ph['display']}{suffix}")
-    lines.append("\nEnter the number of the service to set (or /cancel):")
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
-    return SL_SELECT
-
-
-async def sl_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    text = update.message.text.strip()
-    phases: list[dict] = context.user_data.get("sl_phases", [])
-    if not text.isdigit() or not (1 <= int(text) <= len(phases)):
-        await update.message.reply_text(f"Please enter a number between 1 and {len(phases)}:")
-        return SL_SELECT
-    ph = phases[int(text) - 1]
-    context.user_data["sl_phase"] = ph
-    await update.message.reply_text(
-        f"Enter the join link (URL) for *{ph['display']}*,\n"
-        "or '-' to clear the existing link:",
-        parse_mode=ParseMode.MARKDOWN,
-    )
-    return SL_URL
-
-
-async def sl_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    text = update.message.text.strip()
-    ph: dict = context.user_data["sl_phase"]
-    uid, uname, dname = user_info(update)
-
-    evdata = await get_all_events_data()
-    urls_map: dict[str, str] = evdata.setdefault("convocation_urls", {})
-    if text == "-":
-        urls_map.pop(ph["phase_key"], None)
-        action_msg = f"🔗 Cleared the link for *{ph['display']}*."
-        detail = f"Cleared link for {ph['phase_key']}"
-    else:
-        urls_map[ph["phase_key"]] = text
-        action_msg = f"🔗 Link set for *{ph['display']}*."
-        detail = f"Set link for {ph['phase_key']}"
-    await save_events_data(evdata)
-
-    # Reschedule upcoming notifications so they carry the updated link.
-    await schedule_all_upcoming(context.application)
-
-    activity.log_command("setservicelink", uid, uname, dname, details=detail)
-    await update.message.reply_text(action_msg, parse_mode=ParseMode.MARKDOWN)
-    return ConversationHandler.END
-
-
-# ---------------------------------------------------------------------------
-# /broadcast — admin sends an ad-hoc message to groups and/or all subscribers
-# ---------------------------------------------------------------------------
-
-BC_MESSAGE, BC_SELECT, BC_RETRY = range(3)
-
-CB_BC_PREFIX = "bc:"
-BC_MAX_RETRIES = 3
-
-
-async def _reconcile_registry_into_known_groups(bot) -> dict[str, Any]:
-    """Ensure every valid notification_targets chat is recorded in known_groups.
-
-    For each registry target not already tracked, fetch its real chat (title,
-    type) via the API and add it to known_groups so broadcasts can show the
-    group's pretty name. Invalid/unreachable ids are skipped. Returns the
-    (possibly updated) known_groups map.
-    """
-    groups = await _load_known_groups()
-    evdata = await get_all_events_data()
-    registry: dict = evdata.get("notification_targets", {}) or {}
-
-    added = False
-    for name, cid in registry.items():
-        if str(cid) in groups:
-            continue
-        try:
-            chat = await bot.get_chat(cid)
-        except TelegramError as exc:
-            logger.warning("notification_targets '%s' (%s) not reachable: %s", name, cid, exc)
-            continue
-        if chat.type in (ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL):
-            groups[str(chat.id)] = {
-                "chat_id": chat.id,
-                "title": chat.title or name,
-                "type": str(chat.type),
-                "status": "member",
-            }
-            added = True
-    if added:
-        await _save_known_groups(groups)
-    return groups
-
-
-async def _broadcast_target_options(bot, lang: str = DEFAULT_LANG) -> list[dict[str, Any]]:
-    """Build the selectable target list from known groups (using their pretty
-    titles), plus any registry target we couldn't resolve, plus individual subscribers.
-
-    Each option: {"key": str, "kind": "all"|"group", "chat_id": ..., "label": str}.
-    """
-    options: list[dict[str, Any]] = [
-        {"key": "all", "kind": "all", "chat_id": None,
-         "label": t("bcast_individual_subscribers", lang)}
-    ]
-    seen: set[str] = set()
-
-    # Pull titles for any configured targets we haven't recorded yet.
-    groups = await _reconcile_registry_into_known_groups(bot)
-    for g in groups.values():
-        cid = g.get("chat_id")
-        k = str(cid)
-        if k in seen:
-            continue
-        seen.add(k)
-        options.append({"key": k, "kind": "group", "chat_id": cid,
-                        "label": g.get("title") or k})
-
-    # Registry targets that couldn't be resolved to a title — still offer them,
-    # labelled with the registry name so they remain selectable.
-    evdata = await get_all_events_data()
-    registry: dict = evdata.get("notification_targets", {}) or {}
-    for name, cid in registry.items():
-        k = str(cid)
-        if k in seen:
-            continue
-        seen.add(k)
-        options.append({"key": k, "kind": "group", "chat_id": cid, "label": name})
-
-    return options
-
-
-def _append_sender(body: str, sender_name: str) -> str:
-    """Append a '— posted by <name>' attribution line to a broadcast body/caption."""
-    footer = f"— posted by {escape_markdown(sender_name, version=1)}"
-    return f"{body}\n\n{footer}" if body else footer
-
-
-def _bc_keyboard(options: list[dict], selected: set[str]) -> InlineKeyboardMarkup:
-    rows = []
-    for opt in options:
-        mark = "✅ " if opt["key"] in selected else "▫️ "
-        rows.append([InlineKeyboardButton(
-            f"{mark}{opt['label']}", callback_data=f"{CB_BC_PREFIX}toggle:{opt['key']}"
-        )])
-    rows.append([InlineKeyboardButton("📤 Send", callback_data=f"{CB_BC_PREFIX}send")])
-    rows.append([InlineKeyboardButton("✖️ Cancel", callback_data=f"{CB_BC_PREFIX}cancel")])
-    return InlineKeyboardMarkup(rows)
-
-
-@admin_only
-async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    uid, uname, dname = user_info(update)
-    activity.log_command("broadcast", uid, uname, dname)
-    context.user_data.clear()
-    await update.message.reply_text(
-        "📣 *Broadcast*\n\nSend me the message to broadcast — plain text, or a "
-        "*photo* or *document* (with an optional caption). Markdown is supported; "
-        "I'll show you a preview before sending.",
-        parse_mode=ParseMode.MARKDOWN,
-    )
-    return BC_MESSAGE
-
-
-async def bc_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    uid, _, dname = user_info(update)
-    _, lang = await get_user_prefs(uid)
-    text = _append_sender(update.message.text, dname)
-    # Validate Markdown by rendering a preview (with the attribution) back to the admin.
-    try:
-        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
-    except BadRequest as exc:
-        await update.message.reply_text(
-            f"⚠️ I couldn't render that as Markdown ({exc.message}). "
-            "Please edit and re-send your message."
-        )
-        return BC_MESSAGE
-
-    context.user_data["bc_message"] = text
-    context.user_data.pop("bc_media", None)
-    options = await _broadcast_target_options(context.bot, lang)
-    context.user_data["bc_options"] = options
-    context.user_data["bc_selected"] = set()
-    await update.message.reply_text(
-        "👆 *Preview above.* Choose where to send it, then tap *Send*:",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=_bc_keyboard(options, set()),
-    )
-    return BC_SELECT
-
-
-async def bc_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Broadcast a photo or document (with an optional caption) instead of text."""
-    msg = update.message
-    if msg.photo:
-        kind, file_id = "photo", msg.photo[-1].file_id
-    elif msg.document:
-        kind, file_id = "document", msg.document.file_id
-    else:
-        return BC_MESSAGE
-
-    uid, _, dname = user_info(update)
-    _, lang = await get_user_prefs(uid)
-    caption = msg.caption or ""
-    # Append the sender attribution if it still fits within the caption limit.
-    with_sender = _append_sender(caption, dname)
-    caption = with_sender if len(with_sender) <= CAPTION_LIMIT else caption
-
-    # Preview it back (validates any Markdown in the caption).
-    try:
-        await _send_media(context.bot, msg.chat_id, kind, file_id, caption=caption or None)
-    except BadRequest as exc:
-        await msg.reply_text(
-            f"⚠️ I couldn't render that caption as Markdown ({exc.message}). "
-            "Please fix the caption and re-send."
-        )
-        return BC_MESSAGE
-
-    context.user_data["bc_media"] = {"kind": kind, "file_id": file_id, "caption": caption}
-    context.user_data.pop("bc_message", None)
-    options = await _broadcast_target_options(context.bot, lang)
-    context.user_data["bc_options"] = options
-    context.user_data["bc_selected"] = set()
-    await msg.reply_text(
-        "👆 *Preview above.* Choose where to send it, then tap *Send*:",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=_bc_keyboard(options, set()),
-    )
-    return BC_SELECT
-
-
-async def bc_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await _answer_cb(query)
-    action = query.data[len(CB_BC_PREFIX):]
-    options: list[dict] = context.user_data.get("bc_options", [])
-    selected: set[str] = context.user_data.get("bc_selected", set())
-
-    if action == "cancel":
-        await query.edit_message_text("Broadcast cancelled.")
-        return ConversationHandler.END
-
-    if action.startswith("toggle:"):
-        key = action.split(":", 1)[1]
-        if key in selected:
-            selected.discard(key)
-        else:
-            selected.add(key)
-        context.user_data["bc_selected"] = selected
-        await query.edit_message_reply_markup(reply_markup=_bc_keyboard(options, selected))
-        return BC_SELECT
-
-    if action == "send":
-        if not selected:
-            await query.answer("Select at least one target first.", show_alert=True)
-            return BC_SELECT
-        # Expand selection into a concrete recipient list.
-        recipients = await _bc_expand_recipients(options, selected)
-        context.user_data["bc_recipients"] = recipients
-        context.user_data["bc_done"] = set()
-        context.user_data["bc_retries"] = 0
-        await query.edit_message_text(f"Sending to {len(recipients)} recipient(s)…")
-        return await _bc_attempt_and_prompt(update, context)
-
-    return BC_SELECT
-
-
-async def _bc_expand_recipients(options: list[dict], selected: set[str]) -> list[dict]:
-    """Turn the selected option keys into concrete (kind, chat_id, label) recipients."""
-    recipients: list[dict] = []
-    seen: set = set()
-    opt_by_key = {o["key"]: o for o in options}
-    for key in selected:
-        opt = opt_by_key.get(key)
-        if not opt:
-            continue
-        if opt["kind"] == "all":
-            for u in await get_all_users():
-                cid = u["chat_id"]
-                if cid in seen:
-                    continue
-                seen.add(cid)
-                recipients.append({"kind": "user", "chat_id": cid,
-                                   "label": u.get("display_name") or str(cid)})
-        else:
-            cid = opt["chat_id"]
-            if cid in seen:
-                continue
-            seen.add(cid)
-            recipients.append({"kind": "group", "chat_id": cid, "label": opt["label"]})
-    return recipients
-
-
-async def _bc_send_pending(bot, context) -> list[dict]:
-    """Send the message/media to all recipients not yet delivered. Returns failures."""
-    media: "dict | None" = context.user_data.get("bc_media")
-    message: str = context.user_data.get("bc_message", "")
-    recipients: list[dict] = context.user_data["bc_recipients"]
-    done: set = context.user_data["bc_done"]
-    failures: list[dict] = []
-    for r in recipients:
-        if r["chat_id"] in done:
-            continue
-        try:
-            if media:
-                await _send_media(bot, r["chat_id"], media["kind"], media["file_id"],
-                                  caption=media["caption"] or None)
-            else:
-                await bot.send_message(r["chat_id"], message, parse_mode=ParseMode.MARKDOWN)
-            done.add(r["chat_id"])
-        except TelegramError as exc:
-            failures.append(r)
-            logger.warning("Broadcast send failed for %s (%s): %s",
-                           r["label"], r["chat_id"], exc)
-    context.user_data["bc_done"] = done
-    return failures
-
-
-async def _bc_attempt_and_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Send the pending recipients once, then report / prompt for retry."""
-    bot = context.application.bot
-    failures = await _bc_send_pending(bot, context)
-    total = len(context.user_data["bc_recipients"])
-    sent = len(context.user_data["bc_done"])
-    chat_id = update.effective_chat.id
-
-    uid, uname, dname = user_info(update)
-    activity.log_command(
-        "broadcast", uid, uname, dname,
-        details=f"sent={sent}/{total}, failures={len(failures)}",
-    )
-    logger.info("Broadcast: delivered=%d/%d, failures=%d", sent, total, len(failures))
-
-    if not failures:
-        await bot.send_message(chat_id, f"✅ Broadcast delivered to all {total} recipient(s).")
-        return ConversationHandler.END
-
-    retries = context.user_data["bc_retries"]
-    failed_labels = ", ".join(f["label"] for f in failures[:10])
-    more = "" if len(failures) <= 10 else f" (+{len(failures) - 10} more)"
-    summary = (
-        f"⚠️ Delivered to {sent}/{total}. "
-        f"{len(failures)} failed: {failed_labels}{more}."
-    )
-    if retries >= BC_MAX_RETRIES:
-        await bot.send_message(
-            chat_id, summary + f"\n\nRetry limit ({BC_MAX_RETRIES}) reached. Stopping."
-        )
-        return ConversationHandler.END
-
-    kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("🔁 Retry", callback_data=f"{CB_BC_PREFIX}retry:yes"),
-        InlineKeyboardButton("🛑 Stop", callback_data=f"{CB_BC_PREFIX}retry:no"),
-    ]])
-    await bot.send_message(
-        chat_id,
-        summary + f"\n\nRetry the {len(failures)} failed recipient(s)? "
-        f"(attempt {retries + 1} of {BC_MAX_RETRIES})",
-        reply_markup=kb,
-    )
-    return BC_RETRY
-
-
-async def bc_retry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await _answer_cb(query)
-    action = query.data[len(CB_BC_PREFIX):]
-    if action == "retry:no":
-        sent = len(context.user_data["bc_done"])
-        total = len(context.user_data["bc_recipients"])
-        await query.edit_message_text(
-            f"Stopped. Broadcast delivered to {sent}/{total} recipient(s)."
-        )
-        return ConversationHandler.END
-
-    # retry:yes
-    context.user_data["bc_retries"] += 1
-    await query.edit_message_text(
-        f"Retrying… (attempt {context.user_data['bc_retries']} of {BC_MAX_RETRIES})"
-    )
-    return await _bc_attempt_and_prompt(update, context)
-
-
-# ---------------------------------------------------------------------------
-# /appointment — multi-step user flow
-# ---------------------------------------------------------------------------
-
-(
-    AP_OFFICIAL,
-    AP_DATE,
-    AP_TIME,
-    AP_DESC,
-    AP_CONFIRM,
-) = range(5)
-
-# Official response states (handled via callback queries)
-CB_APPT_PREFIX = "appt:"
-# Official picker for the /appointment request flow (distinct from CB_APPT_PREFIX).
-CB_APSEL_PREFIX = "apsel:"
-
-
-@admin_only
-async def admin_check_pass(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Placeholder — used only to block unknown admin commands from non-admins."""
-    pass
-
-
-async def cmd_appointment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    uid, uname, dname = user_info(update)
-    activity.log_command("appointment", uid, uname, dname)
-    context.user_data.clear()
-    _, lang = await get_user_prefs(uid)
-
-    rows = [
-        [InlineKeyboardButton(off["name"], callback_data=f"{CB_APSEL_PREFIX}{i}")]
-        for i, off in enumerate(OFFICIALS)
-    ]
-    rows.append([InlineKeyboardButton(
-        "✖️ " + t("appt_request_cancelled", lang).rstrip("."),
-        callback_data=f"{CB_APSEL_PREFIX}cancel",
-    )])
-    await update.message.reply_text(
-        t("appt_choose_official", lang),
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=InlineKeyboardMarkup(rows),
-    )
-    return AP_OFFICIAL
-
-
-async def ap_official(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await _answer_cb(query)
-    uid = query.from_user.id
-    _, lang = await get_user_prefs(uid)
-    data = query.data[len(CB_APSEL_PREFIX):]
-
-    if data == "cancel":
-        await query.edit_message_text(t("appt_request_cancelled", lang))
-        return ConversationHandler.END
-    if not data.isdigit() or not (0 <= int(data) < len(OFFICIALS)):
-        await query.edit_message_text(t("appt_invalid_number", lang))
-        return ConversationHandler.END
-    off = OFFICIALS[int(data)]
-
-    # Per-official frequency limit: at most APPOINTMENT_MAX_PER_WINDOW active
-    # appointments within ±APPOINTMENT_WINDOW_HALF_DAYS of now.
-    appts = await get_appointments()
-    if _count_active_appts_with_official(appts, uid, off["id"], now_tz()) >= APPOINTMENT_MAX_PER_WINDOW:
-        await query.edit_message_text(
-            t("appt_limit_reached", lang, official=off["name"],
-              max=APPOINTMENT_MAX_PER_WINDOW, days=APPOINTMENT_WINDOW_HALF_DAYS * 2),
-            parse_mode=ParseMode.MARKDOWN,
-        )
-        return ConversationHandler.END
-
-    context.user_data["ap_official"] = off
-    await query.edit_message_text(
-        f"*{off['name']}*\n\n" + t("appt_ask_date", lang),
-        parse_mode=ParseMode.MARKDOWN,
-    )
-    return AP_DATE
-
-
-async def ap_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    uid, _, _ = user_info(update)
-    _, lang = await get_user_prefs(uid)
-    text = update.message.text.strip()
-    if not re.match(r"^\d{4}-\d{2}-\d{2}$", text):
-        await update.message.reply_text(t("appt_bad_date", lang))
-        return AP_DATE
-    context.user_data["ap_date"] = text
-    await update.message.reply_text(t("appt_ask_time", lang))
-    return AP_TIME
-
-
-async def ap_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    uid, _, _ = user_info(update)
-    tz, lang = await get_user_prefs(uid)
-    text = update.message.text.strip()
-    if not re.match(r"^\d{1,2}:\d{2}$", text):
-        await update.message.reply_text(t("appt_bad_time", lang))
-        return AP_TIME
-
-    # Build the full datetime now that we have both date and time, and validate it.
-    parts_d = [int(x) for x in context.user_data["ap_date"].split("-")]
-    parts_t = [int(x) for x in text.split(":")]
-    try:
-        req_dt = TZ.localize(datetime(parts_d[0], parts_d[1], parts_d[2], parts_t[0], parts_t[1]))
-    except ValueError:
-        await update.message.reply_text(t("appt_bad_datetime", lang))
-        return AP_DATE
-
-    now = now_tz()
-    if req_dt <= now:
-        await update.message.reply_text(t("appt_past", lang))
-        return AP_DATE
-
-    max_dt = _max_request_datetime()
-    if req_dt > max_dt:
-        await update.message.reply_text(
-            t("appt_too_far", lang, months=APPOINTMENT_HORIZON_MONTHS,
-              until=max_dt.strftime("%B %d, %Y"))
-        )
-        return AP_DATE
-
-    # No overlap with the user's other active appointments.
-    appts = await get_appointments()
-    clash = _overlapping_appt(appts, uid, req_dt, DEFAULT_APPT_DURATION_MIN)
-    if clash:
-        await update.message.reply_text(
-            t("appt_overlap", lang, official=clash["official_name"],
-              when=_appt_dt_label(clash, tz, lang), id=clash["id"]),
-            parse_mode=ParseMode.MARKDOWN,
-        )
-        return AP_DATE
-
-    context.user_data["ap_time"] = text
-    await update.message.reply_text(t("appt_ask_desc", lang))
-    return AP_DESC
-
-
-async def ap_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    uid, _, _ = user_info(update)
-    tz, lang = await get_user_prefs(uid)
-    text = update.message.text.strip()[:128]
-    context.user_data["ap_desc"] = text
-    off = context.user_data["ap_official"]
-    d = context.user_data
-    parts_d = [int(x) for x in d["ap_date"].split("-")]
-    parts_t = [int(x) for x in d["ap_time"].split(":")]
-    req_dt = TZ.localize(datetime(parts_d[0], parts_d[1], parts_d[2], parts_t[0], parts_t[1]))
-    summary = t("appt_summary", lang, official=off["name"],
-                when=format_dt(req_dt, tz, lang), desc=text)
-    await update.message.reply_text(summary, parse_mode=ParseMode.MARKDOWN)
-    return AP_CONFIRM
-
-
-async def ap_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    uid, uname, dname = user_info(update)
-    _, lang = await get_user_prefs(uid)
-    if not _is_affirmative(update.message.text):
-        await update.message.reply_text(t("appt_request_cancelled", lang))
-        return ConversationHandler.END
-
-    d = context.user_data
-    off: dict = d["ap_official"]
-    appt_id = uuid.uuid4().hex[:10].upper()
-
-    # Parse requested datetime
-    parts_d = [int(x) for x in d["ap_date"].split("-")]
-    parts_t = [int(x) for x in d["ap_time"].split(":")]
-    req_dt = TZ.localize(datetime(parts_d[0], parts_d[1], parts_d[2], parts_t[0], parts_t[1]))
-
-    appts = await get_appointments()
-
-    # Request-rate limits (admins exempt): a short cooldown after any recent
-    # appointment action, and a cap on outstanding pending requests.
-    if not is_admin(update):
-        last_action = _user_last_action_at(appts, uid)
-        if last_action is not None:
-            elapsed = (now_tz() - last_action).total_seconds()
-            if elapsed < APPOINTMENT_COOLDOWN_SECONDS:
-                wait = int(APPOINTMENT_COOLDOWN_SECONDS - elapsed) or 1
-                await update.message.reply_text(
-                    t("appt_cooldown", lang, seconds=wait),
-                    parse_mode=ParseMode.MARKDOWN,
-                )
-                return ConversationHandler.END
-        if _count_pending_appts(appts, uid) >= APPOINTMENT_MAX_PENDING:
-            await update.message.reply_text(
-                t("appt_too_many_pending", lang, max=APPOINTMENT_MAX_PENDING),
-                parse_mode=ParseMode.MARKDOWN,
-            )
-            return ConversationHandler.END
-
-    # Final guard: per-official frequency limit within ±15 days of now.
-    if _count_active_appts_with_official(appts, uid, off["id"], now_tz()) >= APPOINTMENT_MAX_PER_WINDOW:
-        await update.message.reply_text(
-            t("appt_limit_not_submitted", lang, official=off["name"],
-              max=APPOINTMENT_MAX_PER_WINDOW, days=APPOINTMENT_WINDOW_HALF_DAYS * 2),
-            parse_mode=ParseMode.MARKDOWN,
-        )
-        return ConversationHandler.END
-
-    # Final guard: ensure the requested time doesn't overlap another appointment.
-    clash = _overlapping_appt(appts, uid, req_dt, DEFAULT_APPT_DURATION_MIN)
-    if clash:
-        await update.message.reply_text(
-            t("appt_overlap_not_submitted", lang, official=clash["official_name"], id=clash["id"]),
-            parse_mode=ParseMode.MARKDOWN,
-        )
-        return ConversationHandler.END
-
-    appt = {
-        "id": appt_id,
-        "user_chat_id": uid,
-        "user_username": uname,
-        "user_display_name": dname,
-        "official_id": off["id"],
-        "official_name": off["name"],
-        "requested_datetime": req_dt.isoformat(),
-        "confirmed_datetime": None,
-        "description": d["ap_desc"],
-        "status": "pending",
-        "duration_minutes": DEFAULT_APPT_DURATION_MIN,
-    }
-    _stamp_appt_action(appt)
-    appts.append(appt)
-    await save_appointments(appts)
-
-    await update.message.reply_text(
-        t("appt_submitted", lang, id=appt_id),
-        parse_mode=ParseMode.MARKDOWN,
-    )
-
-    # Notify the official
-    await _notify_official_of_request(context, appt, update)
-
-    activity.log_command("appointment", uid, uname, dname, details=f"New appt request {appt_id}")
-    return ConversationHandler.END
-
-
-async def _notify_official_of_request(
-    context: ContextTypes.DEFAULT_TYPE, appt: dict, update: Update
-) -> None:
-    off = _official_by_id(appt["official_id"])
-    if not off:
-        return
-    recipients = _official_side_recipients(off)
-    if not recipients:
-        logger.warning("Official %s (and any proxies) have no chat_id — they need to /start.",
-                       appt["official_id"])
-        return
-
-    req_dt_str = format_dt(datetime.fromisoformat(appt["requested_datetime"]))
-    base = (
-        f"📅 *Appointment Request* (ID: `{appt['id']}`)\n\n"
-        f"From: {appt['user_display_name']}"
-        + (f" (@{appt['user_username']})" if appt.get("user_username") else "")
-        + f"\nRequested: {req_dt_str}\n"
-        f"Purpose: {appt['description']}"
-    )
-    proxy_note = f"\n\n_You're receiving this as {off.get('name')}'s proxy._"
-
-    kb = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("✅ Confirm", callback_data=f"{CB_APPT_PREFIX}confirm:{appt['id']}"),
-            InlineKeyboardButton("📅 Suggest time", callback_data=f"{CB_APPT_PREFIX}counter:{appt['id']}"),
-            InlineKeyboardButton("❌ Decline", callback_data=f"{CB_APPT_PREFIX}decline:{appt['id']}"),
-        ]
-    ])
-
-    # Fetch the requester's profile photo once and reuse it for every recipient.
-    photo_id = None
-    try:
-        photos = await context.bot.get_user_profile_photos(appt["user_chat_id"], limit=1)
-        if photos.photos:
-            photo_id = photos.photos[0][-1].file_id
-    except TelegramError:
-        pass
-
-    for r in recipients:
-        caption = base + (proxy_note if r["is_proxy"] else "")
-        try:
-            if photo_id:
-                await context.bot.send_photo(r["chat_id"], photo_id, caption=caption,
-                                             parse_mode=ParseMode.MARKDOWN, reply_markup=kb)
-            else:
-                await context.bot.send_message(r["chat_id"], caption,
-                                               parse_mode=ParseMode.MARKDOWN, reply_markup=kb)
-        except TelegramError as exc:
-            logger.warning("Couldn't send appointment request to %s: %s", r["chat_id"], exc)
-
-
-# ---------------------------------------------------------------------------
-# Appointment callback handler (official responses)
-# ---------------------------------------------------------------------------
-
-# Store pending counter-propose state outside conversation
-_counter_propose_state: dict[str, Any] = {}  # appt_id -> {"chat_id": ..., "role": "official"|"user"}
-
-# Actions taken by the official side (official or an enabled proxy). The rest
-# (accept_counter / decline_counter) are taken by the requester.
-OFFICIAL_SIDE_ACTIONS = {"confirm", "decline", "counter",
-                         "accept_user_counter", "decline_user_counter"}
-
-
-def _requester_proxy_note(appt: dict) -> str:
-    """A note for the requester that a proxy is handling this on the official's behalf."""
-    if appt.get("negotiator_is_proxy"):
-        return f"\n\n_Handled by {appt.get('official_name')}'s office on their behalf._"
-    return ""
-
-
-async def _notify_negotiation_started(
-    context: ContextTypes.DEFAULT_TYPE, off: dict, appt: dict, claimant_chat_id: int
-) -> None:
-    """Tell the official and any other proxies that someone has taken up the request."""
-    requester = appt.get("user_display_name") or appt.get("user_username") or "the requester"
-    claimant = appt.get("negotiator_name") or "Someone"
-    by_proxy = appt.get("negotiator_is_proxy")
-    for r in _official_side_recipients(off):
-        if r["chat_id"] == claimant_chat_id:
-            continue
-        if by_proxy and not r["is_proxy"]:
-            msg = (f"🔔 {claimant} is negotiating an appointment on your behalf "
-                   f"with {requester} (ID: `{appt['id']}`).")
-        else:
-            msg = (f"🔔 {claimant} has started handling the appointment request from "
-                   f"{requester} (ID: `{appt['id']}`).")
-        try:
-            await context.bot.send_message(r["chat_id"], msg, parse_mode=ParseMode.MARKDOWN)
-        except TelegramError:
-            pass
-
-
-async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    await _answer_cb(query)
-    data: str = query.data
-    parts = data[len(CB_APPT_PREFIX):].split(":")
-    action, appt_id = parts[0], parts[1]
-
-    appts = await get_appointments()
-    appt = next((a for a in appts if a["id"] == appt_id), None)
-    if not appt:
-        await query.edit_message_text("⚠️ Appointment not found.")
-        return
-
-    # Reschedule responses act on an already-confirmed (i.e. "terminal") appointment,
-    # so they are handled before the terminal-status guard below.
-    if action in ("rs_accept", "rs_decline"):
-        await _handle_reschedule_response(context, query, appt, appts, action)
-        return
-
-    # Idempotency guard: if this appointment is already in a terminal state,
-    # a repeated/replayed tap (e.g. multiple taps while the bot was offline)
-    # must not re-run confirmation/decline side effects.
-    if appt.get("status") in TERMINAL_APPT_STATUSES:
-        await query.edit_message_text(
-            f"ℹ️ Appointment {appt_id} has already been {appt['status']}. "
-            "No further action taken."
-        )
-        return
-
-    user_chat_id = appt["user_chat_id"]
-
-    # Can't start rescheduling an appointment whose time has already passed.
-    if action in ("counter", "decline_counter") and _appt_is_past(appt):
-        await query.edit_message_text(
-            "⚠️ This appointment's time has already passed; it can no longer be rescheduled."
-        )
-        return
-
-    # Official-side actions may come from the official OR an enabled proxy.
-    # The first to act "claims" the appointment and must see it through; anyone
-    # else who taps is told it's already being handled.
-    if action in OFFICIAL_SIDE_ACTIONS:
-        off = _official_by_id(appt.get("official_id"))
-        actor_id = query.from_user.id
-        actor_uname = query.from_user.username
-        if not _user_can_act_for_official(off, actor_id, actor_uname):
-            await query.edit_message_text("⚠️ You're not authorized to act on this appointment.")
-            return
-        negotiator = appt.get("negotiator_chat_id")
-        if negotiator is None:
-            name, is_proxy = _acting_identity(off, actor_id, actor_uname)
-            appt["negotiator_chat_id"] = actor_id
-            appt["negotiator_name"] = name or "The official"
-            appt["negotiator_is_proxy"] = is_proxy
-            for i, a in enumerate(appts):
-                if a["id"] == appt_id:
-                    appts[i] = appt
-            await save_appointments(appts)
-            await _notify_negotiation_started(context, off, appt, actor_id)
-        elif negotiator != actor_id:
-            await query.edit_message_text(
-                f"ℹ️ This appointment is already being handled by "
-                f"{appt.get('negotiator_name', 'someone')}."
-            )
-            return
-
-    if action == "confirm":
-        clash = _confirmed_overlap(appts, appt, appt["requested_datetime"])
-        if clash:
-            await query.edit_message_text(
-                f"⚠️ That time overlaps the requester's appointment with "
-                f"{clash['official_name']} (ID: {clash['id']}). Not confirmed — "
-                "suggest a different time instead."
-            )
-            return
-        appt["status"] = "confirmed"
-        appt["confirmed_datetime"] = appt["requested_datetime"]
-        await _finalize_appointment(context, appt, appts)
-        await query.edit_message_text(f"✅ You confirmed the appointment (ID: {appt_id}).")
-
-    elif action == "decline":
-        appt["status"] = "declined"
-        for i, a in enumerate(appts):
-            if a["id"] == appt_id:
-                appts[i] = appt
-        await save_appointments(appts)
-        await query.edit_message_text(f"❌ You declined the appointment (ID: {appt_id}).")
-        await context.bot.send_message(user_chat_id,
-            f"❌ Your appointment request (ID: `{appt_id}`) has been declined."
-            + _requester_proxy_note(appt),
-            parse_mode=ParseMode.MARKDOWN)
-
-    elif action == "counter":
-        # Official wants to suggest a different time
-        _counter_propose_state[appt_id] = {
-            "chat_id": query.message.chat_id,
-            "role": "official",
-        }
-        context.user_data[f"cp_appt_{appt_id}"] = True
-        await query.edit_message_text(
-            f"Suggest a new date/time for appointment {appt_id}.\n"
-            "Reply with: YYYY-MM-DD HH:MM"
-        )
-        # We handle the next message in a fallback handler
-
-    elif action == "accept_counter":
-        # User accepts counter-proposed time
-        proposed = appt.get("counter_datetime", appt["requested_datetime"])
-        if _datetime_is_past(proposed):
-            await query.edit_message_text(
-                "⚠️ That suggested time has already passed. Please suggest a new time."
-            )
-            return
-        clash = _confirmed_overlap(appts, appt, proposed)
-        if clash:
-            await query.edit_message_text(
-                f"⚠️ That time overlaps your appointment with {clash['official_name']} "
-                f"(ID: {clash['id']}). It was not confirmed — please suggest a different time."
-            )
-            return
-        appt["status"] = "confirmed"
-        appt["confirmed_datetime"] = proposed
-        await _finalize_appointment(context, appt, appts)
-        await query.edit_message_text(f"✅ You accepted the suggested time (ID: {appt_id}).")
-
-    elif action == "decline_counter":
-        # User declines the counter-proposal → let them suggest a new time
-        _counter_propose_state[appt_id] = {
-            "chat_id": query.message.chat_id,
-            "role": "user",
-        }
-        await query.edit_message_text(
-            "Suggest a different date/time (or type 'cancel' to cancel the request):\n"
-            "YYYY-MM-DD HH:MM"
-        )
-
-    elif action == "accept_user_counter":
-        # Official accepts user's counter-proposed time
-        proposed = appt.get("user_counter_datetime", appt["requested_datetime"])
-        if _datetime_is_past(proposed):
-            await query.edit_message_text(
-                "⚠️ That suggested time has already passed. Please suggest a new time."
-            )
-            return
-        clash = _confirmed_overlap(appts, appt, proposed)
-        if clash:
-            await query.edit_message_text(
-                f"⚠️ That time overlaps the requester's appointment with "
-                f"{clash['official_name']} (ID: {clash['id']}). Not confirmed."
-            )
-            return
-        appt["status"] = "confirmed"
-        appt["confirmed_datetime"] = proposed
-        await _finalize_appointment(context, appt, appts)
-        await query.edit_message_text("✅ You confirmed the appointment with the user's suggested time.")
-
-    elif action == "decline_user_counter":
-        appt["status"] = "declined"
-        for i, a in enumerate(appts):
-            if a["id"] == appt_id:
-                appts[i] = appt
-        await save_appointments(appts)
-        await query.edit_message_text("❌ Request cancelled.")
-        await context.bot.send_message(user_chat_id,
-            f"Your appointment request (ID: `{appt_id}`) has been cancelled.",
-            parse_mode=ParseMode.MARKDOWN)
-
-
-async def _finalize_appointment(
-    context: ContextTypes.DEFAULT_TYPE, appt: dict, appts: list
-) -> None:
-    """Save confirmed appointment and send ICS to both the user and the official."""
-    _stamp_appt_action(appt)
-    appt.pop("reminders_sent", None)  # re-arm reminder DMs for the (new) time
-    for i, a in enumerate(appts):
-        if a["id"] == appt["id"]:
-            appts[i] = appt
-    await save_appointments(appts)
-
-    confirmed_dt = datetime.fromisoformat(appt["confirmed_datetime"])
-    if confirmed_dt.tzinfo is None:
-        confirmed_dt = TZ.localize(confirmed_dt)
-
-    appt_with_dt = {**appt, "confirmed_datetime": confirmed_dt}
-
-    # --- Notify and send ICS to the user (their timezone + language) ---
-    user_tz, user_lang = await get_user_prefs(appt["user_chat_id"])
-    ics_bytes = appointment_to_ics(appt_with_dt, TZ)
-    user_bio = io.BytesIO(ics_bytes)
-    await context.bot.send_message(
-        appt["user_chat_id"],
-        t("appt_confirmed_user", user_lang, id=appt["id"],
-          official=appt["official_name"], when=format_dt(confirmed_dt, user_tz, user_lang)),
-        parse_mode=ParseMode.MARKDOWN,
-    )
-    await context.bot.send_document(
-        appt["user_chat_id"],
-        document=InputFile(user_bio, filename="appointment.ics"),
-        caption=t("appt_ics_caption", user_lang),
-    )
-
-    user_display = appt.get("user_display_name") or appt.get("user_username") or "The requester"
-
-    # --- Notify and send ICS to the official (their timezone) ---
-    off = next((o for o in OFFICIALS if o["id"] == appt["official_id"]), None)
-    if off and off.get("chat_id"):
-        off_tz, _ = await get_user_prefs(off["chat_id"])
-        off_dt_str = format_dt(confirmed_dt, off_tz)
-        ics_bytes_off = appointment_to_ics(appt_with_dt, TZ)
-        off_bio = io.BytesIO(ics_bytes_off)
-        await context.bot.send_message(
-            off["chat_id"],
-            f"✅ *Appointment confirmed (ID: `{appt['id']}`)*\n"
-            f"With: {user_display}"
-            + (f" (@{appt['user_username']})" if appt.get("user_username") else "") + "\n"
-            f"When: {off_dt_str}\n"
-            f"Purpose: {appt.get('description', '')}\n\n"
-            "An ICS calendar file is attached.",
-            parse_mode=ParseMode.MARKDOWN,
-        )
-        await context.bot.send_document(
-            off["chat_id"],
-            document=InputFile(off_bio, filename="appointment.ics"),
-            caption="Import this file into your calendar app.",
-        )
-
-    # --- Note to the negotiating proxy (if a proxy arranged this) ---
-    if appt.get("negotiator_is_proxy") and appt.get("negotiator_chat_id"):
-        await context.bot.send_message(
-            appt["negotiator_chat_id"],
-            f"✅ Appointment confirmed: *{appt['official_name']}* is scheduled with "
-            f"{user_display} on {format_dt(confirmed_dt)} (ID: `{appt['id']}`).",
-            parse_mode=ParseMode.MARKDOWN,
-        )
-
-
-async def handle_counter_propose_message(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
-    """Handle free-text messages from officials/users suggesting a new date/time."""
-    chat_id = update.effective_chat.id
-    text = update.message.text.strip()
-
-    # Find if this chat_id has a pending counter-propose
-    appt_id = next(
-        (aid for aid, st in _counter_propose_state.items() if st["chat_id"] == chat_id),
-        None,
-    )
-    if not appt_id:
-        return  # Not a counter-propose message
-
-    appts = await get_appointments()
-    appt = next((a for a in appts if a["id"] == appt_id), None)
-    if not appt:
-        return
-
-    role = _counter_propose_state[appt_id]["role"]
-    del _counter_propose_state[appt_id]
-
-    if role == "user" and text.lower() == "cancel":
-        appt["status"] = "cancelled"
-        _stamp_appt_action(appt)
-        for i, a in enumerate(appts):
-            if a["id"] == appt_id:
-                appts[i] = appt
-        await save_appointments(appts)
-        await update.message.reply_text("Request cancelled.")
-        return
-
-    # Parse "YYYY-MM-DD HH:MM"
-    m = re.match(r"(\d{4}-\d{2}-\d{2})\s+(\d{1,2}:\d{2})", text)
-    if not m:
-        await update.message.reply_text(
-            "Couldn't parse date/time. Please use: YYYY-MM-DD HH:MM"
-        )
-        _counter_propose_state[appt_id] = {"chat_id": chat_id, "role": role}
-        return
-
-    date_s, time_s = m.group(1), m.group(2)
-    parts_d = [int(x) for x in date_s.split("-")]
-    parts_t = [int(x) for x in time_s.split(":")]
-    try:
-        new_dt = TZ.localize(datetime(parts_d[0], parts_d[1], parts_d[2], parts_t[0], parts_t[1]))
-    except ValueError:
-        await update.message.reply_text(
-            "That date/time isn't valid. Please use: YYYY-MM-DD HH:MM"
-        )
-        _counter_propose_state[appt_id] = {"chat_id": chat_id, "role": role}
-        return
-    if new_dt <= now_tz():
-        await update.message.reply_text(
-            "That date/time is in the past. Please suggest a future time: YYYY-MM-DD HH:MM"
-        )
-        _counter_propose_state[appt_id] = {"chat_id": chat_id, "role": role}
-        return
-    new_dt_str = format_dt(new_dt)
-
-    if role == "official":
-        # Official suggests new time → notify user
-        appt["counter_datetime"] = new_dt.isoformat()
-        appt["status"] = "counter_proposed"
-        for i, a in enumerate(appts):
-            if a["id"] == appt_id:
-                appts[i] = appt
-        await save_appointments(appts)
-        await update.message.reply_text(f"✅ Suggested time sent to the user: {new_dt_str}")
-        kb = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("✅ Accept", callback_data=f"{CB_APPT_PREFIX}accept_counter:{appt_id}"),
-                InlineKeyboardButton("📅 Suggest different", callback_data=f"{CB_APPT_PREFIX}decline_counter:{appt_id}"),
-            ]
-        ])
-        await context.bot.send_message(
-            appt["user_chat_id"],
-            f"📅 *New time suggested for appointment `{appt_id}`*\n"
-            f"With: {appt['official_name']}\n"
-            f"Suggested: {new_dt_str}\n"
-            f"Purpose: {appt['description']}"
-            + _requester_proxy_note(appt),
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=kb,
-        )
-    else:
-        # User suggests alternative → notify the negotiator (official or their proxy)
-        appt["user_counter_datetime"] = new_dt.isoformat()
-        for i, a in enumerate(appts):
-            if a["id"] == appt_id:
-                appts[i] = appt
-        await save_appointments(appts)
-        await update.message.reply_text(f"✅ Your suggested time has been forwarded: {new_dt_str}")
-        off = _official_by_id(appt["official_id"])
-        target_chat = appt.get("negotiator_chat_id") or (off.get("chat_id") if off else None)
-        if target_chat:
-            kb = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("✅ Accept", callback_data=f"{CB_APPT_PREFIX}accept_user_counter:{appt_id}"),
-                    InlineKeyboardButton("❌ Decline", callback_data=f"{CB_APPT_PREFIX}decline_user_counter:{appt_id}"),
-                ]
-            ])
-            await context.bot.send_message(
-                target_chat,
-                f"The user has suggested a new time for appointment `{appt_id}`:\n{new_dt_str}",
-                parse_mode=ParseMode.MARKDOWN,
-                reply_markup=kb,
-            )
-
-
-# ---------------------------------------------------------------------------
-# /myappointments — list the appointments the user is a party to
-# ---------------------------------------------------------------------------
-
-def _counterparty_label(appt: dict, viewer_is_official: bool) -> str:
-    """Who the appointment is *with*, from the viewer's perspective."""
-    if viewer_is_official:
-        name = appt.get("user_display_name") or appt.get("user_username") or "Unknown requester"
-        if appt.get("user_username"):
-            return f"{name} (@{appt['user_username']})"
-        return name
-    return appt.get("official_name", "Unknown official")
-
-
-async def cmd_myappointments(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    uid, uname, dname = user_info(update)
-    activity.log_command("myappointments", uid, uname, dname)
-    tz, lang = await get_user_prefs(uid)
-
-    appts = await get_appointments()
-    mine: list[tuple[dict, bool]] = []  # (appointment, viewer_is_official)
-    for a in appts:
-        as_official = _user_is_appt_official(a, uid, uname)
-        as_requester = a.get("user_chat_id") == uid
-        if as_official or as_requester:
-            # Prefer the official view when the viewer is the assigned official.
-            mine.append((a, as_official))
-
-    if not mine:
-        await update.message.reply_text(t("myappts_none", lang))
-        return
-
-    now = now_tz()
-    upcoming = [it for it in mine if (_appt_datetime(it[0]) or now) >= now]
-    past = [it for it in mine if (_appt_datetime(it[0]) or now) < now]
-    upcoming.sort(key=lambda it: _appt_datetime(it[0]) or now)
-    past.sort(key=lambda it: _appt_datetime(it[0]) or now, reverse=True)
-
-    def _render(appt: dict, viewer_is_official: bool) -> str:
-        return t(
-            "appt_line", lang,
-            counterparty=_counterparty_label(appt, viewer_is_official),
-            when=_appt_dt_label(appt, tz, lang),
-            status=status_label(appt.get("status"), lang),
-            id=appt["id"],
-        )
-
-    lines = [t("myappts_header", lang)]
-    if upcoming:
-        lines.append(t("section_upcoming", lang))
-        lines.extend(_render(a, is_off) for a, is_off in upcoming)
-    if past:
-        lines.append(t("section_past", lang))
-        lines.extend(_render(a, is_off) for a, is_off in past)
-
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
-
-
-# ---------------------------------------------------------------------------
-# /cancelappointment — either party can cancel a pending or confirmed appointment
-# ---------------------------------------------------------------------------
-
-CA_SELECT, CA_CONFIRM = range(2)
-
-CB_CANCEL_PREFIX = "ca:"
-
-
-async def cmd_cancelappointment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    uid, uname, dname = user_info(update)
-    activity.log_command("cancelappointment", uid, uname, dname)
-    context.user_data.clear()
-    tz, lang = await get_user_prefs(uid)
-
-    appts = await get_appointments()
-    # Build list of appointments this user is party to that are still active
-    # and have not already taken place (you can't cancel a past appointment).
-    # "Party to" = the requester, the official, or an enabled proxy.
-    active = []
-    for a in appts:
-        if a.get("status") not in ACTIVE_APPT_STATUSES:
-            continue
-        if _appt_is_past(a):
-            continue
-        if _user_can_act_for_appt(a, uid, uname):
-            active.append(a)
-        if a.get("user_chat_id") == uid:
-            # Avoid duplicates if official is also the requester (edge case)
-            if not any(x["id"] == a["id"] for x in active):
-                active.append(a)
-
-    if not active:
-        await update.message.reply_text(t("cancel_none", lang))
-        return ConversationHandler.END
-
-    context.user_data["ca_appts"] = active
-    rows = []
-    for i, a in enumerate(active):
-        label = f"{a['official_name']} — {_appt_dt_label(a, tz, lang)}"
-        rows.append([InlineKeyboardButton(label, callback_data=f"{CB_CANCEL_PREFIX}sel:{i}")])
-    rows.append([InlineKeyboardButton(
-        "✖️ " + t("cancel_aborted", lang).rstrip("."),
-        callback_data=f"{CB_CANCEL_PREFIX}abort",
-    )])
-    await update.message.reply_text(
-        t("cancel_list_header", lang),
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=InlineKeyboardMarkup(rows),
-    )
-    return CA_SELECT
-
-
-async def ca_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await _answer_cb(query)
-    uid = query.from_user.id
-    tz, lang = await get_user_prefs(uid)
-    data = query.data[len(CB_CANCEL_PREFIX):]
-    active: list[dict] = context.user_data.get("ca_appts", [])
-
-    if data == "abort":
-        await query.edit_message_text(t("cancel_aborted", lang))
-        return ConversationHandler.END
-
-    idx = data.split(":", 1)[1] if data.startswith("sel:") else ""
-    if not idx.isdigit() or not (0 <= int(idx) < len(active)):
-        await query.edit_message_text(t("cancel_aborted", lang))
-        return ConversationHandler.END
-
-    appt = active[int(idx)]
-    context.user_data["ca_appt"] = appt
-    kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Yes", callback_data=f"{CB_CANCEL_PREFIX}yes"),
-        InlineKeyboardButton("✖️ No", callback_data=f"{CB_CANCEL_PREFIX}no"),
-    ]])
-    await query.edit_message_text(
-        t("cancel_confirm_prompt", lang, official=appt["official_name"],
-          when=_appt_dt_label(appt, tz, lang)),
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=kb,
-    )
-    return CA_CONFIRM
-
-
-async def ca_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await _answer_cb(query)
-    uid, uname, dname = user_info(update)
-    _, lang = await get_user_prefs(uid)
-    if query.data != f"{CB_CANCEL_PREFIX}yes":
-        await query.edit_message_text(t("cancel_aborted", lang))
-        return ConversationHandler.END
-
-    appt: dict = context.user_data["ca_appt"]
-    # Defensive: the appointment must still be in the future to cancel it.
-    if _appt_is_past(appt):
-        await query.edit_message_text(t("cancel_past", lang))
-        return ConversationHandler.END
-
-    appts = await get_appointments()
-    for i, a in enumerate(appts):
-        if a["id"] == appt["id"]:
-            appts[i]["status"] = "cancelled"
-            _stamp_appt_action(appts[i])
-            break
-    await save_appointments(appts)
-
-    activity.log_command(
-        "cancelappointment", uid, uname, dname,
-        details=f"Cancelled appointment {appt['id']}"
-    )
-
-    # Determine who cancelled so we can notify the other party. An official OR
-    # an enabled proxy counts as the "official side".
-    is_off = _user_can_act_for_appt(appt, uid, uname)
-    off = next((o for o in OFFICIALS if o.get("id") == appt.get("official_id")), None)
-    user_chat_id = appt.get("user_chat_id")
-
-    if is_off:
-        # Official cancelled → notify the requester (in their language)
-        if user_chat_id:
-            _, req_lang = await get_user_prefs(user_chat_id)
-            await context.bot.send_message(
-                user_chat_id,
-                t("cancel_done_by_official_to_user", req_lang,
-                  id=appt["id"], official=appt["official_name"]),
-                parse_mode=ParseMode.MARKDOWN,
-            )
-            await _send_cancellation_ics(context, user_chat_id, appt)
-        await query.edit_message_text(
-            t("cancel_done_official_ack", lang, id=appt["id"]),
-            parse_mode=ParseMode.MARKDOWN,
-        )
-        # Also remove it from the official's own calendar
-        if off and off.get("chat_id"):
-            await _send_cancellation_ics(context, off["chat_id"], appt)
-    else:
-        # Requester cancelled → notify the official if we know their chat_id
-        if off and off.get("chat_id"):
-            user_display = appt.get("user_display_name") or appt.get("user_username") or "The requester"
-            await context.bot.send_message(
-                off["chat_id"],
-                f"❌ Appointment (ID: `{appt['id']}`) with "
-                + (f"*{user_display}*" if user_display else "a congregant")
-                + (f" (@{appt['user_username']})" if appt.get("user_username") else "")
-                + " has been cancelled by the requester.",
-                parse_mode=ParseMode.MARKDOWN,
-            )
-            await _send_cancellation_ics(context, off["chat_id"], appt)
-        notified = bool(off and off.get("chat_id"))
-        await query.edit_message_text(
-            t("cancel_done_requester_ack_notified" if notified else "cancel_done_requester_ack",
-              lang, id=appt["id"]),
-            parse_mode=ParseMode.MARKDOWN,
-        )
-        # Also remove it from the requester's own calendar
-        if user_chat_id:
-            await _send_cancellation_ics(context, user_chat_id, appt)
-
-    return ConversationHandler.END
-
-
-async def _send_cancellation_ics(
-    context: ContextTypes.DEFAULT_TYPE, chat_id: int, appt: dict
-) -> None:
-    """Send a METHOD:CANCEL ICS so the recipient's calendar removes the event."""
-    ics_bytes = appointment_cancellation_to_ics(appt, TZ)
-    bio = io.BytesIO(ics_bytes)
-    await context.bot.send_document(
-        chat_id,
-        document=InputFile(bio, filename="appointment-cancelled.ics"),
-        caption="Import this file to remove the appointment from your calendar.",
-    )
-
-
-# ---------------------------------------------------------------------------
-# /reschedule — propose a new time for an upcoming appointment
-# ---------------------------------------------------------------------------
-#
-# The original appointment stays confirmed at its current time until the other
-# party accepts the proposed new time. A decline keeps the original.
-# Reschedule actions ("rs_accept"/"rs_decline") ride on CB_APPT_PREFIX and are
-# handled early in appt_callback (before the terminal-status guard, since a
-# confirmed appointment is "terminal").
-
-RS_SELECT, RS_NEWTIME = range(2)
-
-CB_RESCHED_PREFIX = "rs:"
-
-
-async def cmd_reschedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    uid, uname, dname = user_info(update)
-    activity.log_command("reschedule", uid, uname, dname)
-    context.user_data.clear()
-    tz, lang = await get_user_prefs(uid)
-
-    appts = await get_appointments()
-    # Future, active appointments the user is party to (requester, official, or
-    # an enabled proxy).
-    reschedulable: list[dict] = []
-    for a in appts:
-        if a.get("status") not in ACTIVE_APPT_STATUSES:
-            continue
-        if _appt_is_past(a):
-            continue
-        if _user_can_act_for_appt(a, uid, uname):
-            reschedulable.append(a)
-        if a.get("user_chat_id") == uid and not any(x["id"] == a["id"] for x in reschedulable):
-            reschedulable.append(a)
-
-    if not reschedulable:
-        await update.message.reply_text(t("resched_none", lang))
-        return ConversationHandler.END
-
-    context.user_data["rs_appts"] = reschedulable
-    rows = []
-    for i, a in enumerate(reschedulable):
-        label = f"{a['official_name']} — {_appt_dt_label(a, tz, lang)}"
-        rows.append([InlineKeyboardButton(label, callback_data=f"{CB_RESCHED_PREFIX}sel:{i}")])
-    rows.append([InlineKeyboardButton(
-        "✖️ " + t("cancel_aborted", lang).rstrip("."),
-        callback_data=f"{CB_RESCHED_PREFIX}abort",
-    )])
-    await update.message.reply_text(
-        t("resched_list_header", lang),
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=InlineKeyboardMarkup(rows),
-    )
-    return RS_SELECT
-
-
-async def rs_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await _answer_cb(query)
-    uid = query.from_user.id
-    _, lang = await get_user_prefs(uid)
-    data = query.data[len(CB_RESCHED_PREFIX):]
-    reschedulable: list[dict] = context.user_data.get("rs_appts", [])
-
-    if data == "abort":
-        await query.edit_message_text(t("cancel_aborted", lang))
-        return ConversationHandler.END
-
-    idx = data.split(":", 1)[1] if data.startswith("sel:") else ""
-    if not idx.isdigit() or not (0 <= int(idx) < len(reschedulable)):
-        await query.edit_message_text(t("cancel_aborted", lang))
-        return ConversationHandler.END
-
-    appt = reschedulable[int(idx)]
-    # Role of the person rescheduling: the requester, or the official side.
-    context.user_data["rs_appt_id"] = appt["id"]
-    context.user_data["rs_role"] = "user" if appt.get("user_chat_id") == uid else "official"
-    await query.edit_message_text(t("resched_ask_time", lang))
-    return RS_NEWTIME
-
-
-async def rs_newtime(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    uid, uname, dname = user_info(update)
-    tz, lang = await get_user_prefs(uid)
-    text = update.message.text.strip()
-    appt_id = context.user_data.get("rs_appt_id")
-    role = context.user_data.get("rs_role")
-
-    appts = await get_appointments()
-    appt = next((a for a in appts if a["id"] == appt_id), None)
-    if not appt or appt.get("status") not in ACTIVE_APPT_STATUSES or _appt_is_past(appt):
-        await update.message.reply_text(t("resched_no_longer", lang))
-        return ConversationHandler.END
-
-    m = re.match(r"(\d{4}-\d{2}-\d{2})\s+(\d{1,2}:\d{2})", text)
-    if not m:
-        await update.message.reply_text(t("resched_bad_format", lang))
-        return RS_NEWTIME
-    parts_d = [int(x) for x in m.group(1).split("-")]
-    parts_t = [int(x) for x in m.group(2).split(":")]
-    try:
-        new_dt = TZ.localize(datetime(parts_d[0], parts_d[1], parts_d[2], parts_t[0], parts_t[1]))
-    except ValueError:
-        await update.message.reply_text(t("resched_bad_format", lang))
-        return RS_NEWTIME
-    if new_dt <= now_tz():
-        await update.message.reply_text(t("resched_past", lang))
-        return RS_NEWTIME
-    # No overlap with the requester's other active appointments.
-    if _overlapping_appt(appts, appt["user_chat_id"], new_dt,
-                         DEFAULT_APPT_DURATION_MIN, exclude_id=appt["id"]):
-        await update.message.reply_text(t("resched_overlap", lang))
-        return RS_NEWTIME
-
-    # Record the proposal WITHOUT touching the confirmed status/time.
-    appt["reschedule_proposed_datetime"] = new_dt.isoformat()
-    appt["reschedule_proposed_by"] = role
-    _stamp_appt_action(appt)
-    off = _official_by_id(appt["official_id"])
-    if role == "official" and off:
-        name, is_proxy = _acting_identity(off, uid, uname)
-        appt["negotiator_chat_id"] = uid
-        appt["negotiator_name"] = name or "The official"
-        appt["negotiator_is_proxy"] = is_proxy
-    for i, a in enumerate(appts):
-        if a["id"] == appt_id:
-            appts[i] = appt
-    await save_appointments(appts)
-
-    new_dt_str = format_dt(new_dt)
-    kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Accept", callback_data=f"{CB_APPT_PREFIX}rs_accept:{appt_id}"),
-        InlineKeyboardButton("❌ Decline", callback_data=f"{CB_APPT_PREFIX}rs_decline:{appt_id}"),
-    ]])
-
-    if role == "official":
-        # Notify the requester.
-        await context.bot.send_message(
-            appt["user_chat_id"],
-            f"📅 *Reschedule requested for appointment `{appt_id}`*\n"
-            f"With: {appt['official_name']}\n"
-            f"New time: {new_dt_str}\n"
-            f"Purpose: {appt.get('description', '')}"
-            + _requester_proxy_note(appt),
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=kb,
-        )
-    else:
-        # Requester is rescheduling → notify the official side (officer + proxies).
-        requester = appt.get("user_display_name") or appt.get("user_username") or "The requester"
-        for r in _official_side_recipients(off) if off else []:
-            try:
-                await context.bot.send_message(
-                    r["chat_id"],
-                    f"📅 *Reschedule requested for appointment `{appt_id}`*\n"
-                    f"From: {requester}\n"
-                    f"New time: {new_dt_str}\n"
-                    f"Purpose: {appt.get('description', '')}",
-                    parse_mode=ParseMode.MARKDOWN,
-                    reply_markup=kb,
-                )
-            except TelegramError:
-                pass
-
-    await update.message.reply_text(t("resched_sent", lang))
-    return ConversationHandler.END
-
-
-async def _handle_reschedule_response(
-    context: ContextTypes.DEFAULT_TYPE, query, appt: dict, appts: list, action: str
-) -> None:
-    """Handle the other party accepting/declining a proposed reschedule."""
-    appt_id = appt["id"]
-    proposed = appt.get("reschedule_proposed_datetime")
-    if not proposed:
-        await query.edit_message_text("ℹ️ This reschedule request has already been handled.")
-        return
-
-    proposed_by = appt.get("reschedule_proposed_by")
-    actor_id = query.from_user.id
-    actor_uname = query.from_user.username
-    # The party who did NOT propose responds.
-    if proposed_by == "official":
-        authorized = actor_id == appt.get("user_chat_id")
-    else:  # proposed by the requester → official side responds
-        authorized = _user_can_act_for_appt(appt, actor_id, actor_uname)
-    if not authorized:
-        await query.edit_message_text("⚠️ You're not authorized to respond to this reschedule.")
-        return
-
-    def _clear_and_store():
-        appt.pop("reschedule_proposed_datetime", None)
-        appt.pop("reschedule_proposed_by", None)
-        for i, a in enumerate(appts):
-            if a["id"] == appt_id:
-                appts[i] = appt
-
-    proposer_chat = (appt["user_chat_id"] if proposed_by == "user"
-                     else appt.get("negotiator_chat_id")
-                     or (_official_by_id(appt["official_id"]) or {}).get("chat_id"))
-
-    if action == "rs_decline":
-        _clear_and_store()
-        await save_appointments(appts)
-        await query.edit_message_text("❌ Reschedule declined; the original time stands.")
-        if proposer_chat:
-            await context.bot.send_message(
-                proposer_chat,
-                f"❌ Your reschedule request for appointment `{appt_id}` was declined; "
-                "the original time stands.",
-                parse_mode=ParseMode.MARKDOWN,
-            )
-        return
-
-    # rs_accept
-    if _datetime_is_past(proposed):
-        await query.edit_message_text(
-            "⚠️ That proposed time has already passed; no change was made."
-        )
-        _clear_and_store()
-        await save_appointments(appts)
-        return
-    clash = _confirmed_overlap(appts, appt, proposed)
-    if clash:
-        await query.edit_message_text(
-            f"⚠️ That time now overlaps another appointment (ID: {clash['id']}); "
-            "not rescheduled."
-        )
-        return
-    appt["confirmed_datetime"] = proposed
-    appt["status"] = "confirmed"
-    _clear_and_store()
-    await _finalize_appointment(context, appt, appts)  # new ICS to both, proxy note if any
-    await query.edit_message_text("✅ Reschedule accepted; the new time is confirmed.")
-
-
-# ---------------------------------------------------------------------------
-# /settimezone — per-user time zone preference
-# ---------------------------------------------------------------------------
-
-TZ_SELECT = 0
-
-# A short menu of common zones; users may also type any IANA name.
-COMMON_TIMEZONES = [
-    "America/New_York",
-    "America/Chicago",
-    "America/Denver",
-    "America/Los_Angeles",
-    "America/Anchorage",
-    "Pacific/Honolulu",
-    "Europe/London",
-    "Africa/Lagos",
-]
-
-
-async def _set_user_field(chat_id: int, field: str, value: str) -> None:
-    """Persist a single preference field on the user's record."""
-    users = await get_all_users()
-    for u in users:
-        if u.get("chat_id") == chat_id:
-            u[field] = value
-            await save_users(users)
-            return
-
-
-CB_TZ_PREFIX = "tz:"
-
-
-async def _apply_timezone(uid: int, lang: str, tz_name: str) -> "str | None":
-    """Validate and persist a timezone; return the confirmation text, or None if invalid."""
-    try:
-        tz = pytz.timezone(tz_name)
-    except Exception:
-        return None
-    await _set_user_field(uid, "timezone", tz_name)
-    return t("tz_set", lang, tz=tz_name, now=format_dt(now_tz(), tz, lang))
-
-
-async def cmd_settimezone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    uid, uname, dname = user_info(update)
-    activity.log_command("settimezone", uid, uname, dname)
-    _, lang = await get_user_prefs(uid)
-    rows = [
-        [InlineKeyboardButton(name, callback_data=f"{CB_TZ_PREFIX}{i}")]
-        for i, name in enumerate(COMMON_TIMEZONES)
-    ]
-    await update.message.reply_text(
-        t("tz_prompt", lang),
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=InlineKeyboardMarkup(rows),
-    )
-    return TZ_SELECT
-
-
-async def tz_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """A common-zone button was tapped."""
-    query = update.callback_query
-    await _answer_cb(query)
-    uid, uname, dname = user_info(update)
-    _, lang = await get_user_prefs(uid)
-    idx = query.data[len(CB_TZ_PREFIX):]
-    if not idx.isdigit() or not (0 <= int(idx) < len(COMMON_TIMEZONES)):
-        await query.edit_message_text(t("tz_invalid", lang))
-        return ConversationHandler.END
-    tz_name = COMMON_TIMEZONES[int(idx)]
-    msg = await _apply_timezone(uid, lang, tz_name)
-    activity.log_command("settimezone", uid, uname, dname, details=f"tz={tz_name}")
-    await query.edit_message_text(msg, parse_mode=ParseMode.MARKDOWN)
-    return ConversationHandler.END
-
-
-async def tz_typed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """A timezone (or list number) was typed instead of tapped."""
-    uid, uname, dname = user_info(update)
-    _, lang = await get_user_prefs(uid)
-    text = update.message.text.strip()
-    if text.isdigit() and 1 <= int(text) <= len(COMMON_TIMEZONES):
-        tz_name = COMMON_TIMEZONES[int(text) - 1]
-    else:
-        tz_name = text
-    msg = await _apply_timezone(uid, lang, tz_name)
-    if msg is None:
-        await update.message.reply_text(t("tz_invalid", lang))
-        return TZ_SELECT
-    activity.log_command("settimezone", uid, uname, dname, details=f"tz={tz_name}")
-    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
-    return ConversationHandler.END
-
-
-# ---------------------------------------------------------------------------
-# /language — per-user language preference
-# ---------------------------------------------------------------------------
-
-LANG_SELECT = 0
-
-CB_LANG_PREFIX = "lang:"
-
-
-async def cmd_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    uid, uname, dname = user_info(update)
-    activity.log_command("language", uid, uname, dname)
-    _, lang = await get_user_prefs(uid)
-    rows = [
-        [InlineKeyboardButton(name, callback_data=f"{CB_LANG_PREFIX}{code}")]
-        for code, name in AVAILABLE_LANGUAGES.items()
-    ]
-    await update.message.reply_text(
-        t("lang_prompt", lang),
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=InlineKeyboardMarkup(rows),
-    )
-    return LANG_SELECT
-
-
-async def lang_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await _answer_cb(query)
-    uid, uname, dname = user_info(update)
-    code = query.data[len(CB_LANG_PREFIX):]
-    if code not in AVAILABLE_LANGUAGES:
-        await query.edit_message_text(t("lang_set", DEFAULT_LANG,
-                                        language=AVAILABLE_LANGUAGES[DEFAULT_LANG]))
-        return ConversationHandler.END
-    await _set_user_field(uid, "language", code)
-    activity.log_command("language", uid, uname, dname, details=f"lang={code}")
-    await query.edit_message_text(
-        t("lang_set", code, language=AVAILABLE_LANGUAGES[code]),
-        parse_mode=ParseMode.MARKDOWN,
-    )
-    return ConversationHandler.END
-
-
-# ---------------------------------------------------------------------------
-# /notifications — opt-in personal reminders by event category
-# ---------------------------------------------------------------------------
-
-CB_NOTIFPREF_PREFIX = "np:"
-
-
-def _notif_prefs_keyboard(prefs: set, lang: str) -> InlineKeyboardMarkup:
-    rows = []
-    for key, label_key in NOTIF_CATEGORIES:
-        mark = "✅ " if key in prefs else "▫️ "
-        rows.append([InlineKeyboardButton(
-            mark + t(label_key, lang), callback_data=f"{CB_NOTIFPREF_PREFIX}toggle:{key}"
-        )])
-    rows.append([InlineKeyboardButton(
-        t("notif_prefs_done", lang), callback_data=f"{CB_NOTIFPREF_PREFIX}done"
-    )])
-    return InlineKeyboardMarkup(rows)
-
-
-def _notif_prefs_summary(prefs: set, lang: str) -> str:
-    if not prefs:
-        return t("notif_prefs_none", lang)
-    lines = [t(lk, lang) for k, lk in NOTIF_CATEGORIES if k in prefs]
-    return t("notif_prefs_saved", lang, list="\n".join(f"• {x}" for x in lines))
-
-
-async def _get_user_notif_prefs(chat_id: int) -> set:
-    users = await get_all_users()
-    rec = next((u for u in users if u.get("chat_id") == chat_id), None)
-    return user_notif_prefs(rec)
-
-
-async def _set_user_notif_prefs(chat_id: int, uname: "str | None",
-                                dname: str, prefs: set) -> None:
-    """Persist a user's notification categories, creating a record if needed
-    (so friends-of-the-congregation can opt in without a full /start first)."""
-    users = await get_all_users()
-    rec = next((u for u in users if u.get("chat_id") == chat_id), None)
-    if rec is None:
-        rec = {"chat_id": chat_id, "username": uname, "display_name": dname,
-               "joined": now_tz().isoformat()}
-        users.append(rec)
-    rec["notif_prefs"] = sorted(prefs)
-    await save_users(users)
-
-
-async def cmd_notifications(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    uid, uname, dname = user_info(update)
-    activity.log_command("notifications", uid, uname, dname)
-    _, lang = await get_user_prefs(uid)
-    prefs = await _get_user_notif_prefs(uid)
-    await update.message.reply_text(
-        t("notif_prefs_prompt", lang),
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=_notif_prefs_keyboard(prefs, lang),
-    )
-
-
-async def notif_prefs_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    await _answer_cb(query)
-    uid, uname, dname = user_info(update)
-    _, lang = await get_user_prefs(uid)
-    action = query.data[len(CB_NOTIFPREF_PREFIX):]
-
-    if action == "done":
-        prefs = await _get_user_notif_prefs(uid)
-        await query.edit_message_text(_notif_prefs_summary(prefs, lang),
-                                      parse_mode=ParseMode.MARKDOWN)
-        return
-
-    if action.startswith("toggle:"):
-        cat = action.split(":", 1)[1]
-        if cat not in _NOTIF_CATEGORY_KEYS:
-            return
-        prefs = await _get_user_notif_prefs(uid)
-        prefs.discard(cat) if cat in prefs else prefs.add(cat)
-        await _set_user_notif_prefs(uid, uname, dname, prefs)
-        activity.log_command("notifications", uid, uname, dname,
-                             details=f"{cat}={'on' if cat in prefs else 'off'}")
-        await query.edit_message_reply_markup(reply_markup=_notif_prefs_keyboard(prefs, lang))
-
 
 # ---------------------------------------------------------------------------
 # Command-execution logging (INFO)
@@ -3795,7 +381,7 @@ async def _refresh_user_identity(uid: int, uname: "str | None", dname: str) -> N
     forever (e.g. /userlist showing '—'). No-op if the user has no record yet —
     registration remains /start's job.
     """
-    users = await get_all_users()
+    users = await storage.get_all_users()
     rec = next((u for u in users if u.get("chat_id") == uid), None)
     if rec is None:
         return
@@ -3803,14 +389,74 @@ async def _refresh_user_identity(uid: int, uname: "str | None", dname: str) -> N
         return
     rec["username"] = uname
     rec["display_name"] = dname
-    await save_users(users)
+    await storage.save_users(users)
     logger.info("Refreshed identity for user %s: username=%s, display_name=%s",
                 uid, uname, dname)
 
 
+async def _known_admin_chat_ids() -> set:
+    """Chat ids we can message admins on: phone-registered admins plus any
+    registered user whose current username is listed in admins.yaml."""
+    ids = set(permissions._admin_chat_ids)
+    for u in await storage.get_all_users():
+        uname = (u.get("username") or "").lstrip("@").lower()
+        if uname and uname in permissions.ADMIN_USERNAMES and u.get("chat_id"):
+            ids.add(u["chat_id"])
+    return ids
+
+
+# (official_id, kind, new_username) already reported — one alert per change,
+# not one per command. Cleared on restart, which re-alerts if still unfixed.
+_reported_username_drift: set = set()
+
+
+async def _warn_official_username_drift(context: ContextTypes.DEFAULT_TYPE,
+                                        uid: int, uname: "str | None") -> None:
+    """Alert admins when an official's/proxy's configured username goes stale.
+
+    Their chat_id still identifies them, but any username-based match in
+    officials.yaml now fails, so appointment routing can silently misbehave
+    until an admin updates the file.
+    """
+    drift = permissions.official_username_drift(uid, uname)
+    if not drift:
+        return
+    key = (drift["official_id"], drift["kind"], (uname or "").lower())
+    if key in _reported_username_drift:
+        return
+    _reported_username_drift.add(key)
+
+    logger.warning(
+        "Username drift for %s '%s' (official=%s): officials.yaml has @%s, "
+        "Telegram now reports @%s — update config/officials.yaml.",
+        drift["kind"], drift["name"], drift["official_id"],
+        drift["configured"], drift["current"] or "(none)",
+    )
+    activity.log_command("username_drift", uid, uname, drift["name"],
+                         details=f"{drift['configured']} -> {drift['current']}")
+
+    now_txt = f"@{md(drift['current'])}" if drift["current"] else "_(no username set)_"
+    text = (
+        "⚠️ *Official username changed*\n\n"
+        f"{md(drift['name'])} ({md(drift['kind'])} for `{md(drift['official_id'])}`) "
+        f"is configured in officials.yaml as @{md(drift['configured'])}, "
+        f"but Telegram now reports {now_txt}.\n\n"
+        "Appointment permissions matched by username will fail until "
+        "`config/officials.yaml` is updated."
+    )
+    for chat_id in await _known_admin_chat_ids():
+        if chat_id == uid:
+            continue  # tell the other admins, not the person who changed it
+        try:
+            await context.bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN)
+        except TelegramError as exc:
+            logger.warning("Could not alert admin %s about username drift: %s", chat_id, exc)
+
+
 async def _log_command_invocation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Log every private command at INFO, and keep the sender's stored
-    username/display_name fresh. Runs in group -1 before real handlers."""
+    """Log every private command at INFO, keep the sender's stored
+    username/display_name fresh, and flag officials whose configured username
+    has gone stale. Runs in group -1 before real handlers."""
     msg = update.effective_message
     if not msg or not msg.text:
         return
@@ -3822,6 +468,7 @@ async def _log_command_invocation(update: Update, context: ContextTypes.DEFAULT_
     if u:
         uid_i, uname, dname = user_info(update)
         await _refresh_user_identity(uid_i, uname, dname)
+        await _warn_official_username_drift(context, uid_i, uname)
 
 
 _ACTIVE_MEMBER_STATUSES = ("member", "administrator", "creator")
@@ -3846,7 +493,7 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         chat.type, chat.title, chat.id, new_status,
     )
 
-    groups = await _load_known_groups()
+    groups = await storage._load_known_groups()
     key = str(chat.id)
     if new_status in _ACTIVE_MEMBER_STATUSES:
         groups[key] = {
@@ -3858,7 +505,7 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     else:
         # Left/kicked/restricted — drop it from the broadcast list.
         groups.pop(key, None)
-    await _save_known_groups(groups)
+    await storage._save_known_groups(groups)
 
 
 # ---------------------------------------------------------------------------

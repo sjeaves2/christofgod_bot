@@ -74,7 +74,7 @@ class TestPrefHelpers:
         async def _fake_get():
             return users
 
-        with patch("bot.get_all_users", side_effect=_fake_get):
+        with patch("storage.get_all_users", side_effect=_fake_get):
             tz, lang = _run(bot.get_user_prefs(111))
         assert str(tz) == "America/Chicago"
         assert lang == "en"
@@ -85,7 +85,7 @@ class TestPrefHelpers:
         async def _fake_get():
             return []
 
-        with patch("bot.get_all_users", side_effect=_fake_get):
+        with patch("storage.get_all_users", side_effect=_fake_get):
             tz, lang = _run(bot.get_user_prefs(999))
         assert tz == bot.TZ
         assert lang == bot.DEFAULT_LANG
@@ -121,8 +121,8 @@ class TestSetTimezone:
         async def _fake_save(u):
             saved["users"] = u
 
-        with patch("bot.get_all_users", side_effect=_fake_get), \
-             patch("bot.save_users", side_effect=_fake_save):
+        with patch("storage.get_all_users", side_effect=_fake_get), \
+             patch("storage.save_users", side_effect=_fake_save):
             result = _run(bot.tz_typed(upd, ctx))
         return result, upd, saved
 
@@ -171,8 +171,8 @@ class TestSetTimezoneButtons:
         async def _fake_save(u):
             saved["users"] = u
 
-        with patch("bot.get_all_users", side_effect=_fake_get), \
-             patch("bot.save_users", side_effect=_fake_save):
+        with patch("storage.get_all_users", side_effect=_fake_get), \
+             patch("storage.save_users", side_effect=_fake_save):
             result = _run(bot.tz_button(upd, ctx))
         return result, q, saved
 
@@ -200,7 +200,7 @@ class TestSetTimezoneButtons:
         async def _fake_get():
             return [{"chat_id": 111}]
 
-        with patch("bot.get_all_users", side_effect=_fake_get):
+        with patch("storage.get_all_users", side_effect=_fake_get):
             result = _run(bot.cmd_settimezone(upd, ctx))
         assert result == bot.TZ_SELECT
         markup = upd.message.reply_text.call_args.kwargs["reply_markup"]
@@ -233,8 +233,8 @@ class TestLanguage:
         async def _fake_save(u):
             saved["users"] = u
 
-        with patch("bot.get_all_users", side_effect=_fake_get), \
-             patch("bot.save_users", side_effect=_fake_save):
+        with patch("storage.get_all_users", side_effect=_fake_get), \
+             patch("storage.save_users", side_effect=_fake_save):
             result = _run(bot.lang_select(upd, ctx))
         return result, q, saved
 
@@ -273,9 +273,9 @@ class TestEventsRespectUserTz:
         async def _fake_upcoming(days_ahead=30):
             return [event]
 
-        with patch("bot.get_all_users", side_effect=_fake_users), \
-             patch("bot.all_upcoming", side_effect=_fake_upcoming), \
-             patch("bot.is_admin", return_value=False):
+        with patch("storage.get_all_users", side_effect=_fake_users), \
+             patch("handlers.user_basics.all_upcoming", side_effect=_fake_upcoming), \
+             patch("permissions.is_admin", return_value=False):
             _run(bot.cmd_events(upd, ctx))
         return upd.message.reply_text.call_args[0][0]
 

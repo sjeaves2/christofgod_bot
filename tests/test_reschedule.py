@@ -83,9 +83,9 @@ def _patches(appts, officials, saved):
         saved.extend(a)
 
     return [
-        patch("bot.get_appointments", side_effect=_get),
-        patch("bot.save_appointments", side_effect=_save),
-        patch("bot.OFFICIALS", officials),
+        patch("storage.get_appointments", side_effect=_get),
+        patch("storage.save_appointments", side_effect=_save),
+        patch("permissions.OFFICIALS", officials),
     ]
 
 
@@ -109,8 +109,8 @@ class TestCmdReschedule:
         officials = officials or _officials()
         ctx = _ctx()
         upd = _msg_update("", chat_id=chat_id, username=username)
-        with patch("bot.get_appointments", side_effect=_g(appts)), \
-             patch("bot.OFFICIALS", officials):
+        with patch("storage.get_appointments", side_effect=_g(appts)), \
+             patch("permissions.OFFICIALS", officials):
             result = _run(bot.cmd_reschedule(upd, ctx))
         return result, upd, ctx
 
@@ -246,7 +246,7 @@ class TestRescheduleResponse:
         saved = []
         finalize = AsyncMock()
         patches = _patches([appt], officials, saved) + [
-            patch("bot._finalize_appointment", finalize)]
+            patch("handlers.appointments._finalize_appointment", finalize)]
         _run_with(patches, lambda: bot.appt_callback(upd, ctx))
         return q, ctx, saved, finalize
 

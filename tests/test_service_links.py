@@ -83,8 +83,8 @@ class TestUrlAttachment:
         async def _fake_events_data():
             return {"convocation_urls": urls_map, "convocation_announcements": {}, "special_events": []}
 
-        with patch("bot.get_all_events_data", side_effect=_fake_events_data), \
-             patch("bot.all_upcoming_events", return_value=[sabbath_eve, sabbath_morning]):
+        with patch("storage.get_all_events_data", side_effect=_fake_events_data), \
+             patch("events.all_upcoming_events", return_value=[sabbath_eve, sabbath_morning]):
             events = _run(bot.all_upcoming(days_ahead=30))
         return {e["phase_key"]: e for e in events}
 
@@ -159,7 +159,7 @@ class TestSundayPrayerLink:
                 }],
             }
 
-        with patch("bot.get_all_events_data", side_effect=_fake_events_data):
+        with patch("storage.get_all_events_data", side_effect=_fake_events_data):
             events = _run(bot.all_upcoming(days_ahead=14))
         sundays = [e for e in events if "Sunday Morning Prayer" in e["name"]]
         assert len(sundays) >= 1
@@ -212,8 +212,8 @@ class TestSetServiceLink:
         async def _fake_events_data():
             return {"convocation_urls": {"sabbath::Eve": "https://old"}}
 
-        with patch("bot.is_admin", return_value=True), \
-             patch("bot.get_all_events_data", side_effect=_fake_events_data):
+        with patch("permissions.is_admin", return_value=True), \
+             patch("storage.get_all_events_data", side_effect=_fake_events_data):
             result = _run(bot.cmd_setservicelink(upd, ctx))
 
         assert result == SL_SELECT
@@ -228,13 +228,14 @@ class TestSetServiceLink:
 
         ctx = _make_context()
         upd = _make_update()
-        with patch("bot.is_admin", return_value=False):
+        with patch("permissions.is_admin", return_value=False):
             result = _run(bot.cmd_setservicelink(upd, ctx))
         assert result == ConversationHandler.END
 
     def test_select_valid_advances_to_url(self):
         import bot
-        from bot import SL_URL, service_phases
+        from bot import SL_URL
+        from hebrew_calendar import service_phases
 
         ctx = _make_context()
         ctx.user_data["sl_phases"] = service_phases()
@@ -245,7 +246,8 @@ class TestSetServiceLink:
 
     def test_select_invalid_stays(self):
         import bot
-        from bot import SL_SELECT, service_phases
+        from bot import SL_SELECT
+        from hebrew_calendar import service_phases
 
         ctx = _make_context()
         ctx.user_data["sl_phases"] = service_phases()
@@ -274,9 +276,9 @@ class TestSetServiceLink:
         async def _fake_schedule(app):
             pass
 
-        with patch("bot.get_all_events_data", side_effect=_fake_get), \
-             patch("bot.save_events_data", side_effect=_fake_save), \
-             patch("bot.schedule_all_upcoming", side_effect=_fake_schedule):
+        with patch("storage.get_all_events_data", side_effect=_fake_get), \
+             patch("storage.save_events_data", side_effect=_fake_save), \
+             patch("handlers.events_admin.schedule_all_upcoming", side_effect=_fake_schedule):
             result = _run(bot.sl_url(upd, ctx))
         return result, upd, saved
 
@@ -314,9 +316,9 @@ class TestSetServiceLink:
         async def _fake_save(d):
             pass
 
-        with patch("bot.get_all_events_data", side_effect=_fake_get), \
-             patch("bot.save_events_data", side_effect=_fake_save), \
-             patch("bot.schedule_all_upcoming", reschedule):
+        with patch("storage.get_all_events_data", side_effect=_fake_get), \
+             patch("storage.save_events_data", side_effect=_fake_save), \
+             patch("handlers.events_admin.schedule_all_upcoming", reschedule):
             _run(bot.sl_url(upd, ctx))
 
         reschedule.assert_called_once()

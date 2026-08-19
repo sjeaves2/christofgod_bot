@@ -218,8 +218,8 @@ class TestFinalizeAppointment:
         async def _fake_save(appts):
             pass
 
-        with patch("bot.OFFICIALS", officials), \
-             patch("bot.save_appointments", side_effect=_fake_save):
+        with patch("permissions.OFFICIALS", officials), \
+             patch("storage.save_appointments", side_effect=_fake_save):
             from bot import _finalize_appointment
             _run(_finalize_appointment(ctx, appt, [appt.copy()]))
 
@@ -381,8 +381,8 @@ class TestFinalizeAppointment:
             saved.extend(appts)
 
         ctx = self._make_context()
-        with patch("bot.OFFICIALS", []), \
-             patch("bot.save_appointments", side_effect=_fake_save):
+        with patch("permissions.OFFICIALS", []), \
+             patch("storage.save_appointments", side_effect=_fake_save):
             from bot import _finalize_appointment
             _run(_finalize_appointment(ctx, appt, [appt.copy()]))
 

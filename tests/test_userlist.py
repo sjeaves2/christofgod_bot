@@ -41,8 +41,8 @@ def _run_userlist(users):
     async def _fake_users():
         return users
 
-    with patch("bot.get_all_users", side_effect=_fake_users), \
-         patch("bot.is_admin", return_value=True):
+    with patch("storage.get_all_users", side_effect=_fake_users), \
+         patch("permissions.is_admin", return_value=True):
         _run(bot.cmd_userlist(upd, ctx))
     return upd.message.reply_text.call_args[0][0]
 

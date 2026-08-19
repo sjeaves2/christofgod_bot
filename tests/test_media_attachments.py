@@ -168,8 +168,8 @@ class TestDeliverWithMedia:
         async def _save(s):
             state["states"] = dict(s)
 
-        with patch("bot._load_notif_state", side_effect=_load), \
-             patch("bot._save_notif_state", side_effect=_save):
+        with patch("storage._load_notif_state", side_effect=_load), \
+             patch("storage._save_notif_state", side_effect=_save):
             sent = _run(bot.deliver_event_notifications(b, event))
         return b, sent
 
@@ -215,7 +215,7 @@ class TestBroadcastMedia:
         import bot
         ctx = self._ctx()
         upd = self._photo_update(caption="Hello *world*")
-        with patch("bot._broadcast_target_options", return_value=[]):
+        with patch("handlers.broadcast._broadcast_target_options", return_value=[]):
             result = _run(bot.bc_media(upd, ctx))
         assert result == bot.BC_SELECT
         media = ctx.user_data["bc_media"]
