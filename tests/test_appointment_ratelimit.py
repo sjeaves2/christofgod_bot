@@ -145,11 +145,11 @@ class TestConfirmRateLimit:
         async def _fake_notify(context, appt, update):
             pass
 
-        with patch("bot.get_appointments", side_effect=_fake_get), \
-             patch("bot.save_appointments", side_effect=_fake_save), \
-             patch("bot.OFFICIALS", _officials()), \
-             patch("bot.is_admin", return_value=is_admin), \
-             patch("bot._notify_official_of_request", side_effect=_fake_notify):
+        with patch("storage.get_appointments", side_effect=_fake_get), \
+             patch("storage.save_appointments", side_effect=_fake_save), \
+             patch("permissions.OFFICIALS", _officials()), \
+             patch("permissions.is_admin", return_value=is_admin), \
+             patch("handlers.appointments._notify_official_of_request", side_effect=_fake_notify):
             result = _run(bot.ap_confirm(upd, ctx))
         return result, upd, saved
 

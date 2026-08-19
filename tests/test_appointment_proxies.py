@@ -125,8 +125,8 @@ class TestEnableCommand:
         upd.effective_user.full_name = "U"
         upd.message.reply_text = AsyncMock()
         saved = {"called": False}
-        with patch("bot.OFFICIALS", officials), \
-             patch("bot._save_officials", side_effect=lambda: saved.update(called=True)):
+        with patch("permissions.OFFICIALS", officials), \
+             patch("permissions._save_officials", side_effect=lambda: saved.update(called=True)):
             _run(bot.cmd_enable_appt_proxies(upd, ctx))
         return officials, upd, saved
 
@@ -167,11 +167,11 @@ class TestClaim:
         async def _save(a):
             saved["appts"] = a
 
-        with patch("bot.get_appointments", side_effect=_get), \
-             patch("bot.save_appointments", side_effect=_save), \
-             patch("bot.OFFICIALS", [_official(enabled=True)]), \
-             patch("bot._finalize_appointment", finalize), \
-             patch("bot._notify_negotiation_started", new=AsyncMock()) as notif:
+        with patch("storage.get_appointments", side_effect=_get), \
+             patch("storage.save_appointments", side_effect=_save), \
+             patch("permissions.OFFICIALS", [_official(enabled=True)]), \
+             patch("handlers.appointments._finalize_appointment", finalize), \
+             patch("handlers.appointments._notify_negotiation_started", new=AsyncMock()) as notif:
             ctx = _ctx()
             _run_cb = bot.appt_callback(upd, ctx)
             _run(_run_cb)
@@ -226,9 +226,9 @@ class TestFinalizeProxyNote:
         async def _prefs(cid):
             return TZ, "en"
 
-        with patch("bot.save_appointments", side_effect=_save), \
-             patch("bot.get_user_prefs", side_effect=_prefs), \
-             patch("bot.OFFICIALS", [_official(enabled=True)]):
+        with patch("storage.save_appointments", side_effect=_save), \
+             patch("handlers.appointments.get_user_prefs", side_effect=_prefs), \
+             patch("permissions.OFFICIALS", [_official(enabled=True)]):
             _run(bot._finalize_appointment(ctx, appt, [appt]))
         return ctx
 
@@ -260,7 +260,7 @@ class TestRequestFanout:
         import bot
         ctx = _ctx()
         appt = _appt()
-        with patch("bot.OFFICIALS", [_official(enabled=True)]):
+        with patch("permissions.OFFICIALS", [_official(enabled=True)]):
             _run(bot._notify_official_of_request(ctx, appt, MagicMock()))
         targets = [c.args[0] for c in ctx.bot.send_message.call_args_list]
         assert 999 in targets and 222 in targets
@@ -269,7 +269,7 @@ class TestRequestFanout:
         import bot
         ctx = _ctx()
         appt = _appt()
-        with patch("bot.OFFICIALS", [_official(enabled=False)]):
+        with patch("permissions.OFFICIALS", [_official(enabled=False)]):
             _run(bot._notify_official_of_request(ctx, appt, MagicMock()))
         targets = [c.args[0] for c in ctx.bot.send_message.call_args_list]
         assert targets == [999]

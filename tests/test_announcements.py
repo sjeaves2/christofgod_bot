@@ -90,8 +90,8 @@ class TestPurge:
         async def _save(a):
             saved["anns"] = a
 
-        with patch("bot.get_announcements", side_effect=_get), \
-             patch("bot.save_announcements", side_effect=_save):
+        with patch("storage.get_announcements", side_effect=_get), \
+             patch("storage.save_announcements", side_effect=_save):
             purged = _run(bot.purge_old_announcements())
         return purged, saved
 
@@ -126,8 +126,8 @@ class TestCmdAnnouncements:
         async def _get_users():
             return [{"chat_id": 111, "language": lang}]
 
-        with patch("bot.get_announcements", side_effect=_get_anns), \
-             patch("bot.get_all_users", side_effect=_get_users):
+        with patch("storage.get_announcements", side_effect=_get_anns), \
+             patch("storage.get_all_users", side_effect=_get_users):
             _run(bot.cmd_announcements(upd, ctx))
         return upd.message.reply_text.call_args[0][0]
 
@@ -162,7 +162,7 @@ class TestAddAnnouncement:
         import bot
         ctx = _make_context()
         upd = _make_update()
-        with patch("bot.is_admin", return_value=False):
+        with patch("permissions.is_admin", return_value=False):
             result = _run(bot.cmd_addannouncement(upd, ctx))
         assert result == bot.ConversationHandler.END
 
@@ -220,10 +220,10 @@ class TestAddAnnouncement:
         async def _options(bot_, lang):
             return [{"key": "all", "kind": "all", "chat_id": None, "label": "Subscribers"}]
 
-        with patch("bot.get_announcements", side_effect=_get_anns), \
-             patch("bot.save_announcements", side_effect=_save_anns), \
-             patch("bot.get_all_users", side_effect=_get_users), \
-             patch("bot._broadcast_target_options", side_effect=_options):
+        with patch("storage.get_announcements", side_effect=_get_anns), \
+             patch("storage.save_announcements", side_effect=_save_anns), \
+             patch("storage.get_all_users", side_effect=_get_users), \
+             patch("handlers.announcements._broadcast_target_options", side_effect=_options):
             result = _run(bot.an_confirm(upd, ctx))
         return result, ctx, saved
 
@@ -263,8 +263,8 @@ class TestDelAnnouncement:
         async def _save(a):
             saved["anns"] = a
 
-        with patch("bot.get_announcements", side_effect=_get), \
-             patch("bot.save_announcements", side_effect=_save):
+        with patch("storage.get_announcements", side_effect=_get), \
+             patch("storage.save_announcements", side_effect=_save):
             result = _run(bot.da_select(upd, ctx))
         assert result == bot.ConversationHandler.END
         assert bot._ann_is_active(saved["anns"][0]) is False
@@ -294,8 +294,8 @@ class TestAnnouncementTranslation:
         async def _save(a):
             saved["anns"] = a
 
-        with patch("bot.get_announcements", side_effect=_get), \
-             patch("bot.save_announcements", side_effect=_save), \
+        with patch("storage.get_announcements", side_effect=_get), \
+             patch("storage.save_announcements", side_effect=_save), \
              patch("translation.translate", return_value=translate_result) as tr:
             out = _run(bot._announcement_for_lang(ann, lang))
         return out, saved, tr

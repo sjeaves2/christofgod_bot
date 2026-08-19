@@ -63,9 +63,9 @@ class TestTargetOptions:
         else:
             bot_obj.get_chat = AsyncMock(side_effect=get_chat)
 
-        with patch("bot._load_known_groups", side_effect=_kg), \
-             patch("bot._save_known_groups", side_effect=_save), \
-             patch("bot.get_all_events_data", side_effect=_ev):
+        with patch("storage._load_known_groups", side_effect=_kg), \
+             patch("storage._save_known_groups", side_effect=_save), \
+             patch("storage.get_all_events_data", side_effect=_ev):
             opts = _run(bot._broadcast_target_options(bot_obj, lang))
         return opts, saved["groups"]
 
@@ -132,7 +132,7 @@ class TestExpandRecipients:
         async def _users():
             return users
 
-        with patch("bot.get_all_users", side_effect=_users):
+        with patch("storage.get_all_users", side_effect=_users):
             return _run(bot._bc_expand_recipients(options, set(selected)))
 
     def test_all_expands_to_subscribers(self):
@@ -302,7 +302,7 @@ class TestMessagePreview:
 
         ctx = _ctx()
         upd = _update(text="Good *message*")
-        with patch("bot._broadcast_target_options", side_effect=_opts):
+        with patch("handlers.broadcast._broadcast_target_options", side_effect=_opts):
             result = _run(bot.bc_message(upd, ctx))
         assert result == bot.BC_SELECT
         # The stored message keeps the body and appends the sender attribution.
@@ -318,7 +318,7 @@ class TestMessagePreview:
 
         ctx = _ctx()
         upd = _update(text="Announcement")
-        with patch("bot._broadcast_target_options", side_effect=_opts):
+        with patch("handlers.broadcast._broadcast_target_options", side_effect=_opts):
             _run(bot.bc_message(upd, ctx))
         assert ctx.user_data["bc_message"].endswith("— posted by Admin User")
 
