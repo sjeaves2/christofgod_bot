@@ -135,7 +135,8 @@ class TestEventsAdminEcho:
 
     def _delete_confirm_prompt(self, name):
         import handlers.events_admin as ea
-        ctx = MagicMock(); ctx.user_data = {}
+        ctx = MagicMock()
+        ctx.user_data = {}
         ctx.user_data["de_events"] = [{
             "key": "special_x", "name": name, "type": "special",
             "service_time": datetime.now(TZ) + timedelta(days=2)}]
@@ -155,7 +156,8 @@ class TestEventsAdminEcho:
 
     def test_event_name_escaped_in_annotation_prompt(self):
         import handlers.events_admin as ea
-        ctx = MagicMock(); ctx.user_data = {}
+        ctx = MagicMock()
+        ctx.user_data = {}
         ctx.user_data["de_events"] = [{
             "key": "sab_x", "name": "Sabbath_Eve *Holy*", "type": "convocation",
             "service_time": datetime.now(TZ) + timedelta(days=2)}]

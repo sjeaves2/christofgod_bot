@@ -282,7 +282,8 @@ async def cmd_usercount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     uid, uname, dname = user_info(update)
     activity.log_command("usercount", uid, uname, dname)
     users = await storage.get_all_users()
-    await update.message.reply_text(f"👥 Total registered users: *{len(users)}*", parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text(f"👥 Total registered users: *{len(users)}*",
+                                    parse_mode=ParseMode.MARKDOWN)
 
 
 @admin_only
