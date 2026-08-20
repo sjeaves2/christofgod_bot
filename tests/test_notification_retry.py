@@ -14,6 +14,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import events
+import handlers.notifications as hn
+import telegram.ext as ext
+
 TZ = pytz.timezone("America/New_York")
 
 
@@ -68,7 +72,7 @@ class TestDeliverEventNotifications:
         for p in ctx_patches:
             p.start()
         try:
-            return _run(bot.deliver_event_notifications(bot_obj, event))
+            return _run(hn.deliver_event_notifications(bot_obj, event))
         finally:
             for p in ctx_patches:
                 p.stop()
@@ -153,7 +157,6 @@ class TestDeliverEventNotifications:
 
 class TestCatchupJob:
     def test_delivers_for_in_window_event_and_prunes(self):
-        import bot
 
         in_window = _event(key="live", minutes_to_service=30)       # notif passed, service future
         future = _event(key="future", minutes_to_service=60 * 24)   # notif not yet due
@@ -184,7 +187,7 @@ class TestCatchupJob:
              patch("handlers.notifications.deliver_event_notifications", side_effect=_fake_deliver), \
              patch("storage._load_notif_state", side_effect=_load_state), \
              patch("storage._save_notif_state", side_effect=_save_state):
-            _run(bot.notification_catchup_job(ctx))
+            _run(hn.notification_catchup_job(ctx))
 
         # Only the in-window event triggers delivery.
         assert delivered == ["live"]
@@ -223,29 +226,23 @@ class TestCommandLogging:
 
 class TestTargetResolution:
     def test_maps_registry_names_to_chat_ids(self):
-        import bot
         registry = {"main": -1001, "ann": "@cogm"}
-        assert bot._resolve_targets(["main", "ann"], registry) == [-1001, "@cogm"]
+        assert events._resolve_targets(["main", "ann"], registry) == [-1001, "@cogm"]
 
     def test_passes_through_raw_numeric_id(self):
-        import bot
-        assert bot._resolve_targets([-1002], {}) == [-1002]
+        assert events._resolve_targets([-1002], {}) == [-1002]
 
     def test_passes_through_numeric_string_and_channel_handle(self):
-        import bot
-        assert bot._resolve_targets(["-1003", "@chan"], {}) == [-1003, "@chan"]
+        assert events._resolve_targets(["-1003", "@chan"], {}) == [-1003, "@chan"]
 
     def test_drops_unknown_names(self):
-        import bot
-        assert bot._resolve_targets(["nope"], {"main": -1001}) == []
+        assert events._resolve_targets(["nope"], {"main": -1001}) == []
 
     def test_deduplicates(self):
-        import bot
-        assert bot._resolve_targets(["main", "main", -1001], {"main": -1001}) == [-1001]
+        assert events._resolve_targets(["main", "main", -1001], {"main": -1001}) == [-1001]
 
     def test_empty(self):
-        import bot
-        assert bot._resolve_targets([], {"main": -1001}) == []
+        assert events._resolve_targets([], {"main": -1001}) == []
 
 
 class TestGroupGate:
@@ -253,7 +250,7 @@ class TestGroupGate:
         import bot
         ctx = MagicMock()
         upd = MagicMock()
-        with pytest.raises(bot.ApplicationHandlerStop):
+        with pytest.raises(ext.ApplicationHandlerStop):
             _run(bot._ignore_group_messages(upd, ctx))
 
     def test_my_chat_member_logs_and_records(self, caplog):

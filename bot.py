@@ -37,66 +37,35 @@ from telegram.ext import (
     filters,
 )
 
-from localization import (  # noqa: F401
-    AVAILABLE_LANGUAGES,
-    DEFAULT_LANG,
-    status_label,
-    t,
-)
 
 # ---------------------------------------------------------------------------
-# Boot-time configuration and data stores (extracted modules; names are
-# re-imported here so existing code and tests keep addressing them as bot.*)
+# Application assembly
+#
+# bot.py is the composition root: it owns the few cross-cutting handlers below
+# (contact sharing, command logging, maintenance jobs, the error handler) and
+# wires every feature module's handlers into the Application in main().
+#
+# The imports that follow are the handlers, conversation states and callback
+# prefixes main() registers. F401 is silenced on them because ruff cannot see
+# that they are used inside main()'s handler construction.
 # ---------------------------------------------------------------------------
 
 from settings import (  # noqa: F401
     BOT_DISPLAY_NAME,
     BOT_TOKEN,
-    CONFIG_DIR,
-    DEFAULT_NOTIF_MIN,
-    DONATION_URL,
-    TZ,
     activity,
 )
 import permissions
 import storage
 
-# Facade re-exports: these names live in the extracted modules but are imported
-# here so existing call sites — and the test suite, which addresses them as
-# `bot.X` — keep working while the refactor proceeds in phases. Ruff's F401 is
-# silenced deliberately; do not "clean up" these imports.
 from permissions import (  # noqa: F401
-    ADMIN_PHONES,
-    ADMIN_USERNAMES,
-    OFFICIALS,
-    _acting_identity,
-    _enabled_proxies,
-    _is_known_official,
-    _official_by_id,
-    _official_side_recipients,
-    _person_matches,
-    _register_admin_by_phone,
-    _register_admin_by_username,
-    _save_officials,
-    _user_can_act_for_appt,
-    _user_can_act_for_official,
-    admin_only,
-    is_admin,
     user_info,
 )
 from handlers.broadcast import (  # noqa: F401
-    BC_MAX_RETRIES,
     BC_MESSAGE,
     BC_RETRY,
     BC_SELECT,
     CB_BC_PREFIX,
-    _append_sender,
-    _bc_attempt_and_prompt,
-    _bc_expand_recipients,
-    _bc_keyboard,
-    _bc_send_pending,
-    _broadcast_target_options,
-    _reconcile_registry_into_known_groups,
     bc_media,
     bc_message,
     bc_retry,
@@ -104,19 +73,11 @@ from handlers.broadcast import (  # noqa: F401
     cmd_broadcast,
 )
 from handlers.announcements import (  # noqa: F401
-    ANN_BODY_MAX,
-    ANN_TITLE_MAX,
-    ANNOUNCEMENT_PURGE_AFTER_DAYS,
     AN_BODY,
     AN_CONFIRM,
     AN_EXPIRES,
     AN_TITLE,
     DA_SELECT,
-    _ann_expiry_dt,
-    _ann_is_active,
-    _announcement_for_lang,
-    _render_announcement,
-    active_announcements,
     an_body,
     an_confirm,
     an_expires,
@@ -170,14 +131,6 @@ from handlers.appointments import (  # noqa: F401
     CB_APSEL_PREFIX,
     CB_CANCEL_PREFIX,
     CB_RESCHED_PREFIX,
-    ACTIVE_APPT_STATUSES,
-    APPOINTMENT_COOLDOWN_SECONDS,
-    APPOINTMENT_MAX_PENDING,
-    APPOINTMENT_MAX_PER_WINDOW,
-    APPOINTMENT_WINDOW_HALF_DAYS,
-    APPT_ARCHIVE_AFTER_DAYS,
-    APPT_ARCHIVE_RETENTION_DAYS,
-    APPT_REMINDER_STAGES,
     AP_CONFIRM,
     AP_DATE,
     AP_DESC,
@@ -186,30 +139,8 @@ from handlers.appointments import (  # noqa: F401
     CA_CONFIRM,
     CA_SELECT,
     CB_APPT_PREFIX,
-    DEFAULT_APPT_DURATION_MIN,
-    OFFICIAL_SIDE_ACTIONS,
     RS_NEWTIME,
     RS_SELECT,
-    TERMINAL_APPT_STATUSES,
-    _appt_datetime,
-    _appt_dt_label,
-    _appt_is_past,
-    _appt_reminder_recipients,
-    _confirmed_overlap,
-    _count_active_appts_with_official,
-    _count_pending_appts,
-    _counter_propose_state,
-    _datetime_is_past,
-    _finalize_appointment,
-    _max_request_datetime,
-    _notify_negotiation_started,
-    _notify_official_of_request,
-    _overlapping_appt,
-    _requester_proxy_note,
-    _send_cancellation_ics,
-    _stamp_appt_action,
-    _user_is_appt_official,
-    _user_last_action_at,
     ap_confirm,
     ap_date,
     ap_desc,
@@ -231,22 +162,13 @@ from handlers.appointments import (  # noqa: F401
     rs_select,
 )
 from handlers.user_basics import (  # noqa: F401
-    ADMIN_COMMANDS_TEXT,
     CB_LANG_PREFIX,
     CB_NOTIFPREF_PREFIX,
     CB_TZ_PREFIX,
-    COMMON_TIMEZONES,
-    HELP_TOPICS,
     LANG_SELECT,
     TZ_SELECT,
-    _apply_timezone,
     _commands_text,
-    _get_user_notif_prefs,
-    _notif_prefs_keyboard,
-    _notif_prefs_summary,
     _register_official_if_known,
-    _set_user_field,
-    _set_user_notif_prefs,
     cmd_adminhelp,
     cmd_donate,
     cmd_events,
@@ -266,36 +188,13 @@ from handlers.user_basics import (  # noqa: F401
     tz_typed,
 )
 from common import (  # noqa: F401
-    NOTIF_CATEGORIES,
     md,
-    _AFFIRMATIVE_WORDS,
-    _is_affirmative,
-    _answer_cb,
-    _coerce_tz,
-    _event_category,
-    _NOTIF_CATEGORY_KEYS,
-    format_dt,
     get_user_prefs,
-    now_tz,
-    user_lang_of,
-    user_notif_prefs,
-    user_tz_of,
 )
 from events import _merge_special_events, _resolve_targets, all_upcoming  # noqa: F401
 from handlers.notifications import (  # noqa: F401
-    CAPTION_LIMIT,
-    _is_media_url,
-    _looks_like_path,
-    _notification_recipients,
-    _render_notification,
-    _resolve_local_media,
-    _send_media,
-    _send_notification_payload,
-    deliver_event_notifications,
     notification_catchup_job,
     schedule_all_upcoming,
-    schedule_event_notification,
-    send_notification,
 )
 
 logger = logging.getLogger(__name__)
@@ -346,8 +245,6 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     activity.log_command("contact_share", uid, uname, dname, details=f"phone={phone_digits}")
 
 
-
-
 async def daily_maintenance_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Daily: archive long-past appointments, purge the appointment archive,
     and purge long-expired announcements."""
@@ -357,11 +254,7 @@ async def daily_maintenance_job(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 # ---------------------------------------------------------------------------
-# /start — user registration
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-# Command-execution logging (INFO)
+# Command-execution logging, identity refresh, and config-drift alerts
 # ---------------------------------------------------------------------------
 
 async def _ignore_group_messages(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

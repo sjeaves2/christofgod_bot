@@ -22,6 +22,8 @@ import pytz
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import handlers.user_basics as hub
+
 TZ = pytz.timezone("America/New_York")
 NASTY = "John_Doe *VIP* [x] `code`"
 
@@ -182,7 +184,6 @@ class TestAnnouncementRendering:
 class TestUserListEscaping:
     def test_userlist_still_escapes(self):
         """The original incident — guarded here alongside the others."""
-        import bot
         upd = MagicMock()
         upd.effective_user.id = 1
         upd.effective_user.username = "admin"
@@ -194,7 +195,7 @@ class TestUserListEscaping:
 
         with patch("storage.get_all_users", side_effect=_users), \
              patch("permissions.is_admin", return_value=True):
-            _run(bot.cmd_userlist(upd, MagicMock()))
+            _run(hub.cmd_userlist(upd, MagicMock()))
         msg = upd.message.reply_text.call_args[0][0]
         assert "John\\_Doe" in msg
         assert _balanced(msg)

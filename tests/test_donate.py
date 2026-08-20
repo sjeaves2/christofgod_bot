@@ -9,6 +9,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import handlers.user_basics as hub
+
 
 def _run(coro):
     return asyncio.get_event_loop().run_until_complete(coro)
@@ -25,7 +27,6 @@ def _make_update(chat_id: int = 111) -> MagicMock:
 
 
 def _run_donate(url, users=None):
-    import bot
     upd = _make_update()
     ctx = MagicMock()
     ctx.bot = MagicMock()
@@ -35,7 +36,7 @@ def _run_donate(url, users=None):
 
     with patch("handlers.user_basics.DONATION_URL", url), \
          patch("storage.get_all_users", side_effect=_fake_users):
-        _run(bot.cmd_donate(upd, ctx))
+        _run(hub.cmd_donate(upd, ctx))
     return upd
 
 
@@ -63,5 +64,4 @@ class TestDonate:
         assert "Apoya a Christ of God Ministries" in text
 
     def test_help_topic_exists(self):
-        import bot
-        assert bot.HELP_TOPICS["donate"] == "help_donate"
+        assert hub.HELP_TOPICS["donate"] == "help_donate"
