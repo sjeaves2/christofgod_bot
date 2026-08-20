@@ -33,7 +33,8 @@ OFFICIALS_YAML = {
     "officials": [
         {"id": "off1", "name": "Pastor Dave", "telegram_username": "pastordave"},
         {"id": "off2", "name": "Elder Eve", "phone": "5551112222"},
-        {"id": "off3", "name": "Deacon Fred", "telegram_username": "deaconfred", "phone": "5553334444"},
+        {"id": "off3", "name": "Deacon Fred", "telegram_username": "deaconfred",
+         "phone": "5553334444"},
     ]
 }
 
@@ -203,7 +204,8 @@ class TestOfficialMatching:
     OFFICIALS = [
         {"id": "off1", "name": "Pastor Dave", "telegram_username": "pastordave"},
         {"id": "off2", "name": "Elder Eve", "phone": "5551112222"},
-        {"id": "off3", "name": "Deacon Fred", "telegram_username": "deaconfred", "phone": "5553334444"},
+        {"id": "off3", "name": "Deacon Fred", "telegram_username": "deaconfred",
+         "phone": "5553334444"},
     ]
 
     def _match(self, user_id: int, username: str | None, phone: str | None) -> list[str]:

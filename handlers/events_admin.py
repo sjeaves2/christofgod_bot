@@ -41,7 +41,8 @@ async def cmd_addevent(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     uid, uname, dname = user_info(update)
     activity.log_command("addevent", uid, uname, dname)
     context.user_data.clear()
-    await update.message.reply_text("➕ *Add Special Event*\n\nEvent name:", parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text("➕ *Add Special Event*\n\nEvent name:",
+                                    parse_mode=ParseMode.MARKDOWN)
     return AE_NAME
 
 
@@ -162,8 +163,10 @@ async def ae_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         schedule_event_notification(app, ev)
 
     uid, uname, dname = user_info(update)
-    activity.log_command("addevent", uid, uname, dname, details=f"Added '{d['ae_name']}' (id:{new_id})")
-    await update.message.reply_text(f"✅ Event added (ID: `{new_id}`)", parse_mode=ParseMode.MARKDOWN)
+    activity.log_command("addevent", uid, uname, dname,
+                         details=f"Added '{d['ae_name']}' (id:{new_id})")
+    await update.message.reply_text(f"✅ Event added (ID: `{new_id}`)",
+                                    parse_mode=ParseMode.MARKDOWN)
     return ConversationHandler.END
 
 
@@ -259,8 +262,10 @@ async def me_value(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         schedule_event_notification(app, e)
 
     uid, uname, dname = user_info(update)
-    activity.log_command("modifyevent", uid, uname, dname, details=f"Modified '{ev['name']}' field={field}")
-    await update.message.reply_text(f"✅ Updated *{md(field)}* for *{md(ev['name'])}*.", parse_mode=ParseMode.MARKDOWN)
+    activity.log_command("modifyevent", uid, uname, dname,
+                         details=f"Modified '{ev['name']}' field={field}")
+    await update.message.reply_text(f"✅ Updated *{md(field)}* for *{md(ev['name'])}*.",
+                                    parse_mode=ParseMode.MARKDOWN)
     return ConversationHandler.END
 
 
@@ -279,7 +284,8 @@ async def cmd_deleteevent(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     lines = ["*Events in next 30 days:*\n"]
     context.user_data["de_events"] = events
     for i, ev in enumerate(events):
-        lines.append(f"{i+1}. [{ev['type'][0].upper()}] {ev['name']}  ({format_dt(ev['service_time'])})")
+        lines.append(f"{i+1}. [{ev['type'][0].upper()}] {ev['name']}  "
+                     f"({format_dt(ev['service_time'])})")
     lines.append(
         "\nEnter number to select.\n"
         "_Special events can be deleted; convocations get an urgent announcement added._"
@@ -321,7 +327,8 @@ async def de_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await storage.save_events_data(evdata)
     uid, uname, dname = user_info(update)
     activity.log_command("deleteevent", uid, uname, dname, details=f"Deleted '{ev['name']}'")
-    await update.message.reply_text(f"✅ *{md(ev['name'])}* deleted.", parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text(f"✅ *{md(ev['name'])}* deleted.",
+                                    parse_mode=ParseMode.MARKDOWN)
     return ConversationHandler.END
 
 
@@ -340,7 +347,8 @@ async def de_annot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "deleteevent", uid, uname, dname,
         details=f"Added announcement to '{ev['name']}': {text}"
     )
-    await update.message.reply_text("⚠️ Announcement added to the convocation notification.", parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text("⚠️ Announcement added to the convocation notification.",
+                                    parse_mode=ParseMode.MARKDOWN)
     return ConversationHandler.END
 
 

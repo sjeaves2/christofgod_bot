@@ -41,7 +41,8 @@ def _merge_special_events(
                 if current.weekday() == wd_target:
                     h, m = [int(x) for x in defn["time"].split(":")]
                     svc_dt = TZ.localize(datetime(current.year, current.month, current.day, h, m))
-                    notif_dt = svc_dt - timedelta(minutes=int(defn.get("notification_minutes", DEFAULT_NOTIF_MIN)))
+                    notif_dt = svc_dt - timedelta(
+                        minutes=int(defn.get("notification_minutes", DEFAULT_NOTIF_MIN)))
                     if svc_dt > now:
                         key = f"{defn['id']}_{current.isoformat()}"
                         results.append({
@@ -66,7 +67,8 @@ def _merge_special_events(
             h, m = [int(x) for x in defn["time"].split(":")]
             parts = [int(x) for x in date_str.split("-")]
             svc_dt = TZ.localize(datetime(parts[0], parts[1], parts[2], h, m))
-            notif_dt = svc_dt - timedelta(minutes=int(defn.get("notification_minutes", DEFAULT_NOTIF_MIN)))
+            notif_dt = svc_dt - timedelta(
+                minutes=int(defn.get("notification_minutes", DEFAULT_NOTIF_MIN)))
             if now <= svc_dt <= cutoff:
                 results.append({
                     "key": defn["id"],

@@ -84,7 +84,8 @@ class TestUrlAttachment:
         }
 
         async def _fake_events_data():
-            return {"convocation_urls": urls_map, "convocation_announcements": {}, "special_events": []}
+            return {"convocation_urls": urls_map, "convocation_announcements": {},
+                    "special_events": []}
 
         with patch("storage.get_all_events_data", side_effect=_fake_events_data), \
              patch("events.all_upcoming_events", return_value=[sabbath_eve, sabbath_morning]):

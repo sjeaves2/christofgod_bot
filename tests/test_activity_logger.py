@@ -89,7 +89,7 @@ class TestActivityLogger:
         lg.log_command("start", 1, "a", "A")
         lg.log_command("help", 2, "b", "B")
         lg.log_command("events", 3, "c", "C")
-        lines = [l for l in self._log_file(tmp_path).read_text().splitlines() if l.strip()]
+        lines = [ln for ln in self._log_file(tmp_path).read_text().splitlines() if ln.strip()]
         assert len(lines) == 3
 
     def test_log_entry_has_timestamp(self, tmp_path):

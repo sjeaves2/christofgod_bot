@@ -35,7 +35,8 @@ def _make_calendar(name: str) -> Calendar:
     return cal
 
 
-def events_to_ics(events: list[dict[str, Any]], calendar_name: str = "Christ of God Ministries Events") -> bytes:
+def events_to_ics(events: list[dict[str, Any]],
+                  calendar_name: str = "Christ of God Ministries Events") -> bytes:
     """Convert a list of event dicts to ICS bytes."""
     cal = _make_calendar(calendar_name)
     for evt in events:

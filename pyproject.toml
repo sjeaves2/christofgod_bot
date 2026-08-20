@@ -1,0 +1,13 @@
+# Tooling configuration. The bot itself is run as a script (python bot.py),
+# not installed as a package, so this file exists purely for tool settings.
+
+[tool.ruff]
+# Lines may run to 100 characters — comfortably wider than PEP 8's 79, which
+# suits this codebase's long localized strings and Telegram API calls.
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+# E/W  = pycodestyle style rules (includes E501 line-too-long)
+# F    = pyflakes real errors (undefined names, unused/duplicate imports)
+select = ["E", "W", "F"]

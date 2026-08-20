@@ -15,7 +15,8 @@ _log = logging.getLogger(__name__)
 
 
 class ActivityLogger:
-    def __init__(self, logs_dir: str | Path, retention_days: int = 180, tz: pytz.BaseTzInfo | None = None) -> None:
+    def __init__(self, logs_dir: str | Path, retention_days: int = 180,
+                 tz: pytz.BaseTzInfo | None = None) -> None:
         self.logs_dir = Path(logs_dir)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self.retention_days = retention_days
