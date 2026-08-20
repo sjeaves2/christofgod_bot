@@ -12,6 +12,10 @@ import pytz
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import handlers.appointments as ha
+import localization
+import settings
+
 TZ = pytz.timezone("America/New_York")
 
 
@@ -39,7 +43,6 @@ def _appt(hours_ahead=48, status="confirmed", appt_id="R1", reminders=None):
 
 
 def _run_job(appts):
-    import bot
     ctx = MagicMock()
     ctx.bot = MagicMock()
     ctx.bot.send_message = AsyncMock()
@@ -52,13 +55,13 @@ def _run_job(appts):
         saved["appts"] = a
 
     async def _prefs(chat_id):
-        return bot.TZ, bot.DEFAULT_LANG
+        return settings.TZ, localization.DEFAULT_LANG
 
     with patch("storage.get_appointments", side_effect=_get), \
          patch("storage.save_appointments", side_effect=_save), \
          patch("handlers.appointments.get_user_prefs", side_effect=_prefs), \
          patch("permissions.OFFICIALS", _officials()):
-        _run(bot.appointment_reminder_job(ctx))
+        _run(ha.appointment_reminder_job(ctx))
     return ctx, saved
 
 
@@ -109,7 +112,6 @@ class TestReminderIdempotency:
         assert sorted(saved["appts"][0]["reminders_sent"]["24h"]) == [111, 999]
 
     def test_send_failure_leaves_recipient_pending(self):
-        import bot
         from telegram.error import TelegramError
 
         appts = [_appt(hours_ahead=20)]
@@ -130,13 +132,13 @@ class TestReminderIdempotency:
             saved["appts"] = a
 
         async def _prefs(chat_id):
-            return bot.TZ, bot.DEFAULT_LANG
+            return settings.TZ, localization.DEFAULT_LANG
 
         with patch("storage.get_appointments", side_effect=_get), \
              patch("storage.save_appointments", side_effect=_save), \
              patch("handlers.appointments.get_user_prefs", side_effect=_prefs), \
              patch("permissions.OFFICIALS", _officials()):
-            _run(bot.appointment_reminder_job(ctx))
+            _run(ha.appointment_reminder_job(ctx))
         # Official recorded; user left pending for the next tick.
         assert saved["appts"][0]["reminders_sent"]["24h"] == [999]
 
@@ -159,7 +161,6 @@ class TestReminderScope:
 
 class TestRearmOnReconfirm:
     def test_finalize_clears_reminder_state(self):
-        import bot
         appt = _appt(hours_ahead=20, reminders={"24h": [111, 999]})
         appts = [appt]
         ctx = MagicMock()
@@ -172,10 +173,10 @@ class TestRearmOnReconfirm:
             saved["appts"] = a
 
         async def _prefs(chat_id):
-            return bot.TZ, bot.DEFAULT_LANG
+            return settings.TZ, localization.DEFAULT_LANG
 
         with patch("storage.save_appointments", side_effect=_save), \
              patch("handlers.appointments.get_user_prefs", side_effect=_prefs), \
              patch("permissions.OFFICIALS", _officials()):
-            _run(bot._finalize_appointment(ctx, appt, appts))
+            _run(ha._finalize_appointment(ctx, appt, appts))
         assert "reminders_sent" not in saved["appts"][0]

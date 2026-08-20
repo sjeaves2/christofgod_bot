@@ -12,6 +12,9 @@ import pytz
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import handlers.appointments as ha
+import telegram.ext as ext
+
 TZ = pytz.timezone("America/New_York")
 
 
@@ -105,55 +108,47 @@ def _run_with(patches, coro_factory):
 
 class TestCmdReschedule:
     def _run_cmd(self, appts, chat_id=111, username="req", officials=None):
-        import bot
         officials = officials or _officials()
         ctx = _ctx()
         upd = _msg_update("", chat_id=chat_id, username=username)
         with patch("storage.get_appointments", side_effect=_g(appts)), \
              patch("permissions.OFFICIALS", officials):
-            result = _run(bot.cmd_reschedule(upd, ctx))
+            result = _run(ha.cmd_reschedule(upd, ctx))
         return result, upd, ctx
 
     def test_none_when_no_appts(self):
-        import bot
         result, upd, _ = self._run_cmd([])
-        assert result == bot.ConversationHandler.END
+        assert result == ext.ConversationHandler.END
 
     def test_lists_future_confirmed(self):
-        import bot
         result, upd, ctx = self._run_cmd([_appt(status="confirmed")])
-        assert result == bot.RS_SELECT
+        assert result == ha.RS_SELECT
         assert len(ctx.user_data["rs_appts"]) == 1
 
     def test_past_appt_excluded(self):
-        import bot
         past = _appt(when=(datetime.now(TZ) - timedelta(days=1)).replace(microsecond=0))
         result, _, _ = self._run_cmd([past])
-        assert result == bot.ConversationHandler.END
+        assert result == ext.ConversationHandler.END
 
     def test_official_sees_appt(self):
-        import bot
         result, _, ctx = self._run_cmd([_appt()], chat_id=999, username="pastor")
-        assert result == bot.RS_SELECT
+        assert result == ha.RS_SELECT
 
     def test_proxy_sees_appt_when_enabled(self):
-        import bot
         result, _, ctx = self._run_cmd(
             [_appt()], chat_id=888, username="janesec",
             officials=_officials(proxies_enabled=True))
-        assert result == bot.RS_SELECT
+        assert result == ha.RS_SELECT
 
     def test_proxy_excluded_when_disabled(self):
-        import bot
         result, _, _ = self._run_cmd(
             [_appt()], chat_id=888, username="janesec",
             officials=_officials(proxies_enabled=False))
-        assert result == bot.ConversationHandler.END
+        assert result == ext.ConversationHandler.END
 
     def test_stranger_sees_nothing(self):
-        import bot
         result, _, _ = self._run_cmd([_appt()], chat_id=555, username="nobody")
-        assert result == bot.ConversationHandler.END
+        assert result == ext.ConversationHandler.END
 
 
 def _g(appts):
@@ -169,7 +164,6 @@ def _g(appts):
 class TestRsNewtime:
     def _run(self, appt, text, role="user", chat_id=111, username="req",
              officials=None, extra_appts=None):
-        import bot
         officials = officials or _officials()
         appts = [appt] + (extra_appts or [])
         ctx = _ctx()
@@ -178,25 +172,22 @@ class TestRsNewtime:
         upd = _msg_update(text, chat_id=chat_id, username=username)
         saved = []
         result = _run_with(_patches(appts, officials, saved),
-                           lambda: bot.rs_newtime(upd, ctx))
+                           lambda: ha.rs_newtime(upd, ctx))
         return result, upd, ctx, saved
 
     def test_bad_format_stays(self):
-        import bot
         result, upd, _, _ = self._run(_appt(), "not a date")
-        assert result == bot.RS_NEWTIME
+        assert result == ha.RS_NEWTIME
 
     def test_past_time_stays(self):
-        import bot
         result, upd, _, _ = self._run(_appt(), "2000-01-01 10:00")
-        assert result == bot.RS_NEWTIME
+        assert result == ha.RS_NEWTIME
         assert "past" in upd.message.reply_text.call_args[0][0].lower()
 
     def test_valid_proposal_by_user_notifies_official(self):
-        import bot
         future = (datetime.now(TZ) + timedelta(days=10)).strftime("%Y-%m-%d 10:00")
         result, upd, ctx, saved = self._run(_appt(), future, role="user")
-        assert result == bot.ConversationHandler.END
+        assert result == ext.ConversationHandler.END
         # Proposal recorded, status unchanged (still confirmed).
         a = saved[0]
         assert a["reschedule_proposed_datetime"]
@@ -205,11 +196,10 @@ class TestRsNewtime:
         assert ctx.bot.send_message.await_args[0][0] == 999
 
     def test_valid_proposal_by_official_notifies_requester(self):
-        import bot
         future = (datetime.now(TZ) + timedelta(days=10)).strftime("%Y-%m-%d 10:00")
         result, upd, ctx, saved = self._run(
             _appt(), future, role="official", chat_id=999, username="pastor")
-        assert result == bot.ConversationHandler.END
+        assert result == ext.ConversationHandler.END
         assert ctx.bot.send_message.await_args[0][0] == 111  # requester notified
 
     def test_proxy_proposal_sets_negotiator(self):
@@ -239,7 +229,6 @@ class TestRescheduleResponse:
         return a, new
 
     def _run_cb(self, appt, action, chat_id, username, officials=None):
-        import bot
         officials = officials or _officials()
         ctx = _ctx()
         upd, q = _cb_update(f"appt:{action}:{appt['id']}", chat_id=chat_id, username=username)
@@ -247,7 +236,7 @@ class TestRescheduleResponse:
         finalize = AsyncMock()
         patches = _patches([appt], officials, saved) + [
             patch("handlers.appointments._finalize_appointment", finalize)]
-        _run_with(patches, lambda: bot.appt_callback(upd, ctx))
+        _run_with(patches, lambda: ha.appt_callback(upd, ctx))
         return q, ctx, saved, finalize
 
     def test_requester_accepts_official_proposal(self):

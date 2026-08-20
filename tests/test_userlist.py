@@ -11,6 +11,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import handlers.user_basics as hub
+
 
 def _run(coro):
     return asyncio.get_event_loop().run_until_complete(coro)
@@ -34,7 +36,6 @@ def _make_context() -> MagicMock:
 
 
 def _run_userlist(users):
-    import bot
     upd = _make_update()
     ctx = _make_context()
 
@@ -43,7 +44,7 @@ def _run_userlist(users):
 
     with patch("storage.get_all_users", side_effect=_fake_users), \
          patch("permissions.is_admin", return_value=True):
-        _run(bot.cmd_userlist(upd, ctx))
+        _run(hub.cmd_userlist(upd, ctx))
     return upd.message.reply_text.call_args[0][0]
 
 

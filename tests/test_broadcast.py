@@ -10,6 +10,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import handlers.broadcast as hb
+import telegram.ext as ext
+
 
 def _run(coro):
     return asyncio.get_event_loop().run_until_complete(coro)
@@ -42,7 +45,6 @@ def _update(chat_id=1, text=None):
 
 class TestTargetOptions:
     def _run_opts(self, known_groups, registry, get_chat=None, lang="en"):
-        import bot
 
         saved = {"groups": dict(known_groups)}
 
@@ -66,7 +68,7 @@ class TestTargetOptions:
         with patch("storage._load_known_groups", side_effect=_kg), \
              patch("storage._save_known_groups", side_effect=_save), \
              patch("storage.get_all_events_data", side_effect=_ev):
-            opts = _run(bot._broadcast_target_options(bot_obj, lang))
+            opts = _run(hb._broadcast_target_options(bot_obj, lang))
         return opts, saved["groups"]
 
     def test_all_subscribers_always_first(self):
@@ -127,13 +129,12 @@ class TestTargetOptions:
 
 class TestExpandRecipients:
     def _expand(self, options, selected, users):
-        import bot
 
         async def _users():
             return users
 
         with patch("storage.get_all_users", side_effect=_users):
-            return _run(bot._bc_expand_recipients(options, set(selected)))
+            return _run(hb._bc_expand_recipients(options, set(selected)))
 
     def test_all_expands_to_subscribers(self):
         opts = [{"key": "all", "kind": "all", "chat_id": None, "label": "All subscribers"}]
@@ -170,40 +171,36 @@ class TestSendAndRetry:
         ctx.user_data["bc_retries"] = 0
 
     def test_send_pending_skips_done(self):
-        import bot
         ctx = _ctx()
         self._prime(ctx, [{"kind": "user", "chat_id": 1, "label": "A"},
                           {"kind": "user", "chat_id": 2, "label": "B"}])
         ctx.user_data["bc_done"] = {1}
-        failures = _run(bot._bc_send_pending(ctx.application.bot, ctx))
+        failures = _run(hb._bc_send_pending(ctx.application.bot, ctx))
         assert failures == []
         # Only chat 2 was (re)sent.
         assert ctx.application.bot.send_message.await_count == 1
         assert ctx.application.bot.send_message.await_args[0][0] == 2
 
     def test_failure_recorded_and_not_marked_done(self):
-        import bot
         from telegram.error import NetworkError
         ctx = _ctx()
         ctx.application.bot.send_message = AsyncMock(side_effect=NetworkError("x"))
         self._prime(ctx, [{"kind": "group", "chat_id": -100, "label": "G"}])
-        failures = _run(bot._bc_send_pending(ctx.application.bot, ctx))
+        failures = _run(hb._bc_send_pending(ctx.application.bot, ctx))
         assert len(failures) == 1
         assert ctx.user_data["bc_done"] == set()
 
     def test_all_success_ends_conversation(self):
-        import bot
         ctx = _ctx()
         self._prime(ctx, [{"kind": "user", "chat_id": 1, "label": "A"}])
         upd = _update(chat_id=99)
-        result = _run(bot._bc_attempt_and_prompt(upd, ctx))
-        assert result == bot.ConversationHandler.END
+        result = _run(hb._bc_attempt_and_prompt(upd, ctx))
+        assert result == ext.ConversationHandler.END
         # Confirmation message sent to admin chat.
         assert any("delivered to all" in str(c.args[1]).lower()
                    for c in ctx.application.bot.send_message.await_args_list)
 
     def test_partial_failure_prompts_retry(self):
-        import bot
         from telegram.error import NetworkError
         ctx = _ctx()
 
@@ -215,12 +212,11 @@ class TestSendAndRetry:
         self._prime(ctx, [{"kind": "user", "chat_id": 1, "label": "A"},
                           {"kind": "user", "chat_id": 2, "label": "B"}])
         upd = _update(chat_id=99)
-        result = _run(bot._bc_attempt_and_prompt(upd, ctx))
-        assert result == bot.BC_RETRY
+        result = _run(hb._bc_attempt_and_prompt(upd, ctx))
+        assert result == hb.BC_RETRY
         assert ctx.user_data["bc_done"] == {1}
 
     def test_retry_limit_stops_without_prompt(self):
-        import bot
         from telegram.error import NetworkError
         ctx = _ctx()
 
@@ -230,15 +226,14 @@ class TestSendAndRetry:
 
         ctx.application.bot.send_message = AsyncMock(side_effect=fail_recipient)
         self._prime(ctx, [{"kind": "user", "chat_id": 1, "label": "A"}])
-        ctx.user_data["bc_retries"] = bot.BC_MAX_RETRIES  # already at limit
+        ctx.user_data["bc_retries"] = hb.BC_MAX_RETRIES  # already at limit
         upd = _update(chat_id=99)
-        result = _run(bot._bc_attempt_and_prompt(upd, ctx))
-        assert result == bot.ConversationHandler.END
+        result = _run(hb._bc_attempt_and_prompt(upd, ctx))
+        assert result == ext.ConversationHandler.END
         assert any("retry limit" in str(c.args[1]).lower()
                    for c in ctx.application.bot.send_message.await_args_list)
 
     def test_retry_yes_increments_and_resends(self):
-        import bot
         ctx = _ctx()
         self._prime(ctx, [{"kind": "user", "chat_id": 1, "label": "A"}])
         query = MagicMock()
@@ -251,13 +246,12 @@ class TestSendAndRetry:
         upd.effective_user.id = 99
         upd.effective_user.username = "a"
         upd.effective_user.full_name = "Admin"
-        result = _run(bot.bc_retry(upd, ctx))
+        result = _run(hb.bc_retry(upd, ctx))
         assert ctx.user_data["bc_retries"] == 1
         # Succeeds on retry → conversation ends.
-        assert result == bot.ConversationHandler.END
+        assert result == ext.ConversationHandler.END
 
     def test_retry_no_ends(self):
-        import bot
         ctx = _ctx()
         self._prime(ctx, [{"kind": "user", "chat_id": 1, "label": "A"},
                           {"kind": "user", "chat_id": 2, "label": "B"}])
@@ -268,8 +262,8 @@ class TestSendAndRetry:
         query.data = "bc:retry:no"
         upd = MagicMock()
         upd.callback_query = query
-        result = _run(bot.bc_retry(upd, ctx))
-        assert result == bot.ConversationHandler.END
+        result = _run(hb.bc_retry(upd, ctx))
+        assert result == ext.ConversationHandler.END
         assert "1/2" in query.edit_message_text.await_args[0][0]
 
 
@@ -279,7 +273,6 @@ class TestSendAndRetry:
 
 class TestMessagePreview:
     def test_bad_markdown_stays_in_message_state(self):
-        import bot
         from telegram.error import BadRequest
         ctx = _ctx()
         upd = _update(text="bad *markdown")
@@ -290,12 +283,11 @@ class TestMessagePreview:
                 raise BadRequest("can't parse entities")
 
         upd.message.reply_text = AsyncMock(side_effect=reply)
-        result = _run(bot.bc_message(upd, ctx))
-        assert result == bot.BC_MESSAGE
+        result = _run(hb.bc_message(upd, ctx))
+        assert result == hb.BC_MESSAGE
         assert "bc_message" not in ctx.user_data
 
     def test_good_markdown_advances_to_select(self):
-        import bot
 
         async def _opts(_bot, _lang=None):
             return [{"key": "all", "kind": "all", "chat_id": None, "label": "All subscribers"}]
@@ -303,15 +295,14 @@ class TestMessagePreview:
         ctx = _ctx()
         upd = _update(text="Good *message*")
         with patch("handlers.broadcast._broadcast_target_options", side_effect=_opts):
-            result = _run(bot.bc_message(upd, ctx))
-        assert result == bot.BC_SELECT
+            result = _run(hb.bc_message(upd, ctx))
+        assert result == hb.BC_SELECT
         # The stored message keeps the body and appends the sender attribution.
         stored = ctx.user_data["bc_message"]
         assert stored.startswith("Good *message*")
         assert "posted by Admin User" in stored
 
     def test_sender_name_appended(self):
-        import bot
 
         async def _opts(_bot, _lang=None):
             return []
@@ -319,7 +310,7 @@ class TestMessagePreview:
         ctx = _ctx()
         upd = _update(text="Announcement")
         with patch("handlers.broadcast._broadcast_target_options", side_effect=_opts):
-            _run(bot.bc_message(upd, ctx))
+            _run(hb.bc_message(upd, ctx))
         assert ctx.user_data["bc_message"].endswith("— posted by Admin User")
 
 
@@ -349,32 +340,28 @@ class TestSelectionToggle:
         return upd, query
 
     def test_toggle_adds_selection(self):
-        import bot
         ctx = self._ctx_with_options()
         upd, query = self._query_update("bc:toggle:all")
-        result = _run(bot.bc_select(upd, ctx))
+        result = _run(hb.bc_select(upd, ctx))
         assert "all" in ctx.user_data["bc_selected"]
-        assert result == bot.BC_SELECT
+        assert result == hb.BC_SELECT
 
     def test_toggle_twice_removes(self):
-        import bot
         ctx = self._ctx_with_options()
         upd, query = self._query_update("bc:toggle:-100")
-        _run(bot.bc_select(upd, ctx))
-        _run(bot.bc_select(upd, ctx))
+        _run(hb.bc_select(upd, ctx))
+        _run(hb.bc_select(upd, ctx))
         assert "-100" not in ctx.user_data["bc_selected"]
 
     def test_send_with_no_selection_alerts(self):
-        import bot
         ctx = self._ctx_with_options()
         upd, query = self._query_update("bc:send")
-        result = _run(bot.bc_select(upd, ctx))
-        assert result == bot.BC_SELECT
+        result = _run(hb.bc_select(upd, ctx))
+        assert result == hb.BC_SELECT
         query.answer.assert_awaited()
 
     def test_cancel_ends(self):
-        import bot
         ctx = self._ctx_with_options()
         upd, query = self._query_update("bc:cancel")
-        result = _run(bot.bc_select(upd, ctx))
-        assert result == bot.ConversationHandler.END
+        result = _run(hb.bc_select(upd, ctx))
+        assert result == ext.ConversationHandler.END

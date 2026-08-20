@@ -73,7 +73,7 @@ def _make_update(chat_id: int = 111, username: str = "requester") -> MagicMock:
 
 
 def _run_cmd(appts, officials, chat_id=111, username="requester"):
-    from bot import cmd_myappointments
+    from handlers.appointments import cmd_myappointments
 
     ctx = _make_context()
     upd = _make_update(chat_id=chat_id, username=username)
