@@ -30,12 +30,13 @@ jobs:
         # Byte-compile every .py file; fails fast on any SyntaxError, no deps needed.
         run: python -m compileall -q .
 
-      - name: Lint (syntax + pyflakes)
-        # E9 = syntax errors, F = pyflakes (undefined names, bad/unused imports,
-        # unused variables). Real-error rules only — no style nitpicks.
+      - name: Lint (errors + style)
+        # Rules and line length come from pyproject.toml [tool.ruff]:
+        #   E/W = pycodestyle style (incl. E501 line-too-long, limit 100)
+        #   F   = pyflakes real errors (undefined names, bad/unused imports)
         run: |
           pip install ruff
-          ruff check --select=E9,F .
+          ruff check .
 
       - name: Install dependencies
         run: |

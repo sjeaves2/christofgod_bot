@@ -38,7 +38,8 @@ CONVOCATION_DEFS: list[dict[str, Any]] = [
         "hebrew_month": 1,
         "hebrew_day": 14,
         "services": [
-            {"label": "at Even", "day_offset": 0, "hour": 15, "minute": 0, "notification_minutes": 90},
+            {"label": "at Even", "day_offset": 0, "hour": 15, "minute": 0,
+             "notification_minutes": 90},
         ],
     },
     {
@@ -70,7 +71,8 @@ CONVOCATION_DEFS: list[dict[str, Any]] = [
         "hebrew_day": 6,
         "services": [
             {"label": "Eve", "day_offset": -1, "hour": 18, "minute": 0, "notification_minutes": 90},
-            {"label": "Morning", "day_offset": 0, "hour": 11, "minute": 0, "notification_minutes": 90},
+            {"label": "Morning", "day_offset": 0, "hour": 11, "minute": 0,
+             "notification_minutes": 90},
         ],
     },
     {
@@ -81,7 +83,8 @@ CONVOCATION_DEFS: list[dict[str, Any]] = [
         "hebrew_day": 1,
         "services": [
             {"label": "Eve", "day_offset": -1, "hour": 18, "minute": 0, "notification_minutes": 90},
-            {"label": "Morning", "day_offset": 0, "hour": 11, "minute": 0, "notification_minutes": 90},
+            {"label": "Morning", "day_offset": 0, "hour": 11, "minute": 0,
+             "notification_minutes": 90},
         ],
     },
     {
@@ -92,7 +95,8 @@ CONVOCATION_DEFS: list[dict[str, Any]] = [
         "hebrew_day": 10,
         "services": [
             {"label": "Eve", "day_offset": -1, "hour": 18, "minute": 0, "notification_minutes": 90},
-            {"label": "Morning", "day_offset": 0, "hour": 11, "minute": 0, "notification_minutes": 90},
+            {"label": "Morning", "day_offset": 0, "hour": 11, "minute": 0,
+             "notification_minutes": 90},
         ],
     },
     {
@@ -175,7 +179,8 @@ def convocations_for_hebrew_year(
             month_name = BIBLICAL_MONTH.get(defn["hebrew_month"], "")
             events.append(
                 {
-                    "key": f"{defn['key']}_{svc['label'].lower().replace(' ', '_')}_{svc_date.isoformat()}",
+                    "key": (f"{defn['key']}_{svc['label'].lower().replace(' ', '_')}"
+                            f"_{svc_date.isoformat()}"),
                     "phase_key": _phase_key(defn["key"], svc["label"]),
                     "name": full,
                     "convocation_key": defn["key"],

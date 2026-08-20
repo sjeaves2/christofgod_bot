@@ -548,7 +548,8 @@ def main() -> None:
     appointment_conv = ConversationHandler(
         entry_points=[CommandHandler("appointment", cmd_appointment)],
         states={
-            AP_OFFICIAL: [CallbackQueryHandler(ap_official, pattern=f"^{re.escape(CB_APSEL_PREFIX)}")],
+            AP_OFFICIAL: [CallbackQueryHandler(
+                ap_official, pattern=f"^{re.escape(CB_APSEL_PREFIX)}")],
             AP_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ap_date)],
             AP_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ap_time)],
             AP_DESC: [MessageHandler(filters.TEXT & ~filters.COMMAND, ap_desc)],
@@ -561,7 +562,8 @@ def main() -> None:
         entry_points=[CommandHandler("cancelappointment", cmd_cancelappointment)],
         states={
             CA_SELECT: [CallbackQueryHandler(ca_select, pattern=f"^{re.escape(CB_CANCEL_PREFIX)}")],
-            CA_CONFIRM: [CallbackQueryHandler(ca_confirm, pattern=f"^{re.escape(CB_CANCEL_PREFIX)}")],
+            CA_CONFIRM: [CallbackQueryHandler(
+                ca_confirm, pattern=f"^{re.escape(CB_CANCEL_PREFIX)}")],
         },
         fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
     )
@@ -569,7 +571,8 @@ def main() -> None:
     reschedule_conv = ConversationHandler(
         entry_points=[CommandHandler("reschedule", cmd_reschedule)],
         states={
-            RS_SELECT: [CallbackQueryHandler(rs_select, pattern=f"^{re.escape(CB_RESCHED_PREFIX)}")],
+            RS_SELECT: [CallbackQueryHandler(
+                rs_select, pattern=f"^{re.escape(CB_RESCHED_PREFIX)}")],
             RS_NEWTIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, rs_newtime)],
         },
         fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
@@ -586,7 +589,8 @@ def main() -> None:
 
     language_conv = ConversationHandler(
         entry_points=[CommandHandler("language", cmd_language)],
-        states={LANG_SELECT: [CallbackQueryHandler(lang_select, pattern=f"^{re.escape(CB_LANG_PREFIX)}")]},
+        states={LANG_SELECT: [CallbackQueryHandler(
+            lang_select, pattern=f"^{re.escape(CB_LANG_PREFIX)}")]},
         fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
     )
 

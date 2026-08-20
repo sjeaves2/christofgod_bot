@@ -184,7 +184,8 @@ class TestCatchupJob:
         ctx.bot = MagicMock()
 
         with patch("handlers.notifications.all_upcoming", side_effect=_fake_all_upcoming), \
-             patch("handlers.notifications.deliver_event_notifications", side_effect=_fake_deliver), \
+             patch("handlers.notifications.deliver_event_notifications",
+                   side_effect=_fake_deliver), \
              patch("storage._load_notif_state", side_effect=_load_state), \
              patch("storage._save_notif_state", side_effect=_save_state):
             _run(hn.notification_catchup_job(ctx))
@@ -254,7 +255,9 @@ class TestGroupGate:
             _run(bot._ignore_group_messages(upd, ctx))
 
     def test_my_chat_member_logs_and_records(self, caplog):
-        import bot, logging
+        import logging
+
+        import bot
         from telegram.constants import ChatType
 
         upd = MagicMock()

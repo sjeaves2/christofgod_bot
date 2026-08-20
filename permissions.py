@@ -155,7 +155,8 @@ def _official_side_recipients(off: dict) -> list[dict]:
         out.append({"chat_id": off["chat_id"], "is_proxy": False, "name": off.get("name")})
     for p in _enabled_proxies(off):
         if p.get("chat_id"):
-            out.append({"chat_id": p["chat_id"], "is_proxy": True, "name": p.get("name") or "Proxy"})
+            out.append({"chat_id": p["chat_id"], "is_proxy": True,
+                        "name": p.get("name") or "Proxy"})
     return out
 
 

@@ -100,7 +100,8 @@ class TestProxyIdentity:
         assert 999 in ids and 222 in ids
 
     def test_recipients_excludes_disabled_proxy(self):
-        ids = [r["chat_id"] for r in permissions._official_side_recipients(_official(enabled=False))]
+        ids = [r["chat_id"]
+               for r in permissions._official_side_recipients(_official(enabled=False))]
         assert ids == [999]
 
 
@@ -186,14 +187,16 @@ class TestClaim:
     def test_stale_actor_blocked(self):
         # Official taps after the proxy already claimed it.
         upd, q = _cb_update("appt:confirm:A1", from_id=999, from_username="pastor")
-        claimed = _appt(negotiator_chat_id=222, negotiator_name="Jane Sec", negotiator_is_proxy=True)
+        claimed = _appt(negotiator_chat_id=222, negotiator_name="Jane Sec",
+                        negotiator_is_proxy=True)
         saved, finalize, notif, ctx = self._run(upd, [claimed])
         finalize.assert_not_called()
         assert "already being handled" in q.edit_message_text.call_args[0][0].lower()
 
     def test_same_negotiator_proceeds(self):
         upd, q = _cb_update("appt:confirm:A1", from_id=222, from_username="janesec")
-        claimed = _appt(negotiator_chat_id=222, negotiator_name="Jane Sec", negotiator_is_proxy=True)
+        claimed = _appt(negotiator_chat_id=222, negotiator_name="Jane Sec",
+                        negotiator_is_proxy=True)
         saved, finalize, notif, ctx = self._run(upd, [claimed])
         finalize.assert_called_once()
 
