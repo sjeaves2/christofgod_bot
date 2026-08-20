@@ -220,7 +220,7 @@ class TestFinalizeAppointment:
 
         with patch("permissions.OFFICIALS", officials), \
              patch("storage.save_appointments", side_effect=_fake_save):
-            from bot import _finalize_appointment
+            from handlers.appointments import _finalize_appointment
             _run(_finalize_appointment(ctx, appt, [appt.copy()]))
 
         return ctx
@@ -383,7 +383,7 @@ class TestFinalizeAppointment:
         ctx = self._make_context()
         with patch("permissions.OFFICIALS", []), \
              patch("storage.save_appointments", side_effect=_fake_save):
-            from bot import _finalize_appointment
+            from handlers.appointments import _finalize_appointment
             _run(_finalize_appointment(ctx, appt, [appt.copy()]))
 
         assert any(a["status"] == "confirmed" for a in saved)

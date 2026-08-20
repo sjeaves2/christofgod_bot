@@ -16,6 +16,8 @@ import pytz
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import handlers.appointments as ha
+
 TZ = pytz.timezone("America/New_York")
 
 
@@ -76,7 +78,8 @@ def _make_appt(user_chat_id=111, official_id="off1", status="pending", appt_id="
 
 class TestHelpers:
     def test_max_request_datetime_is_about_six_months_out(self):
-        from bot import _max_request_datetime, now_tz
+        from common import now_tz
+        from handlers.appointments import _max_request_datetime
         max_dt = _max_request_datetime()
         now = now_tz()
         delta_days = (max_dt - now).days
@@ -95,39 +98,39 @@ class TestHelpers:
         return (datetime.now(TZ) + timedelta(days=days)).replace(microsecond=0)
 
     def test_counts_active_appt_in_window(self):
-        from bot import _count_active_appts_with_official
+        from handlers.appointments import _count_active_appts_with_official
         appts = [self._at(5, status="pending")]
         assert _count_active_appts_with_official(appts, 111, "off1", self._end()) == 1
 
     def test_confirmed_counts(self):
-        from bot import _count_active_appts_with_official
+        from handlers.appointments import _count_active_appts_with_official
         appts = [self._at(5, status="confirmed")]
         assert _count_active_appts_with_official(appts, 111, "off1", self._end()) == 1
 
     def test_ignores_cancelled_and_declined(self):
-        from bot import _count_active_appts_with_official
+        from handlers.appointments import _count_active_appts_with_official
         appts = [self._at(5, status="cancelled", i=1), self._at(4, status="declined", i=2)]
         assert _count_active_appts_with_official(appts, 111, "off1", self._end()) == 0
 
     def test_ignores_other_official_and_user(self):
-        from bot import _count_active_appts_with_official
+        from handlers.appointments import _count_active_appts_with_official
         appts = [self._at(5, official_id="off2", i=1), self._at(5, user_chat_id=222, i=2)]
         assert _count_active_appts_with_official(appts, 111, "off1", self._end()) == 0
 
     def test_excludes_appt_outside_window(self):
-        from bot import _count_active_appts_with_official
+        from handlers.appointments import _count_active_appts_with_official
         # 40 days before the anchor end date — outside the trailing 30-day window.
         appts = [self._at(-40, status="confirmed")]
         assert _count_active_appts_with_official(appts, 111, "off1", self._end()) == 0
 
     def test_includes_recent_past_appt(self):
-        from bot import _count_active_appts_with_official
+        from handlers.appointments import _count_active_appts_with_official
         # A confirmed appt 10 days before the anchor counts (within window).
         appts = [self._at(-10, status="confirmed")]
         assert _count_active_appts_with_official(appts, 111, "off1", self._end(days=0)) == 1
 
     def test_counts_multiple(self):
-        from bot import _count_active_appts_with_official, APPOINTMENT_MAX_PER_WINDOW
+        from handlers.appointments import APPOINTMENT_MAX_PER_WINDOW, _count_active_appts_with_official
         appts = [self._at(d, i=d) for d in (1, 3, 5, 7)]
         assert _count_active_appts_with_official(appts, 111, "off1", self._end(days=8)) == 4
         assert APPOINTMENT_MAX_PER_WINDOW == 4
@@ -148,55 +151,55 @@ class TestOverlapHelper:
         }
 
     def test_exact_same_time_overlaps(self):
-        from bot import _overlapping_appt
+        from handlers.appointments import _overlapping_appt
         t = _future(10, 0)
         appts = [self._appt_at(t)]
         assert _overlapping_appt(appts, 111, t, 30) is not None
 
     def test_partial_overlap_detected(self):
-        from bot import _overlapping_appt
+        from handlers.appointments import _overlapping_appt
         existing = _future(10, 0)  # 10:00–10:30
         new = _future(10, 15)       # 10:15–10:45
         assert _overlapping_appt([self._appt_at(existing)], 111, new, 30) is not None
 
     def test_adjacent_back_to_back_does_not_overlap(self):
-        from bot import _overlapping_appt
+        from handlers.appointments import _overlapping_appt
         existing = _future(10, 0)   # 10:00–10:30
         new = _future(10, 30)        # 10:30–11:00
         assert _overlapping_appt([self._appt_at(existing)], 111, new, 30) is None
 
     def test_non_overlapping_times_ok(self):
-        from bot import _overlapping_appt
+        from handlers.appointments import _overlapping_appt
         existing = _future(10, 0)
         new = _future(14, 0)
         assert _overlapping_appt([self._appt_at(existing)], 111, new, 30) is None
 
     def test_overlap_across_different_officials(self):
-        from bot import _overlapping_appt
+        from handlers.appointments import _overlapping_appt
         t = _future(10, 0)
         appts = [self._appt_at(t, official_id="off2")]
         assert _overlapping_appt(appts, 111, t, 30) is not None
 
     def test_other_users_overlap_ignored(self):
-        from bot import _overlapping_appt
+        from handlers.appointments import _overlapping_appt
         t = _future(10, 0)
         appts = [self._appt_at(t, user_chat_id=222)]
         assert _overlapping_appt(appts, 111, t, 30) is None
 
     def test_cancelled_overlap_ignored(self):
-        from bot import _overlapping_appt
+        from handlers.appointments import _overlapping_appt
         t = _future(10, 0)
         appts = [self._appt_at(t, status="cancelled")]
         assert _overlapping_appt(appts, 111, t, 30) is None
 
     def test_exclude_id_skips_self(self):
-        from bot import _overlapping_appt
+        from handlers.appointments import _overlapping_appt
         t = _future(10, 0)
         appts = [self._appt_at(t, appt_id="SELF")]
         assert _overlapping_appt(appts, 111, t, 30, exclude_id="SELF") is None
 
     def test_longer_existing_duration_overlaps(self):
-        from bot import _overlapping_appt
+        from handlers.appointments import _overlapping_appt
         existing = _future(10, 0)    # 10:00–11:00 (60 min)
         new = _future(10, 45)         # 10:45–11:15
         assert _overlapping_appt([self._appt_at(existing, duration=60)], 111, new, 30) is not None
@@ -207,7 +210,7 @@ class TestOverlapHelper:
 # ---------------------------------------------------------------------------
 
 def _run_ap_time(date_str, time_str, existing_appts=None):
-    from bot import ap_time
+    from handlers.appointments import ap_time
     ctx = _make_context()
     ctx.user_data["ap_date"] = date_str
     ctx.user_data["ap_official"] = {"id": "off1", "name": "Pastor Test"}
@@ -227,14 +230,14 @@ class TestDateWindow:
         return _run_ap_time(date_str, time_str, existing_appts)
 
     def test_future_date_accepted(self):
-        from bot import AP_DESC
+        from handlers.appointments import AP_DESC
         future = (datetime.now(TZ) + timedelta(days=30)).strftime("%Y-%m-%d")
         result, _, ctx = self._run_ap_time(future, "10:00")
         assert result == AP_DESC
         assert ctx.user_data.get("ap_time") == "10:00"
 
     def test_past_date_rejected(self):
-        from bot import AP_DATE
+        from handlers.appointments import AP_DATE
         past = (datetime.now(TZ) - timedelta(days=1)).strftime("%Y-%m-%d")
         result, upd, ctx = self._run_ap_time(past, "10:00")
         assert result == AP_DATE
@@ -242,7 +245,7 @@ class TestDateWindow:
         assert "past" in upd.message.reply_text.call_args[0][0].lower()
 
     def test_too_far_future_rejected(self):
-        from bot import AP_DATE
+        from handlers.appointments import AP_DATE
         far = (datetime.now(TZ) + timedelta(days=400)).strftime("%Y-%m-%d")
         result, upd, ctx = self._run_ap_time(far, "10:00")
         assert result == AP_DATE
@@ -251,26 +254,26 @@ class TestDateWindow:
         assert "6 months" in msg or "months ahead" in msg
 
     def test_just_inside_window_accepted(self):
-        from bot import AP_DESC
+        from handlers.appointments import AP_DESC
         near = (datetime.now(TZ) + timedelta(days=150)).strftime("%Y-%m-%d")
         result, _, _ = self._run_ap_time(near, "10:00")
         assert result == AP_DESC
 
     def test_invalid_calendar_date_rejected(self):
-        from bot import AP_DATE
+        from handlers.appointments import AP_DATE
         result, upd, ctx = self._run_ap_time("2027-13-40", "10:00")
         assert result == AP_DATE
         assert "ap_time" not in ctx.user_data
         assert "valid" in upd.message.reply_text.call_args[0][0].lower()
 
     def test_bad_time_format_stays_in_time(self):
-        from bot import AP_TIME
+        from handlers.appointments import AP_TIME
         future = (datetime.now(TZ) + timedelta(days=30)).strftime("%Y-%m-%d")
         result, _, _ = self._run_ap_time(future, "9am")
         assert result == AP_TIME
 
     def test_overlapping_time_rejected(self):
-        from bot import AP_DATE
+        from handlers.appointments import AP_DATE
         day = (datetime.now(TZ) + timedelta(days=30)).replace(
             hour=10, minute=0, second=0, microsecond=0)
         existing = {
@@ -287,7 +290,7 @@ class TestDateWindow:
         assert "overlap" in upd.message.reply_text.call_args[0][0].lower()
 
     def test_non_overlapping_time_accepted(self):
-        from bot import AP_DESC
+        from handlers.appointments import AP_DESC
         day = (datetime.now(TZ) + timedelta(days=30)).replace(
             hour=10, minute=0, second=0, microsecond=0)
         existing = {
@@ -308,7 +311,7 @@ class TestDateWindow:
 
 class TestApOfficialSelection:
     def _run_ap_official(self, appts, data="apsel:0"):
-        from bot import ap_official
+        from handlers.appointments import ap_official
         ctx = _make_context()
         upd = MagicMock()
         upd.effective_chat.id = 111
@@ -331,25 +334,25 @@ class TestApOfficialSelection:
         return result, q, ctx
 
     def test_selection_proceeds_to_date(self):
-        from bot import AP_DATE
+        from handlers.appointments import AP_DATE
         result, _, ctx = self._run_ap_official([])
         assert result == AP_DATE
         assert ctx.user_data.get("ap_official", {}).get("id") == "off1"
 
     def test_proceeds_even_with_existing_active_appointment(self):
         # The per-official cap moved to ap_time; selection no longer blocks.
-        from bot import AP_DATE
+        from handlers.appointments import AP_DATE
         result, _, ctx = self._run_ap_official([_make_appt(status="confirmed")])
         assert result == AP_DATE
         assert ctx.user_data.get("ap_official", {}).get("id") == "off1"
 
     def test_invalid_selection_ends(self):
-        from bot import ConversationHandler
+        from telegram.ext import ConversationHandler
         result, _, _ = self._run_ap_official([], data="apsel:9")
         assert result == ConversationHandler.END
 
     def test_cancel_button_ends(self):
-        from bot import ConversationHandler
+        from telegram.ext import ConversationHandler
         result, q, _ = self._run_ap_official([], data="apsel:cancel")
         assert result == ConversationHandler.END
 
@@ -370,7 +373,7 @@ class TestPerOfficialWindowLimit:
         }
 
     def _run_ap_official(self, existing):
-        from bot import ap_official
+        from handlers.appointments import ap_official
         ctx = _make_context()
         upd = MagicMock()
         upd.effective_user.id = 111
@@ -392,13 +395,13 @@ class TestPerOfficialWindowLimit:
         return result, q, ctx
 
     def test_fourth_appointment_allowed(self):
-        from bot import AP_DATE
+        from handlers.appointments import AP_DATE
         existing = [self._appt_offset(d, i=d) for d in (-6, -3, 5)]  # 3 in window
         result, _, ctx = self._run_ap_official(existing)
         assert result == AP_DATE
 
     def test_fifth_appointment_blocked(self):
-        from bot import ConversationHandler
+        from telegram.ext import ConversationHandler
         existing = [self._appt_offset(d, i=d) for d in (-6, -3, 5, 8)]  # 4 in window
         result, q, ctx = self._run_ap_official(existing)
         assert result == ConversationHandler.END
@@ -406,27 +409,27 @@ class TestPerOfficialWindowLimit:
         assert "limit" in q.edit_message_text.call_args[0][0].lower()
 
     def test_window_is_symmetric_future_counts(self):
-        from bot import ConversationHandler
+        from telegram.ext import ConversationHandler
         # All four in the +15 side (future) still hit the limit.
         existing = [self._appt_offset(d, i=d) for d in (2, 6, 10, 14)]
         result, q, ctx = self._run_ap_official(existing)
         assert result == ConversationHandler.END
 
     def test_appts_outside_window_do_not_count(self):
-        from bot import AP_DATE
+        from handlers.appointments import AP_DATE
         # 4 appts beyond ±15 days (some far future, some far past) → not counted.
         existing = [self._appt_offset(d, i=d) for d in (-40, -20, 20, 40)]
         result, _, ctx = self._run_ap_official(existing)
         assert result == AP_DATE
 
     def test_other_official_does_not_count(self):
-        from bot import AP_DATE
+        from handlers.appointments import AP_DATE
         existing = [self._appt_offset(d, official_id="off2", i=d) for d in (-6, -3, 5, 8)]
         result, _, ctx = self._run_ap_official(existing)
         assert result == AP_DATE
 
     def test_cancelled_appts_do_not_count(self):
-        from bot import AP_DATE
+        from handlers.appointments import AP_DATE
         existing = [self._appt_offset(d, status="cancelled", i=d) for d in (-6, -3, 5, 8)]
         result, _, ctx = self._run_ap_official(existing)
         assert result == AP_DATE
@@ -438,7 +441,7 @@ class TestPerOfficialWindowLimit:
 
 class TestConfirmGuard:
     def _run_confirm(self, existing_appts):
-        from bot import ap_confirm
+        from handlers.appointments import ap_confirm
         ctx = _make_context()
         future = datetime.now(TZ) + timedelta(days=10)
         ctx.user_data.update({
@@ -468,20 +471,20 @@ class TestConfirmGuard:
         return result, upd, saved
 
     def test_submits_when_no_conflict(self):
-        from bot import ConversationHandler
+        from telegram.ext import ConversationHandler
         result, upd, saved = self._run_confirm([])
         assert result == ConversationHandler.END
         assert any(a["status"] == "pending" for a in saved)
 
     def test_allows_when_under_limit(self):
-        from bot import ConversationHandler
+        from telegram.ext import ConversationHandler
         # One existing appt with the same official is fine (limit is 4).
         result, upd, saved = self._run_confirm([_make_appt(status="pending")])
         assert result == ConversationHandler.END
         assert any(a["status"] == "pending" for a in saved)
 
     def test_blocks_when_limit_reached(self):
-        from bot import ConversationHandler
+        from telegram.ext import ConversationHandler
         # 4 existing appts with off1 within the window → the 5th is blocked.
         base = datetime.now(TZ) + timedelta(days=10)
         existing = []
@@ -499,7 +502,7 @@ class TestConfirmGuard:
         assert "limit" in upd.message.reply_text.call_args[0][0].lower()
 
     def test_blocks_when_overlap_with_other_official_appears(self):
-        from bot import ConversationHandler
+        from telegram.ext import ConversationHandler
         # Same 10:00 slot as the confirm flow's date/time, but a different official.
         future = datetime.now(TZ) + timedelta(days=10)
         slot = future.replace(hour=10, minute=0, second=0, microsecond=0)
@@ -556,7 +559,7 @@ class TestCallbackOverlapGuard:
         }
 
     def _run_callback(self, action, appts, appt_id="TARGET", answer_side_effect=None):
-        from bot import appt_callback, CB_APPT_PREFIX
+        from handlers.appointments import CB_APPT_PREFIX, appt_callback
 
         ctx = _make_context()
         query = MagicMock()
@@ -630,7 +633,7 @@ class TestCallbackOverlapGuard:
         target = self._target()
         store = {"appts": [target]}
 
-        from bot import appt_callback, CB_APPT_PREFIX
+        from handlers.appointments import CB_APPT_PREFIX, appt_callback
 
         async def _fake_get():
             return [a.copy() for a in store["appts"]]
@@ -723,24 +726,24 @@ class TestCallbackOverlapGuard:
 
 class TestPastGuards:
     def test_appt_is_past_true(self):
-        from bot import _appt_is_past
+        from handlers.appointments import _appt_is_past
         past = (datetime.now(TZ) - timedelta(days=1)).replace(microsecond=0)
         assert _appt_is_past({"confirmed_datetime": past.isoformat()}) is True
 
     def test_appt_is_past_false_for_future(self):
-        from bot import _appt_is_past
+        from handlers.appointments import _appt_is_past
         fut = (datetime.now(TZ) + timedelta(days=1)).replace(microsecond=0)
         assert _appt_is_past({"requested_datetime": fut.isoformat()}) is False
 
     def test_datetime_is_past_string(self):
-        from bot import _datetime_is_past
+        from handlers.appointments import _datetime_is_past
         past = (datetime.now(TZ) - timedelta(hours=1)).isoformat()
         fut = (datetime.now(TZ) + timedelta(hours=1)).isoformat()
         assert _datetime_is_past(past) is True
         assert _datetime_is_past(fut) is False
 
     def test_datetime_is_past_none(self):
-        from bot import _datetime_is_past
+        from handlers.appointments import _datetime_is_past
         assert _datetime_is_past(None) is False
 
 
@@ -755,8 +758,7 @@ class TestReschedulePastGuards:
         }
 
     def _run_counter_msg(self, appt, text, role="official"):
-        import bot
-        bot._counter_propose_state[appt["id"]] = {"chat_id": 999, "role": role}
+        ha._counter_propose_state[appt["id"]] = {"chat_id": 999, "role": role}
         ctx = _make_context()
         upd = _make_update(text=text, chat_id=999, username="off")
         saved = []
@@ -770,9 +772,9 @@ class TestReschedulePastGuards:
         try:
             with patch("storage.get_appointments", side_effect=_get), \
                  patch("storage.save_appointments", side_effect=_save):
-                _run(bot.handle_counter_propose_message(upd, ctx))
+                _run(ha.handle_counter_propose_message(upd, ctx))
         finally:
-            bot._counter_propose_state.pop(appt["id"], None)
+            ha._counter_propose_state.pop(appt["id"], None)
         return upd, saved
 
     def test_proposing_past_time_rejected(self):
@@ -790,8 +792,7 @@ class TestReschedulePastGuards:
 
     def test_counter_on_past_appointment_blocked(self):
         # appt_callback "counter" on a past appointment is refused.
-        import bot
-        from bot import CB_APPT_PREFIX
+        from handlers.appointments import CB_APPT_PREFIX
         past = self._appt(datetime.now(TZ) - timedelta(days=1), appt_id="PASTR")
         ctx = _make_context()
         q = MagicMock()
@@ -807,6 +808,6 @@ class TestReschedulePastGuards:
 
         with patch("storage.get_appointments", side_effect=_get), \
              patch("permissions.OFFICIALS", _officials()):
-            _run(bot.appt_callback(upd, ctx))
-        assert "PASTR" not in bot._counter_propose_state
+            _run(ha.appt_callback(upd, ctx))
+        assert "PASTR" not in ha._counter_propose_state
         assert "passed" in q.edit_message_text.call_args[0][0].lower()

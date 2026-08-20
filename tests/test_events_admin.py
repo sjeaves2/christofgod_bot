@@ -79,7 +79,7 @@ def _run_step(fn_name, text, user_data=None, evdata=None):
 class TestAddEventFlow:
     def test_non_admin_blocked(self):
         import handlers.events_admin as ea
-        from bot import ConversationHandler
+        from telegram.ext import ConversationHandler
         with patch("permissions.is_admin", return_value=False):
             result = _run(ea.cmd_addevent(_upd(), _ctx()))
         assert result == ConversationHandler.END
@@ -146,13 +146,13 @@ class TestAddEventFlow:
                 "ae_url": "https://zoom.us/j/1", "ae_notif": 45}
 
     def test_confirm_no_discards(self):
-        from bot import ConversationHandler
+        from telegram.ext import ConversationHandler
         result, upd, _, saved = _run_step("ae_confirm", "no", self._confirm_data(_future_date()))
         assert result == ConversationHandler.END
         assert "data" not in saved  # nothing written
 
     def test_confirm_saves_one_time_event(self):
-        from bot import ConversationHandler
+        from telegram.ext import ConversationHandler
         date = _future_date()
         result, _, _, saved = _run_step("ae_confirm", "yes", self._confirm_data(date))
         assert result == ConversationHandler.END
@@ -211,7 +211,7 @@ class TestModifyEventFlow:
 
     def test_non_admin_blocked(self):
         import handlers.events_admin as ea
-        from bot import ConversationHandler
+        from telegram.ext import ConversationHandler
         with patch("permissions.is_admin", return_value=False):
             result = _run(ea.cmd_modifyevent(_upd(), _ctx()))
         assert result == ConversationHandler.END
@@ -267,7 +267,7 @@ class TestModifyEventFlow:
                          {"me_field": field, "me_event": ev}, evdata=data)
 
     def test_value_updates_int_field(self):
-        from bot import ConversationHandler
+        from telegram.ext import ConversationHandler
         result, _, _, saved = self._value_step("duration", "120")
         assert result == ConversationHandler.END
         assert saved["data"]["special_events"][0]["duration_minutes"] == 120
@@ -313,7 +313,7 @@ class TestDeleteEventFlow:
 
     def test_non_admin_blocked(self):
         import handlers.events_admin as ea
-        from bot import ConversationHandler
+        from telegram.ext import ConversationHandler
         with patch("permissions.is_admin", return_value=False):
             result = _run(ea.cmd_deleteevent(_upd(), _ctx()))
         assert result == ConversationHandler.END
@@ -353,7 +353,7 @@ class TestDeleteEventFlow:
         assert result == ea.DE_ANNOT
 
     def test_confirm_no_keeps_event(self):
-        from bot import ConversationHandler
+        from telegram.ext import ConversationHandler
         data = {"special_events": [{"id": "special_abc", "name": "Youth Night"}]}
         result, _, _, saved = _run_step("de_confirm", "no",
                                         {"de_ev": self._special_ev()}, evdata=data)
@@ -369,7 +369,7 @@ class TestDeleteEventFlow:
         assert ids == ["special_keep"]
 
     def test_annotation_dash_cancels(self):
-        from bot import ConversationHandler
+        from telegram.ext import ConversationHandler
         result, _, _, saved = _run_step("de_annot", "-",
                                         {"de_ev": self._convocation_ev()})
         assert result == ConversationHandler.END

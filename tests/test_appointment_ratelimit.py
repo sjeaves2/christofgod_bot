@@ -19,6 +19,10 @@ import pytz
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import common
+import handlers.appointments as ha
+import telegram.ext as ext
+
 TZ = pytz.timezone("America/New_York")
 
 
@@ -72,49 +76,43 @@ def _appt(user_chat_id=111, status="pending", appt_id="A1",
 
 class TestLastActionHelper:
     def test_none_when_no_stamp(self):
-        import bot
-        assert bot._user_last_action_at([_appt()], 111) is None
+        assert ha._user_last_action_at([_appt()], 111) is None
 
     def test_returns_most_recent(self):
-        import bot
-        older = (bot.now_tz() - timedelta(minutes=30)).isoformat()
-        newer = (bot.now_tz() - timedelta(minutes=1)).isoformat()
+        older = (common.now_tz() - timedelta(minutes=30)).isoformat()
+        newer = (common.now_tz() - timedelta(minutes=1)).isoformat()
         appts = [_appt(appt_id="A1", last_action_at=older),
                  _appt(appt_id="A2", last_action_at=newer)]
-        latest = bot._user_last_action_at(appts, 111)
+        latest = ha._user_last_action_at(appts, 111)
         assert latest is not None
-        assert abs((bot.now_tz() - latest).total_seconds() - 60) < 5
+        assert abs((common.now_tz() - latest).total_seconds() - 60) < 5
 
     def test_ignores_other_users(self):
-        import bot
         appts = [_appt(user_chat_id=222, appt_id="A1",
-                       last_action_at=bot.now_tz().isoformat())]
-        assert bot._user_last_action_at(appts, 111) is None
+                       last_action_at=common.now_tz().isoformat())]
+        assert ha._user_last_action_at(appts, 111) is None
 
     def test_tolerates_bad_timestamp(self):
-        import bot
-        assert bot._user_last_action_at(
+        assert ha._user_last_action_at(
             [_appt(last_action_at="not-a-date")], 111) is None
 
 
 class TestPendingCount:
     def test_counts_only_pending_for_user(self):
-        import bot
         appts = [
             _appt(appt_id="A1", status="pending"),
             _appt(appt_id="A2", status="confirmed"),
             _appt(appt_id="A3", status="pending", user_chat_id=222),
         ]
-        assert bot._count_pending_appts(appts, 111) == 1
+        assert ha._count_pending_appts(appts, 111) == 1
 
 
 class TestStamp:
     def test_stamp_sets_iso_timestamp(self):
-        import bot
         a = _appt()
-        bot._stamp_appt_action(a)
+        ha._stamp_appt_action(a)
         parsed = datetime.fromisoformat(a["last_action_at"])
-        assert abs((bot.now_tz() - parsed).total_seconds()) < 5
+        assert abs((common.now_tz() - parsed).total_seconds()) < 5
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +121,6 @@ class TestStamp:
 
 class TestConfirmRateLimit:
     def _run_confirm(self, existing, chat_id=111, is_admin=False):
-        import bot
         ctx = _make_context()
         future = datetime.now(TZ) + timedelta(days=10)
         ctx.user_data.update({
@@ -150,26 +147,24 @@ class TestConfirmRateLimit:
              patch("permissions.OFFICIALS", _officials()), \
              patch("permissions.is_admin", return_value=is_admin), \
              patch("handlers.appointments._notify_official_of_request", side_effect=_fake_notify):
-            result = _run(bot.ap_confirm(upd, ctx))
+            result = _run(ha.ap_confirm(upd, ctx))
         return result, upd, saved
 
     # -- cooldown --------------------------------------------------------
 
     def test_cooldown_blocks_recent_action(self):
-        import bot
-        recent = (bot.now_tz() - timedelta(seconds=30)).isoformat()
+        recent = (common.now_tz() - timedelta(seconds=30)).isoformat()
         result, upd, saved = self._run_confirm(
             [_appt(appt_id="A1", status="cancelled", last_action_at=recent)])
-        assert result == bot.ConversationHandler.END
+        assert result == ext.ConversationHandler.END
         assert saved == []  # nothing new submitted
         assert "wait" in upd.message.reply_text.call_args[0][0].lower()
 
     def test_cooldown_allows_after_window(self):
-        import bot
-        old = (bot.now_tz() - timedelta(seconds=bot.APPOINTMENT_COOLDOWN_SECONDS + 5)).isoformat()
+        old = (common.now_tz() - timedelta(seconds=ha.APPOINTMENT_COOLDOWN_SECONDS + 5)).isoformat()
         result, upd, saved = self._run_confirm(
             [_appt(appt_id="A1", status="cancelled", last_action_at=old)])
-        assert result == bot.ConversationHandler.END
+        assert result == ext.ConversationHandler.END
         assert any(a["status"] == "pending" for a in saved)
 
     def test_no_stamp_means_no_cooldown(self):
@@ -179,20 +174,18 @@ class TestConfirmRateLimit:
     # -- pending cap -----------------------------------------------------
 
     def test_pending_cap_blocks_at_five(self):
-        import bot
-        old = (bot.now_tz() - timedelta(hours=1)).isoformat()
+        old = (common.now_tz() - timedelta(hours=1)).isoformat()
         # Placed >15 days out so they count toward the pending cap but not the
         # separate per-official density window (±15 days).
         existing = [_appt(appt_id=f"P{k}", status="pending",
                           last_action_at=old, days=20 + k) for k in range(5)]
         result, upd, saved = self._run_confirm(existing)
-        assert result == bot.ConversationHandler.END
+        assert result == ext.ConversationHandler.END
         assert saved == []
         assert "pending" in upd.message.reply_text.call_args[0][0].lower()
 
     def test_pending_cap_allows_under_five(self):
-        import bot
-        old = (bot.now_tz() - timedelta(hours=1)).isoformat()
+        old = (common.now_tz() - timedelta(hours=1)).isoformat()
         existing = [_appt(appt_id=f"P{k}", status="pending",
                           last_action_at=old, days=20 + k) for k in range(4)]
         result, upd, saved = self._run_confirm(existing)
@@ -201,16 +194,14 @@ class TestConfirmRateLimit:
     # -- admin exemption -------------------------------------------------
 
     def test_admin_exempt_from_cooldown(self):
-        import bot
-        recent = (bot.now_tz() - timedelta(seconds=10)).isoformat()
+        recent = (common.now_tz() - timedelta(seconds=10)).isoformat()
         result, upd, saved = self._run_confirm(
             [_appt(appt_id="A1", status="cancelled", last_action_at=recent)],
             is_admin=True)
         assert any(a["status"] == "pending" for a in saved)
 
     def test_admin_exempt_from_pending_cap(self):
-        import bot
-        old = (bot.now_tz() - timedelta(hours=1)).isoformat()
+        old = (common.now_tz() - timedelta(hours=1)).isoformat()
         existing = [_appt(appt_id=f"P{k}", status="pending",
                           last_action_at=old, days=20 + k) for k in range(5)]
         result, upd, saved = self._run_confirm(existing, is_admin=True)

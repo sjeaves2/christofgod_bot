@@ -12,6 +12,8 @@ import pytz
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import handlers.appointments as ha
+
 TZ = pytz.timezone("America/New_York")
 
 
@@ -31,7 +33,6 @@ def _appt(days_ago, status="confirmed", appt_id="A1"):
 
 
 def _run_archive(appts, existing_archive=None):
-    import bot
     import storage
     saved: dict = {}
     archive_data = {"appointments": list(existing_archive or [])}
@@ -52,7 +53,7 @@ def _run_archive(appts, existing_archive=None):
          patch("storage.save_appointments", side_effect=_save), \
          patch.object(storage.appts_archive_cache, "get", side_effect=_arch_get), \
          patch.object(storage.appts_archive_cache, "save", side_effect=_arch_save):
-        moved = _run(bot.archive_old_appointments())
+        moved = _run(ha.archive_old_appointments())
     return moved, saved
 
 
@@ -102,7 +103,6 @@ class TestArchive:
 
 class TestRetentionPurge:
     def _run_purge(self, archive):
-        import bot
         import storage
         data = {"appointments": list(archive)}
         saved: dict = {}
@@ -115,7 +115,7 @@ class TestRetentionPurge:
 
         with patch.object(storage.appts_archive_cache, "get", side_effect=_get), \
              patch.object(storage.appts_archive_cache, "save", side_effect=_save):
-            purged = _run(bot.purge_archived_appointments())
+            purged = _run(ha.purge_archived_appointments())
         return purged, saved
 
     def test_ancient_record_purged(self):

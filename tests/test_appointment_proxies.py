@@ -12,6 +12,9 @@ import pytz
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import handlers.appointments as ha
+import permissions
+
 TZ = pytz.timezone("America/New_York")
 
 
@@ -70,42 +73,34 @@ def _ctx():
 
 class TestProxyIdentity:
     def test_official_can_act(self):
-        import bot
         off = _official()
-        assert bot._user_can_act_for_official(off, 999, "pastor")
+        assert permissions._user_can_act_for_official(off, 999, "pastor")
 
     def test_enabled_proxy_can_act(self):
-        import bot
         off = _official(enabled=True)
-        assert bot._user_can_act_for_official(off, 222, "janesec")
+        assert permissions._user_can_act_for_official(off, 222, "janesec")
 
     def test_disabled_proxy_cannot_act(self):
-        import bot
         off = _official(enabled=False)
-        assert not bot._user_can_act_for_official(off, 222, "janesec")
+        assert not permissions._user_can_act_for_official(off, 222, "janesec")
 
     def test_stranger_cannot_act(self):
-        import bot
-        assert not bot._user_can_act_for_official(_official(), 777, "nobody")
+        assert not permissions._user_can_act_for_official(_official(), 777, "nobody")
 
     def test_acting_identity_official(self):
-        import bot
-        name, is_proxy = bot._acting_identity(_official(), 999, "pastor")
+        name, is_proxy = permissions._acting_identity(_official(), 999, "pastor")
         assert (name, is_proxy) == ("Pastor Test", False)
 
     def test_acting_identity_proxy(self):
-        import bot
-        name, is_proxy = bot._acting_identity(_official(), 222, "janesec")
+        name, is_proxy = permissions._acting_identity(_official(), 222, "janesec")
         assert (name, is_proxy) == ("Jane Sec", True)
 
     def test_recipients_includes_enabled_proxy(self):
-        import bot
-        ids = [r["chat_id"] for r in bot._official_side_recipients(_official(enabled=True))]
+        ids = [r["chat_id"] for r in permissions._official_side_recipients(_official(enabled=True))]
         assert 999 in ids and 222 in ids
 
     def test_recipients_excludes_disabled_proxy(self):
-        import bot
-        ids = [r["chat_id"] for r in bot._official_side_recipients(_official(enabled=False))]
+        ids = [r["chat_id"] for r in permissions._official_side_recipients(_official(enabled=False))]
         assert ids == [999]
 
 
@@ -115,7 +110,6 @@ class TestProxyIdentity:
 
 class TestEnableCommand:
     def _run_cmd(self, arg, from_id=999, from_username="pastor", officials=None):
-        import bot
         officials = officials if officials is not None else [_official(enabled=False)]
         ctx = _ctx()
         ctx.args = [arg] if arg is not None else []
@@ -127,7 +121,7 @@ class TestEnableCommand:
         saved = {"called": False}
         with patch("permissions.OFFICIALS", officials), \
              patch("permissions._save_officials", side_effect=lambda: saved.update(called=True)):
-            _run(bot.cmd_enable_appt_proxies(upd, ctx))
+            _run(ha.cmd_enable_appt_proxies(upd, ctx))
         return officials, upd, saved
 
     def test_official_enables(self):
@@ -157,7 +151,6 @@ class TestEnableCommand:
 
 class TestClaim:
     def _run(self, upd, appts, finalize=None):
-        import bot
         finalize = finalize or AsyncMock()
         saved = {"appts": [a.copy() for a in appts]}
 
@@ -173,7 +166,7 @@ class TestClaim:
              patch("handlers.appointments._finalize_appointment", finalize), \
              patch("handlers.appointments._notify_negotiation_started", new=AsyncMock()) as notif:
             ctx = _ctx()
-            _run_cb = bot.appt_callback(upd, ctx)
+            _run_cb = ha.appt_callback(upd, ctx)
             _run(_run_cb)
         return saved, finalize, notif, ctx
 
@@ -217,7 +210,6 @@ class TestClaim:
 
 class TestFinalizeProxyNote:
     def _finalize(self, appt):
-        import bot
         ctx = _ctx()
 
         async def _save(a):
@@ -229,7 +221,7 @@ class TestFinalizeProxyNote:
         with patch("storage.save_appointments", side_effect=_save), \
              patch("handlers.appointments.get_user_prefs", side_effect=_prefs), \
              patch("permissions.OFFICIALS", [_official(enabled=True)]):
-            _run(bot._finalize_appointment(ctx, appt, [appt]))
+            _run(ha._finalize_appointment(ctx, appt, [appt]))
         return ctx
 
     def test_proxy_gets_confirmation_note(self):
@@ -257,19 +249,17 @@ class TestFinalizeProxyNote:
 
 class TestRequestFanout:
     def test_request_sent_to_official_and_proxy(self):
-        import bot
         ctx = _ctx()
         appt = _appt()
         with patch("permissions.OFFICIALS", [_official(enabled=True)]):
-            _run(bot._notify_official_of_request(ctx, appt, MagicMock()))
+            _run(ha._notify_official_of_request(ctx, appt, MagicMock()))
         targets = [c.args[0] for c in ctx.bot.send_message.call_args_list]
         assert 999 in targets and 222 in targets
 
     def test_request_only_official_when_disabled(self):
-        import bot
         ctx = _ctx()
         appt = _appt()
         with patch("permissions.OFFICIALS", [_official(enabled=False)]):
-            _run(bot._notify_official_of_request(ctx, appt, MagicMock()))
+            _run(ha._notify_official_of_request(ctx, appt, MagicMock()))
         targets = [c.args[0] for c in ctx.bot.send_message.call_args_list]
         assert targets == [999]

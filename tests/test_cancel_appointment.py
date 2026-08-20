@@ -102,7 +102,7 @@ def _button_rows(reply_markup):
 class TestCmdCancelAppointment:
 
     def _run_cmd(self, appts, user_chat_id=111, username="requester"):
-        from bot import cmd_cancelappointment
+        from handlers.appointments import cmd_cancelappointment
         ctx = _make_context(user_chat_id)
         upd = _make_cmd_update(chat_id=user_chat_id, username=username)
 
@@ -115,32 +115,32 @@ class TestCmdCancelAppointment:
         return result, upd, ctx
 
     def test_no_active_appointments_ends_conversation(self):
-        from bot import ConversationHandler
+        from telegram.ext import ConversationHandler
         result, _, _ = self._run_cmd([])
         assert result == ConversationHandler.END
 
     def test_active_appointment_prompts_selection(self):
-        from bot import CA_SELECT
+        from handlers.appointments import CA_SELECT
         result, _, _ = self._run_cmd([_make_appt(status="confirmed")])
         assert result == CA_SELECT
 
     def test_pending_appointments_included(self):
-        from bot import CA_SELECT
+        from handlers.appointments import CA_SELECT
         result, _, _ = self._run_cmd([_make_appt(status="pending")])
         assert result == CA_SELECT
 
     def test_counter_proposed_appointments_included(self):
-        from bot import CA_SELECT
+        from handlers.appointments import CA_SELECT
         result, _, _ = self._run_cmd([_make_appt(status="counter_proposed")])
         assert result == CA_SELECT
 
     def test_cancelled_appointments_excluded(self):
-        from bot import ConversationHandler
+        from telegram.ext import ConversationHandler
         result, _, _ = self._run_cmd([_make_appt(status="cancelled")])
         assert result == ConversationHandler.END
 
     def test_declined_appointments_excluded(self):
-        from bot import ConversationHandler
+        from telegram.ext import ConversationHandler
         result, _, _ = self._run_cmd([_make_appt(status="declined")])
         assert result == ConversationHandler.END
 
@@ -174,12 +174,12 @@ class TestCmdCancelAppointment:
         return a
 
     def test_past_appointment_excluded(self):
-        from bot import ConversationHandler
+        from telegram.ext import ConversationHandler
         result, _, ctx = self._run_cmd([self._past_appt()])
         assert result == ConversationHandler.END  # nothing cancelable
 
     def test_past_excluded_but_future_listed(self):
-        from bot import CA_SELECT
+        from handlers.appointments import CA_SELECT
         result, _, ctx = self._run_cmd([self._past_appt(), _make_appt(appt_id="FUT")])
         assert result == CA_SELECT
         ids = [a["id"] for a in ctx.user_data["ca_appts"]]
@@ -193,7 +193,7 @@ class TestCmdCancelAppointment:
 class TestCaSelect:
 
     def _run_select(self, data, appts):
-        from bot import ca_select
+        from handlers.appointments import ca_select
         ctx = _make_context()
         ctx.user_data["ca_appts"] = appts
         upd, q = _make_cb_update(data)
@@ -201,7 +201,7 @@ class TestCaSelect:
         return result, q, ctx
 
     def test_valid_selection_advances_to_confirm(self):
-        from bot import CA_CONFIRM
+        from handlers.appointments import CA_CONFIRM
         result, _, _ = self._run_select("ca:sel:0", [_make_appt()])
         assert result == CA_CONFIRM
 
@@ -210,12 +210,12 @@ class TestCaSelect:
         assert ctx.user_data["ca_appt"]["id"] == "APPT001"
 
     def test_out_of_range_ends(self):
-        from bot import ConversationHandler
+        from telegram.ext import ConversationHandler
         result, _, _ = self._run_select("ca:sel:5", [_make_appt()])
         assert result == ConversationHandler.END
 
     def test_abort_ends(self):
-        from bot import ConversationHandler
+        from telegram.ext import ConversationHandler
         result, q, _ = self._run_select("ca:abort", [_make_appt()])
         assert result == ConversationHandler.END
 
@@ -238,7 +238,7 @@ class TestCaConfirmRequester:
 
     def _run_confirm(self, data, appt, all_appts=None, user_chat_id=111,
                      username="requester", officials=None):
-        from bot import ca_confirm
+        from handlers.appointments import ca_confirm
         if all_appts is None:
             all_appts = [appt.copy()]
         if officials is None:
@@ -264,12 +264,12 @@ class TestCaConfirmRequester:
         return result, q, ctx, saved
 
     def test_yes_ends_conversation(self):
-        from bot import ConversationHandler
+        from telegram.ext import ConversationHandler
         result, _, _, _ = self._run_confirm("ca:yes", _make_appt())
         assert result == ConversationHandler.END
 
     def test_past_appointment_not_cancelled(self):
-        from bot import ConversationHandler
+        from telegram.ext import ConversationHandler
         past = _make_appt()
         dt = (datetime.now(TZ) - timedelta(days=2)).replace(microsecond=0)
         past["requested_datetime"] = dt.isoformat()
@@ -281,7 +281,7 @@ class TestCaConfirmRequester:
                "taken place" in q.edit_message_text.call_args[0][0].lower()
 
     def test_no_aborts_and_ends(self):
-        from bot import ConversationHandler
+        from telegram.ext import ConversationHandler
         result, _, _, saved = self._run_confirm("ca:no", _make_appt())
         assert result == ConversationHandler.END
         assert not saved
@@ -329,7 +329,7 @@ class TestCaConfirmRequester:
 class TestCaConfirmOfficial:
 
     def _run_confirm_as_official(self, appt, officials=None):
-        from bot import ca_confirm
+        from handlers.appointments import ca_confirm
         if officials is None:
             officials = _make_officials(chat_id=999)
 
@@ -399,7 +399,7 @@ class TestCancellationIcs:
     """A METHOD:CANCEL ICS must be sent to both parties when an appointment is cancelled."""
 
     def _run_as_requester(self, appt, officials):
-        from bot import ca_confirm
+        from handlers.appointments import ca_confirm
         ctx = _make_context(user_chat_id=111)
         ctx.user_data["ca_appt"] = appt
         upd, q = _make_cb_update("ca:yes", chat_id=111, username="requester")
@@ -418,7 +418,7 @@ class TestCancellationIcs:
         return ctx
 
     def _run_as_official(self, appt, officials):
-        from bot import ca_confirm
+        from handlers.appointments import ca_confirm
         ctx = _make_context(user_chat_id=999)
         ctx.user_data["ca_appt"] = appt
         upd, q = _make_cb_update("ca:yes", chat_id=999, username="test_official")
