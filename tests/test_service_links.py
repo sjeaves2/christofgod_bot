@@ -17,6 +17,10 @@ import pytz
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import events
+import handlers.events_admin as hea
+import handlers.notifications as hn
+
 TZ = pytz.timezone("America/New_York")
 
 
@@ -57,7 +61,6 @@ def _make_context() -> MagicMock:
 
 class TestUrlAttachment:
     def _run_all_upcoming(self, urls_map):
-        import bot
 
         sabbath_eve = {
             "key": "sabbath_eve_test",
@@ -85,8 +88,8 @@ class TestUrlAttachment:
 
         with patch("storage.get_all_events_data", side_effect=_fake_events_data), \
              patch("events.all_upcoming_events", return_value=[sabbath_eve, sabbath_morning]):
-            events = _run(bot.all_upcoming(days_ahead=30))
-        return {e["phase_key"]: e for e in events}
+            evs = _run(events.all_upcoming(days_ahead=30))
+        return {e["phase_key"]: e for e in evs}
 
     def test_distinct_link_per_phase(self):
         events = self._run_all_upcoming({
@@ -112,7 +115,6 @@ class TestSundayPrayerLink:
     its link comes from the special_events def's url, via _merge_special_events."""
 
     def _sunday_event(self, url):
-        import bot
 
         defn = {
             "id": "sunday_morning_prayer",
@@ -126,7 +128,7 @@ class TestSundayPrayerLink:
             "url": url,
             "active": True,
         }
-        results = bot._merge_special_events([defn], {}, days_ahead=14)
+        results = events._merge_special_events([defn], {}, days_ahead=14)
         return results[0] if results else None
 
     def test_sunday_is_type_special(self):
@@ -144,7 +146,6 @@ class TestSundayPrayerLink:
 
     def test_sunday_not_duplicated_in_all_upcoming(self):
         """Sunday must appear once (via _merge_special_events), not twice."""
-        import bot
 
         async def _fake_events_data():
             return {
@@ -160,8 +161,8 @@ class TestSundayPrayerLink:
             }
 
         with patch("storage.get_all_events_data", side_effect=_fake_events_data):
-            events = _run(bot.all_upcoming(days_ahead=14))
-        sundays = [e for e in events if "Sunday Morning Prayer" in e["name"]]
+            evs = _run(events.all_upcoming(days_ahead=14))
+        sundays = [e for e in evs if "Sunday Morning Prayer" in e["name"]]
         assert len(sundays) >= 1
         assert all(s["url"] == "https://zoom.us/sunday" for s in sundays)
         # No two share the same service_time (would indicate a duplicate).
@@ -175,9 +176,8 @@ class TestSundayPrayerLink:
 
 class TestNotificationLink:
     def _render(self, event):
-        import bot
 
-        return bot._render_notification(event, TZ, "en")
+        return hn._render_notification(event, TZ, "en")
 
     def _event(self, **extra):
         ev = {
@@ -203,8 +203,7 @@ class TestNotificationLink:
 
 class TestSetServiceLink:
     def test_lists_phases_and_enters_select(self):
-        import bot
-        from bot import SL_SELECT
+        from handlers.events_admin import SL_SELECT
 
         ctx = _make_context()
         upd = _make_update()
@@ -214,7 +213,7 @@ class TestSetServiceLink:
 
         with patch("permissions.is_admin", return_value=True), \
              patch("storage.get_all_events_data", side_effect=_fake_events_data):
-            result = _run(bot.cmd_setservicelink(upd, ctx))
+            result = _run(hea.cmd_setservicelink(upd, ctx))
 
         assert result == SL_SELECT
         text = upd.message.reply_text.call_args[0][0]
@@ -223,40 +222,36 @@ class TestSetServiceLink:
         assert ctx.user_data["sl_phases"]
 
     def test_non_admin_blocked(self):
-        import bot
-        from bot import ConversationHandler
+        from telegram.ext import ConversationHandler
 
         ctx = _make_context()
         upd = _make_update()
         with patch("permissions.is_admin", return_value=False):
-            result = _run(bot.cmd_setservicelink(upd, ctx))
+            result = _run(hea.cmd_setservicelink(upd, ctx))
         assert result == ConversationHandler.END
 
     def test_select_valid_advances_to_url(self):
-        import bot
-        from bot import SL_URL
+        from handlers.events_admin import SL_URL
         from hebrew_calendar import service_phases
 
         ctx = _make_context()
         ctx.user_data["sl_phases"] = service_phases()
         upd = _make_update(text="1")
-        result = _run(bot.sl_select(upd, ctx))
+        result = _run(hea.sl_select(upd, ctx))
         assert result == SL_URL
         assert ctx.user_data["sl_phase"]["phase_key"] == "sabbath::Eve"
 
     def test_select_invalid_stays(self):
-        import bot
-        from bot import SL_SELECT
+        from handlers.events_admin import SL_SELECT
         from hebrew_calendar import service_phases
 
         ctx = _make_context()
         ctx.user_data["sl_phases"] = service_phases()
         upd = _make_update(text="999")
-        result = _run(bot.sl_select(upd, ctx))
+        result = _run(hea.sl_select(upd, ctx))
         assert result == SL_SELECT
 
     def _run_sl_url(self, text, phase_key="sabbath::Eve", existing=None):
-        import bot
         from hebrew_calendar import service_phases
 
         ctx = _make_context()
@@ -279,11 +274,11 @@ class TestSetServiceLink:
         with patch("storage.get_all_events_data", side_effect=_fake_get), \
              patch("storage.save_events_data", side_effect=_fake_save), \
              patch("handlers.events_admin.schedule_all_upcoming", side_effect=_fake_schedule):
-            result = _run(bot.sl_url(upd, ctx))
+            result = _run(hea.sl_url(upd, ctx))
         return result, upd, saved
 
     def test_set_link_saved(self):
-        from bot import ConversationHandler
+        from telegram.ext import ConversationHandler
         result, upd, saved = self._run_sl_url("https://zoom.us/new")
         assert result == ConversationHandler.END
         assert saved["convocation_urls"]["sabbath::Eve"] == "https://zoom.us/new"
@@ -299,7 +294,6 @@ class TestSetServiceLink:
         assert saved["convocation_urls"]["sabbath::Eve"] == "https://zoom.us/eve"
 
     def test_set_reschedules_notifications(self):
-        import bot
         from hebrew_calendar import service_phases
 
         ctx = _make_context()
@@ -319,6 +313,6 @@ class TestSetServiceLink:
         with patch("storage.get_all_events_data", side_effect=_fake_get), \
              patch("storage.save_events_data", side_effect=_fake_save), \
              patch("handlers.events_admin.schedule_all_upcoming", reschedule):
-            _run(bot.sl_url(upd, ctx))
+            _run(hea.sl_url(upd, ctx))
 
         reschedule.assert_called_once()

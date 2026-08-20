@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+import common
 from localization import AVAILABLE_LANGUAGES, CATALOG, DEFAULT_LANG, t
 
 
@@ -103,17 +105,14 @@ class TestTranslationParity:
 class TestAffirmative:
     @pytest.mark.parametrize("word", ["yes", "Y", " sí ", "si", "oui", "O"])
     def test_accepts_multilingual_yes(self, word):
-        import bot
-        assert bot._is_affirmative(word)
+        assert common._is_affirmative(word)
 
     @pytest.mark.parametrize("word", ["no", "non", "nope", "", "maybe"])
     def test_rejects_non_affirmative(self, word):
-        import bot
-        assert not bot._is_affirmative(word)
+        assert not common._is_affirmative(word)
 
     def test_none_is_not_affirmative(self):
-        import bot
-        assert not bot._is_affirmative(None)
+        assert not common._is_affirmative(None)
 
 
 class TestLocalizedDatetime:

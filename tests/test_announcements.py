@@ -18,6 +18,10 @@ import pytz
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import handlers.announcements as han
+import handlers.broadcast as hb
+import telegram.ext as ext
+
 TZ = pytz.timezone("America/New_York")
 
 
@@ -58,30 +62,25 @@ def _ann(days_until_expiry=7, ann_id="ANN1", title="Test Title", body="Test body
 
 class TestLifecycleHelpers:
     def test_active_until_end_of_expiry_day(self):
-        import bot
         # Expires "today" → still active right now (end-of-day semantics).
-        assert bot._ann_is_active(_ann(days_until_expiry=0)) is True
+        assert han._ann_is_active(_ann(days_until_expiry=0)) is True
 
     def test_expired_yesterday_inactive(self):
-        import bot
-        assert bot._ann_is_active(_ann(days_until_expiry=-1)) is False
+        assert han._ann_is_active(_ann(days_until_expiry=-1)) is False
 
     def test_bad_date_is_inactive(self):
-        import bot
-        assert bot._ann_is_active({"expires": "soon"}) is False
+        assert han._ann_is_active({"expires": "soon"}) is False
 
     def test_active_sorted_newest_first(self):
-        import bot
         anns = [_ann(ann_id="OLDER", created_offset_min=60),
                 _ann(ann_id="NEWER", created_offset_min=1),
                 _ann(ann_id="GONE", days_until_expiry=-2)]
-        out = bot.active_announcements(anns)
+        out = han.active_announcements(anns)
         assert [a["id"] for a in out] == ["NEWER", "OLDER"]
 
 
 class TestPurge:
     def _run_purge(self, anns):
-        import bot
         saved: dict = {}
 
         async def _get():
@@ -92,7 +91,7 @@ class TestPurge:
 
         with patch("storage.get_announcements", side_effect=_get), \
              patch("storage.save_announcements", side_effect=_save):
-            purged = _run(bot.purge_old_announcements())
+            purged = _run(han.purge_old_announcements())
         return purged, saved
 
     def test_long_expired_purged(self):
@@ -116,7 +115,6 @@ class TestPurge:
 
 class TestCmdAnnouncements:
     def _run_cmd(self, anns, lang="en"):
-        import bot
         ctx = _make_context()
         upd = _make_update()
 
@@ -128,7 +126,7 @@ class TestCmdAnnouncements:
 
         with patch("storage.get_announcements", side_effect=_get_anns), \
              patch("storage.get_all_users", side_effect=_get_users):
-            _run(bot.cmd_announcements(upd, ctx))
+            _run(han.cmd_announcements(upd, ctx))
         return upd.message.reply_text.call_args[0][0]
 
     def test_shows_active(self):
@@ -159,48 +157,42 @@ class TestCmdAnnouncements:
 
 class TestAddAnnouncement:
     def test_non_admin_blocked(self):
-        import bot
         ctx = _make_context()
         upd = _make_update()
         with patch("permissions.is_admin", return_value=False):
-            result = _run(bot.cmd_addannouncement(upd, ctx))
-        assert result == bot.ConversationHandler.END
+            result = _run(han.cmd_addannouncement(upd, ctx))
+        assert result == ext.ConversationHandler.END
 
     def test_title_too_long_stays(self):
-        import bot
         ctx = _make_context()
-        upd = _make_update(text="x" * (bot.ANN_TITLE_MAX + 1))
-        result = _run(bot.an_title(upd, ctx))
-        assert result == bot.AN_TITLE
+        upd = _make_update(text="x" * (han.ANN_TITLE_MAX + 1))
+        result = _run(han.an_title(upd, ctx))
+        assert result == han.AN_TITLE
 
     def test_bad_expiry_format_stays(self):
-        import bot
         ctx = _make_context()
         ctx.user_data.update({"an_title": "T", "an_body": "B"})
         upd = _make_update(text="tomorrow")
-        result = _run(bot.an_expires(upd, ctx))
-        assert result == bot.AN_EXPIRES
+        result = _run(han.an_expires(upd, ctx))
+        assert result == han.AN_EXPIRES
 
     def test_past_expiry_stays(self):
-        import bot
         ctx = _make_context()
         ctx.user_data.update({"an_title": "T", "an_body": "B"})
         past = (datetime.now(TZ) - timedelta(days=2)).strftime("%Y-%m-%d")
         upd = _make_update(text=past)
-        result = _run(bot.an_expires(upd, ctx))
-        assert result == bot.AN_EXPIRES
+        result = _run(han.an_expires(upd, ctx))
+        assert result == han.AN_EXPIRES
 
     def test_today_expiry_accepted(self):
-        import bot
         ctx = _make_context()
         ctx.user_data.update({"an_title": "T", "an_body": "B"})
         today = datetime.now(TZ).strftime("%Y-%m-%d")
         upd = _make_update(text=today)
-        result = _run(bot.an_expires(upd, ctx))
-        assert result == bot.AN_CONFIRM
+        result = _run(han.an_expires(upd, ctx))
+        assert result == han.AN_CONFIRM
 
     def _run_confirm(self, answer="yes"):
-        import bot
         ctx = _make_context()
         future = (datetime.now(TZ) + timedelta(days=7)).strftime("%Y-%m-%d")
         ctx.user_data.update({"an_title": "New Roof", "an_body": "Details here.",
@@ -224,13 +216,12 @@ class TestAddAnnouncement:
              patch("storage.save_announcements", side_effect=_save_anns), \
              patch("storage.get_all_users", side_effect=_get_users), \
              patch("handlers.announcements._broadcast_target_options", side_effect=_options):
-            result = _run(bot.an_confirm(upd, ctx))
+            result = _run(han.an_confirm(upd, ctx))
         return result, ctx, saved
 
     def test_confirm_saves_and_enters_broadcast_selection(self):
-        import bot
         result, ctx, saved = self._run_confirm()
-        assert result == bot.BC_SELECT
+        assert result == hb.BC_SELECT
         ann = saved["anns"][0]
         assert ann["title"] == "New Roof" and ann["id"]
         # Broadcast hand-off prepared with the rendered announcement.
@@ -238,9 +229,8 @@ class TestAddAnnouncement:
         assert ctx.user_data["bc_selected"] == set()
 
     def test_decline_discards(self):
-        import bot
         result, ctx, saved = self._run_confirm(answer="no")
-        assert result == bot.ConversationHandler.END
+        assert result == ext.ConversationHandler.END
         assert "anns" not in saved
 
 
@@ -250,7 +240,6 @@ class TestAddAnnouncement:
 
 class TestDelAnnouncement:
     def test_expires_selected_announcement_now(self):
-        import bot
         ctx = _make_context()
         target = _ann(ann_id="KILL", days_until_expiry=7)
         ctx.user_data["da_anns"] = [target]
@@ -265,17 +254,16 @@ class TestDelAnnouncement:
 
         with patch("storage.get_announcements", side_effect=_get), \
              patch("storage.save_announcements", side_effect=_save):
-            result = _run(bot.da_select(upd, ctx))
-        assert result == bot.ConversationHandler.END
-        assert bot._ann_is_active(saved["anns"][0]) is False
+            result = _run(han.da_select(upd, ctx))
+        assert result == ext.ConversationHandler.END
+        assert han._ann_is_active(saved["anns"][0]) is False
 
     def test_invalid_number_stays(self):
-        import bot
         ctx = _make_context()
         ctx.user_data["da_anns"] = [_ann()]
         upd = _make_update(text="9")
-        result = _run(bot.da_select(upd, ctx))
-        assert result == bot.DA_SELECT
+        result = _run(han.da_select(upd, ctx))
+        assert result == han.DA_SELECT
 
 
 # ---------------------------------------------------------------------------
@@ -284,7 +272,6 @@ class TestDelAnnouncement:
 
 class TestAnnouncementTranslation:
     def _run_for_lang(self, ann, lang, translate_result="TRANSLATED", store=None):
-        import bot
         store = store if store is not None else [dict(ann)]
         saved: dict = {}
 
@@ -297,7 +284,7 @@ class TestAnnouncementTranslation:
         with patch("storage.get_announcements", side_effect=_get), \
              patch("storage.save_announcements", side_effect=_save), \
              patch("translation.translate", return_value=translate_result) as tr:
-            out = _run(bot._announcement_for_lang(ann, lang))
+            out = _run(han._announcement_for_lang(ann, lang))
         return out, saved, tr
 
     def test_same_language_returns_record_untouched(self):

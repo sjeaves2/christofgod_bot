@@ -14,6 +14,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import settings
+
 
 def _run(coro):
     return asyncio.get_event_loop().run_until_complete(coro)
@@ -126,7 +128,7 @@ class TestErrorHandler:
         import bot
         ctx = _ctx()
         ctx.error = RuntimeError("boom")
-        with patch.object(bot.activity, "log_error") as log_error:
+        with patch.object(settings.activity, "log_error") as log_error:
             _run(bot.error_handler(MagicMock(), ctx))
         log_error.assert_called_once()
         assert "boom" in log_error.call_args[0][0]
@@ -135,7 +137,7 @@ class TestErrorHandler:
         import bot
         ctx = _ctx()
         ctx.error = "plain string failure"
-        with patch.object(bot.activity, "log_error") as log_error:
+        with patch.object(settings.activity, "log_error") as log_error:
             _run(bot.error_handler(MagicMock(), ctx))
         assert "plain string failure" in log_error.call_args[0][0]
 
