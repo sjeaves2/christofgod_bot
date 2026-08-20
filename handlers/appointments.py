@@ -238,7 +238,8 @@ async def cmd_enable_appt_proxies(update: Update, context: ContextTypes.DEFAULT_
     """Officer-only: enable/disable their appointment proxies. Usage: /enable_appt_proxies yes|no"""
     uid, uname, dname = user_info(update)
     uname_lower = (uname or "").lstrip("@").lower()
-    off = next((o for o in permissions.OFFICIALS if permissions._person_matches(o, uid, uname_lower)), None)
+    off = next((o for o in permissions.OFFICIALS
+                if permissions._person_matches(o, uid, uname_lower)), None)
     if not off:
         await update.message.reply_text("Only a church official can manage appointment proxies.")
         return
@@ -302,7 +303,8 @@ def _overlapping_appt(
         a_start = _appt_datetime(a)
         if a_start is None:
             continue
-        a_end = a_start + timedelta(minutes=int(a.get("duration_minutes", DEFAULT_APPT_DURATION_MIN)))
+        a_end = a_start + timedelta(
+            minutes=int(a.get("duration_minutes", DEFAULT_APPT_DURATION_MIN)))
         # Half-open intervals overlap when each starts before the other ends.
         if start < a_end and a_start < end:
             return a
@@ -474,7 +476,8 @@ async def ap_official(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     # Per-official frequency limit: at most APPOINTMENT_MAX_PER_WINDOW active
     # appointments within ±APPOINTMENT_WINDOW_HALF_DAYS of now.
     appts = await storage.get_appointments()
-    if _count_active_appts_with_official(appts, uid, off["id"], now_tz()) >= APPOINTMENT_MAX_PER_WINDOW:
+    if (_count_active_appts_with_official(appts, uid, off["id"], now_tz())
+            >= APPOINTMENT_MAX_PER_WINDOW):
         await query.edit_message_text(
             t("appt_limit_reached", lang, official=md(off["name"]),
               max=APPOINTMENT_MAX_PER_WINDOW, days=APPOINTMENT_WINDOW_HALF_DAYS * 2),
@@ -603,7 +606,8 @@ async def ap_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             return ConversationHandler.END
 
     # Final guard: per-official frequency limit within ±15 days of now.
-    if _count_active_appts_with_official(appts, uid, off["id"], now_tz()) >= APPOINTMENT_MAX_PER_WINDOW:
+    if (_count_active_appts_with_official(appts, uid, off["id"], now_tz())
+            >= APPOINTMENT_MAX_PER_WINDOW):
         await update.message.reply_text(
             t("appt_limit_not_submitted", lang, official=md(off["name"]),
               max=APPOINTMENT_MAX_PER_WINDOW, days=APPOINTMENT_WINDOW_HALF_DAYS * 2),
@@ -615,7 +619,8 @@ async def ap_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     clash = _overlapping_appt(appts, uid, req_dt, DEFAULT_APPT_DURATION_MIN)
     if clash:
         await update.message.reply_text(
-            t("appt_overlap_not_submitted", lang, official=md(clash["official_name"]), id=clash["id"]),
+            t("appt_overlap_not_submitted", lang,
+              official=md(clash["official_name"]), id=clash["id"]),
             parse_mode=ParseMode.MARKDOWN,
         )
         return ConversationHandler.END
@@ -673,9 +678,12 @@ async def _notify_official_of_request(
 
     kb = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("✅ Confirm", callback_data=f"{CB_APPT_PREFIX}confirm:{appt['id']}"),
-            InlineKeyboardButton("📅 Suggest time", callback_data=f"{CB_APPT_PREFIX}counter:{appt['id']}"),
-            InlineKeyboardButton("❌ Decline", callback_data=f"{CB_APPT_PREFIX}decline:{appt['id']}"),
+            InlineKeyboardButton("✅ Confirm",
+                                 callback_data=f"{CB_APPT_PREFIX}confirm:{appt['id']}"),
+            InlineKeyboardButton("📅 Suggest time",
+                                 callback_data=f"{CB_APPT_PREFIX}counter:{appt['id']}"),
+            InlineKeyboardButton("❌ Decline",
+                                 callback_data=f"{CB_APPT_PREFIX}decline:{appt['id']}"),
         ]
     ])
 
@@ -706,7 +714,8 @@ async def _notify_official_of_request(
 # ---------------------------------------------------------------------------
 
 # Store pending counter-propose state outside conversation
-_counter_propose_state: dict[str, Any] = {}  # appt_id -> {"chat_id": ..., "role": "official"|"user"}
+# appt_id -> {"chat_id": ..., "role": "official"|"user"}
+_counter_propose_state: dict[str, Any] = {}
 
 # Actions taken by the official side (official or an enabled proxy). The rest
 # (accept_counter / decline_counter) are taken by the requester.
@@ -897,7 +906,8 @@ async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         appt["status"] = "confirmed"
         appt["confirmed_datetime"] = proposed
         await _finalize_appointment(context, appt, appts)
-        await query.edit_message_text("✅ You confirmed the appointment with the user's suggested time.")
+        await query.edit_message_text(
+            "✅ You confirmed the appointment with the user's suggested time.")
 
     elif action == "decline_user_counter":
         appt["status"] = "declined"
@@ -1051,8 +1061,11 @@ async def handle_counter_propose_message(
         await update.message.reply_text(f"✅ Suggested time sent to the user: {new_dt_str}")
         kb = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("✅ Accept", callback_data=f"{CB_APPT_PREFIX}accept_counter:{appt_id}"),
-                InlineKeyboardButton("📅 Suggest different", callback_data=f"{CB_APPT_PREFIX}decline_counter:{appt_id}"),
+                InlineKeyboardButton(
+                    "✅ Accept", callback_data=f"{CB_APPT_PREFIX}accept_counter:{appt_id}"),
+                InlineKeyboardButton(
+                    "📅 Suggest different",
+                    callback_data=f"{CB_APPT_PREFIX}decline_counter:{appt_id}"),
             ]
         ])
         await context.bot.send_message(
@@ -1078,8 +1091,12 @@ async def handle_counter_propose_message(
         if target_chat:
             kb = InlineKeyboardMarkup([
                 [
-                    InlineKeyboardButton("✅ Accept", callback_data=f"{CB_APPT_PREFIX}accept_user_counter:{appt_id}"),
-                    InlineKeyboardButton("❌ Decline", callback_data=f"{CB_APPT_PREFIX}decline_user_counter:{appt_id}"),
+                    InlineKeyboardButton(
+                        "✅ Accept",
+                        callback_data=f"{CB_APPT_PREFIX}accept_user_counter:{appt_id}"),
+                    InlineKeyboardButton(
+                        "❌ Decline",
+                        callback_data=f"{CB_APPT_PREFIX}decline_user_counter:{appt_id}"),
                 ]
             ])
             await context.bot.send_message(
@@ -1288,7 +1305,8 @@ async def ca_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     else:
         # Requester cancelled → notify the official if we know their chat_id
         if off and off.get("chat_id"):
-            user_display = md(appt.get("user_display_name") or appt.get("user_username") or "The requester")
+            user_display = md(appt.get("user_display_name")
+                              or appt.get("user_username") or "The requester")
             await context.bot.send_message(
                 off["chat_id"],
                 f"❌ Appointment (ID: `{appt['id']}`) with "
@@ -1473,7 +1491,8 @@ async def rs_newtime(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         )
     else:
         # Requester is rescheduling → notify the official side (officer + proxies).
-        requester = md(appt.get("user_display_name") or appt.get("user_username") or "The requester")
+        requester = md(appt.get("user_display_name")
+                       or appt.get("user_username") or "The requester")
         for r in permissions._official_side_recipients(off) if off else []:
             try:
                 await context.bot.send_message(

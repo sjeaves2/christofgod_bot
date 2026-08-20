@@ -58,9 +58,15 @@ STRINGS: dict[str, str] = {
     "resched_ask_time": "Enter the new date and time (YYYY-MM-DD HH:MM):",
     "resched_bad_format": "Please use the format YYYY-MM-DD HH:MM:",
     "resched_past": "That date/time is in the past. Please enter a future time (YYYY-MM-DD HH:MM):",
-    "resched_overlap": "That time overlaps another of your appointments. Please choose a different time (YYYY-MM-DD HH:MM):",
+    "resched_overlap": (
+        "That time overlaps another of your appointments. Please choose a different time "
+        "(YYYY-MM-DD HH:MM):"
+    ),
     "resched_no_longer": "That appointment can no longer be rescheduled.",
-    "resched_sent": "✅ Your reschedule request has been sent. You'll be notified when it's accepted or declined.",
+    "resched_sent": (
+        "✅ Your reschedule request has been sent. You'll be notified when it's accepted or "
+        "declined."
+    ),
     "cancel_done_by_official_to_user": (
         "❌ Your appointment (ID: `{id}`) with *{official}* "
         "has been cancelled by the official."
@@ -171,7 +177,9 @@ STRINGS: dict[str, str] = {
     "notif_prefs_saved": "✅ You'll receive personal reminders for:\n{list}",
 
     # -- /help topics --
-    "help_topic_hint": "For details on a command, send `/help <command>` (e.g. `/help appointment`).",
+    "help_topic_hint": (
+        "For details on a command, send `/help <command>` (e.g. `/help appointment`)."
+    ),
     "help_unknown_topic": "I don't have help for that. Try one of: {topics}",
     "help_appointment": (
         "*/appointment* — Request a meeting with a church official.\n\n"

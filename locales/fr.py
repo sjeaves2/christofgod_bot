@@ -58,10 +58,18 @@ STRINGS: dict[str, str] = {
     "resched_list_header": "*Reprogrammer un rendez-vous*\nChoisissez-en un à reprogrammer :",
     "resched_ask_time": "Saisissez la nouvelle date et heure (YYYY-MM-DD HH:MM) :",
     "resched_bad_format": "Veuillez utiliser le format YYYY-MM-DD HH:MM :",
-    "resched_past": "Cette date/heure est déjà passée. Veuillez saisir une heure future (YYYY-MM-DD HH:MM) :",
-    "resched_overlap": "Cette heure chevauche un autre de vos rendez-vous. Veuillez choisir une autre heure (YYYY-MM-DD HH:MM) :",
+    "resched_past": (
+        "Cette date/heure est déjà passée. Veuillez saisir une heure future (YYYY-MM-DD HH:MM) :"
+    ),
+    "resched_overlap": (
+        "Cette heure chevauche un autre de vos rendez-vous. Veuillez choisir une autre heure "
+        "(YYYY-MM-DD HH:MM) :"
+    ),
     "resched_no_longer": "Ce rendez-vous ne peut plus être reprogrammé.",
-    "resched_sent": "✅ Votre demande de reprogrammation a été envoyée. Vous serez informé de son acceptation ou de son refus.",
+    "resched_sent": (
+        "✅ Votre demande de reprogrammation a été envoyée. Vous serez informé de son acceptation "
+        "ou de son refus."
+    ),
     "cancel_done_by_official_to_user": (
         "❌ Votre rendez-vous (ID : `{id}`) avec *{official}* "
         "a été annulé par le responsable."
@@ -75,7 +83,9 @@ STRINGS: dict[str, str] = {
     ),
 
     # -- appointment request flow --
-    "appt_choose_official": "*Demander un rendez-vous*\n\nAvec qui souhaitez-vous vous rencontrer ?",
+    "appt_choose_official": (
+        "*Demander un rendez-vous*\n\nAvec qui souhaitez-vous vous rencontrer ?"
+    ),
     "appt_invalid_number": "Sélection non valide.",
     "appt_limit_reached": (
         "Vous avez atteint la limite de {max} rendez-vous avec {official} "
@@ -87,7 +97,9 @@ STRINGS: dict[str, str] = {
     "appt_bad_date": "Veuillez utiliser le format YYYY-MM-DD :",
     "appt_ask_time": "Heure souhaitée (HH:MM, format 24 h) :",
     "appt_bad_time": "Veuillez utiliser le format HH:MM :",
-    "appt_bad_datetime": "Cette date/heure n'est pas valide. Veuillez ressaisir la date (YYYY-MM-DD) :",
+    "appt_bad_datetime": (
+        "Cette date/heure n'est pas valide. Veuillez ressaisir la date (YYYY-MM-DD) :"
+    ),
     "appt_past": "Cette date/heure est déjà passée. Veuillez saisir une date future (YYYY-MM-DD) :",
     "appt_too_far": (
         "Les rendez-vous peuvent être pris au maximum {months} mois à l'avance "
@@ -172,7 +184,9 @@ STRINGS: dict[str, str] = {
     "notif_prefs_saved": "✅ Vous recevrez des rappels personnels pour :\n{list}",
 
     # -- rubriques de /help --
-    "help_topic_hint": "Pour les détails d'une commande, envoyez `/help <commande>` (p. ex. `/help appointment`).",
+    "help_topic_hint": (
+        "Pour les détails d'une commande, envoyez `/help <commande>` (p. ex. `/help appointment`)."
+    ),
     "help_unknown_topic": "Je n'ai pas d'aide pour cela. Essayez : {topics}",
     "help_appointment": (
         "*/appointment* — Demandez un rendez-vous avec un responsable de l'église.\n\n"
@@ -185,7 +199,8 @@ STRINGS: dict[str, str] = {
     ),
     "help_cancelappointment": (
         "*/cancelappointment* — Annulez un rendez-vous à venir. Choisissez-le dans la liste "
-        "et confirmez. L'autre partie est prévenue. Les rendez-vous passés ne peuvent pas être annulés."
+        "et confirmez. L'autre partie est prévenue. Les rendez-vous passés ne peuvent "
+        "pas être annulés."
     ),
     "help_reschedule": (
         "*/reschedule* — Proposez un nouvel horaire pour un rendez-vous à venir. Choisissez-le, "
@@ -202,7 +217,8 @@ STRINGS: dict[str, str] = {
     ),
     "help_settimezone": (
         "*/settimezone* — Définissez votre fuseau horaire pour afficher dates et heures en heure "
-        "locale. Appuyez sur un fuseau courant ou saisissez un nom IANA (p. ex. `America/New_York`)."
+        "locale. Appuyez sur un fuseau courant ou saisissez un nom IANA "
+        "(p. ex. `America/New_York`)."
     ),
     "help_language": "*/language* — Choisissez la langue que le bot utilise avec vous.",
     "help_notifications": (

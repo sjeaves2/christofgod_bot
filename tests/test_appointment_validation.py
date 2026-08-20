@@ -130,7 +130,8 @@ class TestHelpers:
         assert _count_active_appts_with_official(appts, 111, "off1", self._end(days=0)) == 1
 
     def test_counts_multiple(self):
-        from handlers.appointments import APPOINTMENT_MAX_PER_WINDOW, _count_active_appts_with_official
+        from handlers.appointments import (APPOINTMENT_MAX_PER_WINDOW,
+                                          _count_active_appts_with_official)
         appts = [self._at(d, i=d) for d in (1, 3, 5, 7)]
         assert _count_active_appts_with_official(appts, 111, "off1", self._end(days=8)) == 4
         assert APPOINTMENT_MAX_PER_WINDOW == 4

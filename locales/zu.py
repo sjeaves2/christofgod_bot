@@ -60,10 +60,18 @@ STRINGS: dict[str, str] = {
     "resched_list_header": "*Hlela kabusha i-aphoyintimenti*\nKhetha elilodwa ukulihlela kabusha:",
     "resched_ask_time": "Faka usuku nesikhathi esisha (YYYY-MM-DD HH:MM):",
     "resched_bad_format": "Sicela usebenzise ifomethi ethi YYYY-MM-DD HH:MM:",
-    "resched_past": "Lelo suku/sikhathi seludlulile. Sicela ufake isikhathi esizayo (YYYY-MM-DD HH:MM):",
-    "resched_overlap": "Leso sikhathi sigxubha nelinye lama-aphoyintimenti akho. Sicela ukhethe esinye isikhathi (YYYY-MM-DD HH:MM):",
+    "resched_past": (
+        "Lelo suku/sikhathi seludlulile. Sicela ufake isikhathi esizayo (YYYY-MM-DD HH:MM):"
+    ),
+    "resched_overlap": (
+        "Leso sikhathi sigxubha nelinye lama-aphoyintimenti akho. Sicela ukhethe esinye isikhathi "
+        "(YYYY-MM-DD HH:MM):"
+    ),
     "resched_no_longer": "Lelo aphoyintimenti ngeke lisahlelwa kabusha.",
-    "resched_sent": "✅ Isicelo sakho sokuhlela kabusha sithunyeliwe. Uzokwaziswa lapho samukelwa noma senqatshelwa.",
+    "resched_sent": (
+        "✅ Isicelo sakho sokuhlela kabusha sithunyeliwe. Uzokwaziswa lapho samukelwa noma "
+        "senqatshelwa."
+    ),
     "cancel_done_by_official_to_user": (
         "❌ I-aphoyintimenti yakho (I-ID: `{id}`) no-*{official}* "
         "ikhanselwe yisikhulu."
@@ -174,7 +182,9 @@ STRINGS: dict[str, str] = {
     "notif_prefs_saved": "✅ Uzothola izikhumbuzo zomuntu siqu ze-:\n{list}",
 
     # -- izihloko ze-/help --
-    "help_topic_hint": "Ukuthola imininingwane ngomyalo, thumela `/help <umyalo>` (isb. `/help appointment`).",
+    "help_topic_hint": (
+        "Ukuthola imininingwane ngomyalo, thumela `/help <umyalo>` (isb. `/help appointment`)."
+    ),
     "help_unknown_topic": "Anginalo usizo ngalokho. Zama okukodwa kwalokhu: {topics}",
     "help_appointment": (
         "*/appointment* — Cela umhlangano nesikhulu sebandla.\n\n"
@@ -186,7 +196,8 @@ STRINGS: dict[str, str] = {
         "*/myappointments* — Bonisa ama-aphoyintimenti akho azayo nadlule kanye nesimo sawo."
     ),
     "help_cancelappointment": (
-        "*/cancelappointment* — Khansela i-aphoyintimenti ezayo. Yikhethe ohlwini bese uqinisekisa. "
+        "*/cancelappointment* — Khansela i-aphoyintimenti ezayo. Yikhethe ohlwini "
+        "bese uqinisekisa. "
         "Elinye iqembu liyaziswa. Ama-aphoyintimenti adlule ngeke akhanselwe."
     ),
     "help_reschedule": (

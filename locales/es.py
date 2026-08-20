@@ -58,9 +58,14 @@ STRINGS: dict[str, str] = {
     "resched_ask_time": "Ingresa la nueva fecha y hora (YYYY-MM-DD HH:MM):",
     "resched_bad_format": "Usa el formato YYYY-MM-DD HH:MM:",
     "resched_past": "Esa fecha/hora ya pasó. Ingresa una hora futura (YYYY-MM-DD HH:MM):",
-    "resched_overlap": "Esa hora se solapa con otra de tus citas. Elige otra hora (YYYY-MM-DD HH:MM):",
+    "resched_overlap": (
+        "Esa hora se solapa con otra de tus citas. Elige otra hora (YYYY-MM-DD HH:MM):"
+    ),
     "resched_no_longer": "Esa cita ya no se puede reprogramar.",
-    "resched_sent": "✅ Tu solicitud de reprogramación ha sido enviada. Se te notificará cuando sea aceptada o rechazada.",
+    "resched_sent": (
+        "✅ Tu solicitud de reprogramación ha sido enviada. Se te notificará cuando sea aceptada o "
+        "rechazada."
+    ),
     "cancel_done_by_official_to_user": (
         "❌ Tu cita (ID: `{id}`) con *{official}* "
         "ha sido cancelada por el oficial."
@@ -171,7 +176,9 @@ STRINGS: dict[str, str] = {
     "notif_prefs_saved": "✅ Recibirás recordatorios personales de:\n{list}",
 
     # -- temas de /help --
-    "help_topic_hint": "Para más detalles de un comando, envía `/help <comando>` (p. ej. `/help appointment`).",
+    "help_topic_hint": (
+        "Para más detalles de un comando, envía `/help <comando>` (p. ej. `/help appointment`)."
+    ),
     "help_unknown_topic": "No tengo ayuda para eso. Prueba con: {topics}",
     "help_appointment": (
         "*/appointment* — Solicita una reunión con un oficial de la iglesia.\n\n"
