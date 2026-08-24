@@ -33,8 +33,11 @@ paths:
   generated_dir: "generated"
 
 log:
-  # Keep log records for this many days (6 months ≈ 180 days)
-  retention_days: 180
+  # Keep activity-log records (logs/bot_activity.log) for this many days
+  retention_days: 90
+  # Keep runtime-log records (logs/bot.log) for this many days. Shorter: it is
+  # far more verbose and is only useful for recent debugging.
+  runtime_retention_days: 45
   # Console/file verbosity. INFO shows command execution and notification
   # broadcasts; DEBUG additionally shows the underlying Telegram API calls.
   level: INFO

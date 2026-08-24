@@ -33,6 +33,20 @@ ADMIN_PHONES: set[str] = {
 # chat_id → True for admins identified by phone after they /start the bot
 _admin_chat_ids: set[int] = set()
 
+# "Ops" admins additionally receive error alerts (see error_reporting.py).
+OPS_USERNAMES: set[str] = {
+    a["username"].lstrip("@").lower()
+    for a in _admins_raw.get("admins", [])
+    if a.get("username") and a.get("ops")
+}
+OPS_PHONES: set[str] = {
+    re.sub(r"\D", "", a["phone"])
+    for a in _admins_raw.get("admins", [])
+    if a.get("phone") and a.get("ops")
+}
+# Ops admins recognised so far by chat_id (populated the same way as admins).
+_ops_chat_ids: set[int] = set()
+
 # Officials. Loaded in ruamel round-trip mode because the bot rewrites this
 # file (auto-filled chat_ids, /enable_appt_proxies) and admins hand-edit it —
 # round-trip keeps their comments and formatting intact. OFFICIALS is the live
@@ -69,12 +83,16 @@ async def _register_admin_by_phone(user_id: int, phone: str | None) -> None:
     normalized = re.sub(r"\D", "", phone)
     if normalized in ADMIN_PHONES:
         _admin_chat_ids.add(user_id)
+    if normalized in OPS_PHONES:
+        _ops_chat_ids.add(user_id)
 
 
 async def _register_admin_by_username(user_id: int, username: str | None) -> None:
     """Cache chat_id for username-based admins (no-op if already in set)."""
     if (username or "").lower() in ADMIN_USERNAMES:
         _admin_chat_ids.add(user_id)
+    if (username or "").lower() in OPS_USERNAMES:
+        _ops_chat_ids.add(user_id)
 
 
 def _is_known_official(user_id: int, username: str | None) -> bool:
