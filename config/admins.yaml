@@ -2,12 +2,17 @@
 # username: Telegram username without the leading @
 # phone:    Phone number as registered with Telegram (digits only, no + or spaces)
 # Both may be supplied; the bot will match on either.
+#
+# ops:  optional. Admins with `ops: true` receive direct-message alerts when the
+#       bot hits an unhandled exception (see logs/errors.log for full traces).
+#       They must have run /start at least once so the bot knows their chat_id.
 admins:
   - username: "OneMorah"
     display_name: "Pastor Christel Williams Crowdy"
 
   - username: "sjeaves2"
     display_name: "Bishop Samuel Eaves, II"
+    ops: true
 
   - username: "curtisadairjr"
     display_name: "Evangelist-at-Large Curtis Adair, Jr"

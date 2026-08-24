@@ -50,11 +50,16 @@ from telegram.ext import (
 # that they are used inside main()'s handler construction.
 # ---------------------------------------------------------------------------
 
+from activity_logger import prune_log_file
 from settings import (  # noqa: F401
     BOT_DISPLAY_NAME,
     BOT_TOKEN,
+    LOGS_DIR,
+    RUNTIME_LOG_RETENTION,
+    TZ,
     activity,
 )
+import error_reporting
 import permissions
 import storage
 
@@ -196,6 +201,7 @@ from handlers.notifications import (  # noqa: F401
     notification_catchup_job,
     schedule_all_upcoming,
 )
+from handlers.stats import cmd_stats  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -247,10 +253,17 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def daily_maintenance_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Daily: archive long-past appointments, purge the appointment archive,
-    and purge long-expired announcements."""
+    purge long-expired announcements, and trim the runtime log.
+
+    bot.log is pruned here as well as at startup so a bot that stays up for
+    months does not accumulate an unbounded file.
+    """
     await archive_old_appointments()
     await purge_archived_appointments()
     await purge_old_announcements()
+    removed = prune_log_file(LOGS_DIR / "bot.log", RUNTIME_LOG_RETENTION, TZ)
+    if removed:
+        logger.info("Daily maintenance pruned %d old log line(s).", removed)
 
 
 # ---------------------------------------------------------------------------
@@ -406,8 +419,36 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 # ---------------------------------------------------------------------------
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log every unhandled exception and alert ops admins.
+
+    error_reporting assigns an error id, writes the full traceback to
+    logs/errors.log, and applies the de-duplication and transient-network
+    rules before messaging anyone.
+    """
     logger.error("Unhandled exception:", exc_info=context.error)
-    activity.log_error(str(context.error))
+    exc = context.error
+    if not isinstance(exc, BaseException):
+        # PTB normally supplies an exception; be tolerant of anything else.
+        activity.log_error(str(exc))
+        return
+    note = _error_context_note(update)
+    try:
+        await error_reporting.report_exception(context.bot, exc, note)
+    except Exception:  # noqa: BLE001 - reporting must never mask the original
+        logger.exception("Error reporting itself failed")
+
+
+def _error_context_note(update: object) -> str:
+    """Short description of what the user was doing when the error happened."""
+    user = getattr(update, "effective_user", None)
+    message = getattr(update, "effective_message", None)
+    parts = []
+    if user is not None and getattr(user, "id", None):
+        parts.append(f"user {user.id}")
+    text = getattr(message, "text", None)
+    if text:
+        parts.append(f"input {text.split()[0]!r}")
+    return ", ".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -415,6 +456,8 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 # ---------------------------------------------------------------------------
 
 async def post_init(app: Application) -> None:
+    # A restart usually means new code, so last run's traces are stale.
+    error_reporting.reset_error_log()
     await schedule_all_upcoming(app)
 
     # Set bot commands
@@ -621,6 +664,7 @@ def main() -> None:
     app.add_handler(CommandHandler("usercount", cmd_usercount))
     app.add_handler(CommandHandler("userlist", cmd_userlist))
     app.add_handler(CommandHandler("listevents", cmd_listevents))
+    app.add_handler(CommandHandler("stats", cmd_stats))
 
     app.add_handler(add_event_conv)
     app.add_handler(modify_event_conv)
