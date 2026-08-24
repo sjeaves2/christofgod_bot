@@ -335,3 +335,43 @@ class TestCommandHookTriggersDriftCheck:
         warn.assert_awaited_once()
         assert warn.await_args[0][1] == 999
         assert warn.await_args[0][2] == "pastornew"
+
+
+# ---------------------------------------------------------------------------
+# Startup / maintenance log housekeeping
+# ---------------------------------------------------------------------------
+
+class TestLogHousekeeping:
+    def test_post_init_clears_last_runs_error_log(self):
+        """A restart usually means new code, so stale traces are discarded."""
+        import bot
+        app = MagicMock()
+        app.bot.set_my_commands = AsyncMock()
+        app.job_queue = MagicMock()
+        reset = MagicMock(return_value=0)
+
+        async def _noop_sched(_app):
+            pass
+
+        with patch("bot.schedule_all_upcoming", side_effect=_noop_sched), \
+             patch("error_reporting.reset_error_log", reset):
+            _run(bot.post_init(app))
+        reset.assert_called_once()
+
+    def test_daily_maintenance_prunes_runtime_log(self):
+        import bot
+        prune = MagicMock(return_value=7)
+
+        async def _noop():
+            return 0
+
+        with patch("bot.archive_old_appointments", side_effect=_noop), \
+             patch("bot.purge_archived_appointments", side_effect=_noop), \
+             patch("bot.purge_old_announcements", side_effect=_noop), \
+             patch("bot.prune_log_file", prune):
+            _run(bot.daily_maintenance_job(MagicMock()))
+        prune.assert_called_once()
+        assert str(prune.call_args[0][0]).endswith("bot.log")
+        # bot.log uses the shorter runtime window (45d), not the activity
+        # log's 90d retention.
+        assert prune.call_args[0][1] == bot.RUNTIME_LOG_RETENTION == 45

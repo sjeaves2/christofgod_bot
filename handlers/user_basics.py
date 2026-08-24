@@ -58,6 +58,7 @@ ADMIN_COMMANDS_TEXT = """\
 /listevents — events in the next 30 days (admin view)
 /usercount — number of registered users
 /userlist — list registered users
+/stats — usage and system stats (/stats usage, /stats 30)
 /adminhelp — show this list"""
 
 
