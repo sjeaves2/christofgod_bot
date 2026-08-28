@@ -1,0 +1,52 @@
+# systemd unit for the Christ of God Ministries bot.
+#
+# Install:
+#   sudo cp deploy/christofgod-bot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now christofgod-bot
+#
+# The paths below assume the Lightsail default user "ubuntu" and a clone at
+# /home/ubuntu/christofgod_bot. Adjust User/WorkingDirectory/ExecStart if you
+# clone elsewhere.
+
+[Unit]
+Description=Christ of God Ministries Telegram bot
+Documentation=https://github.com/sjeaves2/christofgod_bot
+# Wait for real network connectivity: the bot long-polls api.telegram.org and
+# would otherwise log a burst of connection errors at every boot.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/christofgod_bot
+ExecStart=/home/ubuntu/christofgod_bot/.venv/bin/python bot.py
+
+# Keep it running: restart on crash, on a failed Telegram session, or after a
+# reboot. StartLimit* stops a genuinely broken build (bad config, missing
+# dependency) from restart-looping forever — it gives up after 5 tries in 5
+# minutes, which is visible in `systemctl status`.
+Restart=always
+RestartSec=10
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# Unbuffered output so journalctl shows log lines as they happen.
+Environment=PYTHONUNBUFFERED=1
+
+# Modest hardening. The bot only needs to read its own directory and write
+# data/, logs/ and generated/ inside it.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/christofgod_bot
+
+# journald keeps a copy of stdout/stderr; the bot also writes logs/bot.log.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
