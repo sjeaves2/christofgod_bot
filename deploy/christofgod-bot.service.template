@@ -1,13 +1,15 @@
-# systemd unit for the Christ of God Ministries bot.
+# systemd unit TEMPLATE for the Christ of God Ministries bot.
 #
-# Install:
-#   sudo cp deploy/christofgod-bot.service /etc/systemd/system/
-#   sudo systemctl daemon-reload
-#   sudo systemctl enable --now christofgod-bot
+# __REPO_DIR__ and __RUN_USER__ are substituted by deploy/setup.sh, which
+# renders this to /etc/systemd/system/christofgod-bot.service. That keeps the
+# deployment independent of where the repository is cloned (~/christofgod_bot,
+# ~/repos/christofgod_bot, /opt/...) and of which user runs it.
 #
-# The paths below assume the Lightsail default user "ubuntu" and a clone at
-# /home/ubuntu/christofgod_bot. Adjust User/WorkingDirectory/ExecStart if you
-# clone elsewhere.
+# To install by hand instead:
+#   sed -e "s|__REPO_DIR__|$PWD|g" -e "s|__RUN_USER__|$(id -un)|g" \
+#       deploy/christofgod-bot.service.template |
+#     sudo tee /etc/systemd/system/christofgod-bot.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now christofgod-bot
 
 [Unit]
 Description=Christ of God Ministries Telegram bot
@@ -19,10 +21,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=ubuntu
-Group=ubuntu
-WorkingDirectory=/home/ubuntu/christofgod_bot
-ExecStart=/home/ubuntu/christofgod_bot/.venv/bin/python bot.py
+User=__RUN_USER__
+Group=__RUN_USER__
+WorkingDirectory=__REPO_DIR__
+ExecStart=__REPO_DIR__/.venv/bin/python bot.py
 
 # Keep it running: restart on crash, on a failed Telegram session, or after a
 # reboot. StartLimit* stops a genuinely broken build (bad config, missing
@@ -42,7 +44,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=read-only
-ReadWritePaths=/home/ubuntu/christofgod_bot
+ReadWritePaths=__REPO_DIR__
 
 # journald keeps a copy of stdout/stderr; the bot also writes logs/bot.log.
 StandardOutput=journal
