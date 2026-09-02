@@ -18,7 +18,13 @@ cd "$REPO_DIR"
 
 echo "==> Installing system packages"
 sudo apt-get update -qq
-sudo apt-get install -y -qq python3 python3-venv python3-pip git
+sudo apt-get install -y -qq python3 python3-venv python3-pip git unattended-upgrades
+
+# Automatic security patches. This machine sits on the internet unattended for
+# months at a time, so unapplied kernel/OpenSSL fixes are the realistic risk.
+# Idempotent: re-running simply confirms the existing configuration.
+echo "==> Enabling automatic security updates"
+sudo dpkg-reconfigure -f noninteractive unattended-upgrades
 
 echo "==> Creating virtualenv (if absent)"
 if [ ! -d "$VENV" ]; then
