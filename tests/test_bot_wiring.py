@@ -375,3 +375,74 @@ class TestLogHousekeeping:
         # bot.log uses the shorter runtime window (45d), not the activity
         # log's 90d retention.
         assert prune.call_args[0][1] == bot.RUNTIME_LOG_RETENTION == 45
+
+
+class TestScheduledJobs:
+    """main() must actually register the jobs — a handler that is never
+    scheduled looks identical to one that is, until the night it doesn't run."""
+
+    def _built_app(self):
+        import warnings
+        import bot
+        built = {}
+
+        class FakeApp:
+            def __init__(self):
+                self.handlers = []
+                self.job_queue = MagicMock()
+                self.bot = MagicMock()
+                self.bot.set_my_commands = AsyncMock()
+
+            def add_handler(self, h, group=0):
+                self.handlers.append(h)
+
+            def add_error_handler(self, h):
+                pass
+
+            def run_polling(self, **kw):
+                pass
+
+        fake = FakeApp()
+
+        class FakeBuilder:
+            def token(self, t):
+                return self
+
+            def post_init(self, f):
+                built["post_init"] = f
+                return self
+
+            def build(self):
+                return fake
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with patch.object(bot.Application, "builder",
+                              staticmethod(lambda: FakeBuilder())):
+                bot.main()
+
+        # Jobs are registered in post_init, not main(), so run it too.
+        async def _noop_sched(_app):
+            pass
+
+        with patch("bot.schedule_all_upcoming", side_effect=_noop_sched), \
+             patch("error_reporting.reset_error_log"):
+            _run(built["post_init"](fake))
+        return fake
+
+    def test_nightly_backup_scheduled_at_backup_time(self):
+        import bot
+        from handlers.backup import BACKUP_TIME, nightly_backup_job
+        fake = self._built_app()
+        daily = fake.job_queue.run_daily.call_args_list
+        assert daily, "run_daily was never called — no nightly backup"
+        scheduled = [(c.args[0] if c.args else c.kwargs.get("callback"),
+                      c.kwargs.get("time")) for c in daily]
+        assert (nightly_backup_job, BACKUP_TIME) in scheduled
+        assert bot is not None
+
+    def test_backup_command_registered(self):
+        fake = self._built_app()
+        commands = {c for h in fake.handlers
+                    for c in (getattr(h, "commands", None) or [])}
+        assert "backup" in commands
