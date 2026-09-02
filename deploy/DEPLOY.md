@@ -134,29 +134,35 @@ ssh -T git@github.com    # "Hi sjeaves2/christofgod_bot! You've successfully aut
 
 ## 4. Clone and provision
 
+Clone wherever you like — the scripts locate themselves, and `setup.sh`
+renders the systemd unit for whatever path and user it finds. These examples
+use `~/repos/christofgod_bot`; `~/christofgod_bot` or `/opt/...` work equally.
+
 ```bash
-git clone git@github.com:sjeaves2/christofgod_bot.git ~/christofgod_bot
-cd ~/christofgod_bot
+mkdir -p ~/repos
+git clone git@github.com:sjeaves2/christofgod_bot.git ~/repos/christofgod_bot
+cd ~/repos/christofgod_bot
 ```
 
 `config/config.yaml` and `data/` are gitignored, so copy them from your laptop.
-**On your laptop**, from the repository root:
+**On your laptop**, from the repository root — passing the remote path as the
+second argument if it is not the default `christofgod_bot`:
 
 ```bash
-./deploy/migrate.sh ubuntu@<your-ip>
+./deploy/migrate.sh ubuntu@<your-ip> repos/christofgod_bot
 ```
 
 That copies `config/*.yaml` and `data/`, and deliberately **skips `logs/`** —
 see "Before you migrate" below. Then back **on the server**:
 
 ```bash
-cd ~/christofgod_bot && ./deploy/setup.sh
+cd ~/repos/christofgod_bot && ./deploy/setup.sh
 ```
 
 `setup.sh` installs Python and dependencies, enables automatic security
 updates, refuses to continue if the config is missing or still holds the
-placeholder token, verifies the bot imports, then installs and starts the
-systemd service. It is idempotent — safe to re-run, and it never touches
+placeholder token, verifies the bot imports, then renders the systemd unit for
+this checkout's path and user and starts the service. It is idempotent — safe to re-run, and it never touches
 `config/config.yaml` or `data/`.
 
 ## 5. Confirm it works
@@ -178,8 +184,8 @@ first occurrence.
 ## Updating
 
 ```bash
-cd ~/christofgod_bot && ./deploy/update.sh          # latest main
-cd ~/christofgod_bot && ./deploy/update.sh v0.9.0   # a specific release
+cd ~/repos/christofgod_bot && ./deploy/update.sh          # latest main
+cd ~/repos/christofgod_bot && ./deploy/update.sh v0.9.0   # a specific release
 ```
 
 `update.sh` refuses to run with local modifications, verifies the new code
