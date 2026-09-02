@@ -65,7 +65,14 @@ echo "==> Verifying the bot imports cleanly"
 "$VENV/bin/python" -c "import bot" > /dev/null
 
 echo "==> Installing the systemd service"
-sudo cp "deploy/${SERVICE_NAME}.service" "/etc/systemd/system/${SERVICE_NAME}.service"
+# Rendered from a template so the unit matches wherever this repo actually
+# lives and whoever runs it — no editing needed for ~/christofgod_bot,
+# ~/repos/christofgod_bot, /opt/christofgod_bot, or a non-"ubuntu" user.
+RUN_USER="$(id -un)"
+sed -e "s|__REPO_DIR__|${REPO_DIR}|g" -e "s|__RUN_USER__|${RUN_USER}|g" \
+    "deploy/${SERVICE_NAME}.service.template" \
+    | sudo tee "/etc/systemd/system/${SERVICE_NAME}.service" > /dev/null
+echo "    service will run as ${RUN_USER} from ${REPO_DIR}"
 sudo systemctl daemon-reload
 sudo systemctl enable "$SERVICE_NAME"
 
