@@ -59,6 +59,7 @@ ADMIN_COMMANDS_TEXT = """\
 /usercount — number of registered users
 /userlist — list registered users
 /stats — usage and system stats (/stats usage, /stats 30)
+/backup — send a data backup now (also runs nightly at 3am)
 /adminhelp — show this list"""
 
 
