@@ -201,6 +201,11 @@ from handlers.notifications import (  # noqa: F401
     notification_catchup_job,
     schedule_all_upcoming,
 )
+from handlers.backup import (  # noqa: F401
+    BACKUP_TIME,
+    cmd_backup,
+    nightly_backup_job,
+)
 from handlers.stats import cmd_stats  # noqa: F401
 
 logger = logging.getLogger(__name__)
@@ -503,6 +508,14 @@ async def post_init(app: Application) -> None:
         name="appointment_reminders",
     )
 
+    # Nightly backup of data/ — DM'd to ops admins at 3am church time. The YAML
+    # stores are the only copy of registrations and appointments.
+    app.job_queue.run_daily(
+        nightly_backup_job,
+        time=BACKUP_TIME,
+        name="nightly_backup",
+    )
+
     # Daily maintenance: archive/purge old appointments and purge long-expired
     # announcements (runs shortly after each startup, then every 24h).
     app.job_queue.run_repeating(
@@ -665,6 +678,7 @@ def main() -> None:
     app.add_handler(CommandHandler("userlist", cmd_userlist))
     app.add_handler(CommandHandler("listevents", cmd_listevents))
     app.add_handler(CommandHandler("stats", cmd_stats))
+    app.add_handler(CommandHandler("backup", cmd_backup))
 
     app.add_handler(add_event_conv)
     app.add_handler(modify_event_conv)
