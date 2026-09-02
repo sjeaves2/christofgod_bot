@@ -330,3 +330,166 @@ class TestCmdStats:
         with patch("permissions.is_admin", return_value=False):
             _run(st.cmd_stats(upd, ctx))
         assert "Unknown command" in upd.message.reply_text.call_args[0][0]
+
+
+# ---------------------------------------------------------------------------
+# Scheduler / notification-engine health
+# ---------------------------------------------------------------------------
+
+class _Job:
+    """Stand-in for telegram.ext.Job (only .name and .next_t are read)."""
+
+    def __init__(self, name, next_t=None):
+        self.name = name
+        self.next_t = next_t
+
+
+class _Queue:
+    def __init__(self, jobs, raises=False):
+        self._jobs = jobs
+        self._raises = raises
+
+    def jobs(self):
+        if self._raises:
+            raise RuntimeError("scheduler unavailable")
+        return self._jobs
+
+
+class TestSchedulerSnapshot:
+    def test_none_without_a_queue(self):
+        assert st.scheduler_snapshot(None) is None
+
+    def test_counts_event_reminder_jobs(self):
+        now = datetime.now(TZ)
+        q = _Queue([_Job("notif_a", now + timedelta(hours=2)),
+                    _Job("notif_b", now + timedelta(hours=9))])
+        snap = st.scheduler_snapshot(q, now)
+        assert snap["event_jobs"] == 2
+
+    def test_reports_the_soonest_reminder(self):
+        now = datetime.now(TZ)
+        q = _Queue([_Job("notif_later", now + timedelta(hours=9)),
+                    _Job("notif_soon", now + timedelta(hours=2))])
+        snap = st.scheduler_snapshot(q, now)
+        assert snap["next_event_name"] == "soon"
+        assert snap["next_event_at"] == now + timedelta(hours=2)
+
+    def test_recurring_jobs_listed_separately(self):
+        now = datetime.now(TZ)
+        q = _Queue([_Job("notif_a", now + timedelta(hours=1)),
+                    _Job("nightly_backup", now + timedelta(hours=10)),
+                    _Job("daily_maintenance", now + timedelta(hours=20))])
+        snap = st.scheduler_snapshot(q, now)
+        assert snap["event_jobs"] == 1
+        assert set(snap["recurring"]) == {"nightly_backup", "daily_maintenance"}
+
+    def test_empty_queue_reports_zero(self):
+        snap = st.scheduler_snapshot(_Queue([]), datetime.now(TZ))
+        assert snap["event_jobs"] == 0
+        assert snap["next_event_at"] is None
+
+    def test_jobs_without_a_next_time_are_not_offered_as_next(self):
+        """A removed/exhausted job has next_t None and must not be picked."""
+        now = datetime.now(TZ)
+        q = _Queue([_Job("notif_dead", None), _Job("notif_live", now + timedelta(hours=3))])
+        snap = st.scheduler_snapshot(q, now)
+        assert snap["next_event_name"] == "live"
+
+    def test_unreadable_queue_does_not_break_stats(self):
+        assert st.scheduler_snapshot(_Queue([], raises=True)) is None
+
+
+class TestLastEntryOf:
+    def test_finds_most_recent_of_the_kind(self, tmp_path):
+        now = datetime.now(TZ)
+        p = _write_log(tmp_path, [
+            _log_line(now - timedelta(days=9), "NOTIFICATION",
+                      "Sent notification for 'A' to 2 user(s)"),
+            _log_line(now - timedelta(days=2), "NOTIFICATION",
+                      "Sent notification for 'B' to 5 user(s)"),
+            _log_line(now, "COMMAND", "/events"),
+        ])
+        with patch.object(st, "ACTIVITY_LOG", p):
+            found = st.last_entry_of("NOTIFICATION")
+        assert "'B'" in found["detail"]
+
+    def test_looks_beyond_the_report_period(self, tmp_path):
+        """'No reminder in 7 days' is ambiguous; '30 days ago' is actionable."""
+        now = datetime.now(TZ)
+        p = _write_log(tmp_path, [
+            _log_line(now - timedelta(days=30), "NOTIFICATION",
+                      "Sent notification for 'Old' to 1 user(s)"),
+        ])
+        with patch.object(st, "ACTIVITY_LOG", p):
+            found = st.last_entry_of("NOTIFICATION")
+        assert found is not None and "Old" in found["detail"]
+
+    def test_none_when_kind_never_occurred(self, tmp_path):
+        now = datetime.now(TZ)
+        p = _write_log(tmp_path, [_log_line(now, "COMMAND", "/events")])
+        with patch.object(st, "ACTIVITY_LOG", p):
+            assert st.last_entry_of("NOTIFICATION") is None
+
+    def test_missing_log_is_tolerated(self, tmp_path):
+        with patch.object(st, "ACTIVITY_LOG", tmp_path / "absent.log"):
+            assert st.last_entry_of("NOTIFICATION") is None
+
+
+class TestSystemReportScheduler:
+    def _report(self, tmp_path, lines=(), queue=None, now=None):
+        now = now or datetime.now(TZ)
+        p = _write_log(tmp_path, list(lines))
+        with patch.object(st, "ACTIVITY_LOG", p):
+            return st.build_system_report(7, False, now, job_queue=queue)
+
+    def test_shows_scheduled_count_and_next(self, tmp_path):
+        now = datetime.now(TZ)
+        q = _Queue([_Job("notif_sabbath_eve", now + timedelta(hours=4))])
+        text = self._report(tmp_path, queue=q, now=now)
+        assert "*Event reminders scheduled:* 1" in text
+        assert "sabbath\\_eve" in text          # escaped for Markdown
+        assert "in 4h" in text
+
+    def test_warns_when_nothing_is_queued(self, tmp_path):
+        """The failure this whole section exists to surface."""
+        text = self._report(tmp_path, queue=_Queue([]))
+        assert "none queued" in text
+
+    def test_lists_recurring_jobs(self, tmp_path):
+        now = datetime.now(TZ)
+        q = _Queue([_Job("nightly_backup", now + timedelta(hours=6))])
+        text = self._report(tmp_path, queue=q, now=now)
+        assert "nightly\\_backup" in text
+
+    def test_reports_last_delivered_reminder(self, tmp_path):
+        now = datetime.now(TZ)
+        lines = [_log_line(now - timedelta(days=3), "NOTIFICATION",
+                           "Sent notification for 'Sabbath' to 4 user(s)")]
+        text = self._report(tmp_path, lines, queue=_Queue([]), now=now)
+        assert "*Last reminder delivered:*" in text
+        assert "3d" in text
+
+    def test_reports_when_none_on_record(self, tmp_path):
+        text = self._report(tmp_path, queue=_Queue([]))
+        assert "none on record" in text
+
+    def test_section_degrades_without_a_queue(self, tmp_path):
+        text = self._report(tmp_path, queue=None)
+        assert "_unavailable_" in text
+
+    def test_report_still_renders_when_queue_errors(self, tmp_path):
+        text = self._report(tmp_path, queue=_Queue([], raises=True))
+        assert "*Uptime:*" in text        # the rest of the report survives
+
+
+class TestCmdStatsPassesJobQueue:
+    def test_job_queue_reaches_the_report(self):
+        ctx = MagicMock()
+        ctx.args = []
+        sentinel = _Queue([])
+        ctx.application.job_queue = sentinel
+        upd = _upd()
+        with patch("permissions.is_admin", return_value=True), \
+             patch.object(st, "build_system_report", return_value="OK") as report:
+            _run(st.cmd_stats(upd, ctx))
+        assert report.call_args.kwargs.get("job_queue") is sentinel

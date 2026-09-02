@@ -95,6 +95,67 @@ def read_activity(days: int, now: "datetime | None" = None) -> list[dict]:
     return entries
 
 
+def last_entry_of(kind: str) -> "dict | None":
+    """Most recent activity entry of *kind*, scanning the whole log.
+
+    Deliberately not limited to the report period: "no reminder in the last 7
+    days" is ambiguous, while "last reminder was 12 days ago" is a fact you can
+    act on.
+    """
+    latest = None
+    try:
+        with open(ACTIVITY_LOG, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                m = _LINE_RE.match(line.rstrip("\n"))
+                if not m or m.group("kind") != kind:
+                    continue
+                try:
+                    stamp = TZ.localize(
+                        datetime.strptime(m.group("ts"), "%Y-%m-%d %H:%M:%S"))
+                except (ValueError, TypeError):
+                    continue
+                if latest is None or stamp > latest["at"]:
+                    latest = {"at": stamp, "detail": m.group("detail")}
+    except FileNotFoundError:
+        return None
+    return latest
+
+
+def scheduler_snapshot(job_queue, now: "datetime | None" = None) -> "dict | None":
+    """What the job queue currently holds.
+
+    Reminder delivery depends on one-shot jobs being scheduled ahead of time.
+    If scheduling silently stopped, nothing else in this report would reveal it
+    — you would simply notice a missed Sabbath reminder.
+    """
+    if job_queue is None:
+        return None
+    now = now or now_tz()
+    try:
+        jobs = list(job_queue.jobs())
+    except Exception:      # noqa: BLE001 - diagnostics must never break /stats
+        logger.warning("Could not read the job queue", exc_info=True)
+        return None
+
+    event_jobs, recurring = [], {}
+    for job in jobs:
+        name = job.name or "(unnamed)"
+        if name.startswith("notif_"):
+            event_jobs.append(job)
+        else:
+            recurring[name] = getattr(job, "next_t", None)
+
+    upcoming = [j for j in event_jobs if getattr(j, "next_t", None) is not None]
+    upcoming.sort(key=lambda j: j.next_t)
+    nxt = upcoming[0] if upcoming else None
+    return {
+        "event_jobs": len(event_jobs),
+        "next_event_name": (nxt.name or "").replace("notif_", "") if nxt else None,
+        "next_event_at": nxt.next_t if nxt else None,
+        "recurring": recurring,
+    }
+
+
 def _fmt_duration(delta: timedelta) -> str:
     total = int(delta.total_seconds())
     days, rem = divmod(total, 86400)
@@ -118,8 +179,9 @@ def _notification_recipients(detail: str) -> int:
     return int(m.group(1)) if m else 0
 
 
-def build_system_report(days: int, clamped: bool, now: "datetime | None" = None) -> str:
-    """Health view: uptime, error volume, and what the most recent errors were."""
+def build_system_report(days: int, clamped: bool, now: "datetime | None" = None,
+                        job_queue=None) -> str:
+    """Health view: uptime, scheduler state, error volume, recent errors."""
     now = now or now_tz()
     entries = read_activity(days, now)
     errors = [e for e in entries if e["kind"] == "ERROR"]
@@ -129,6 +191,35 @@ def build_system_report(days: int, clamped: bool, now: "datetime | None" = None)
     lines.append(f"*Uptime:* {_fmt_duration(now - STARTED_AT)} "
                  f"(since {STARTED_AT.strftime('%Y-%m-%d %H:%M %Z')})")
     lines.append(f"*Activity entries in period:* {len(entries)}")
+
+    # --- scheduler / notification engine ---
+    lines.append("")
+    snap = scheduler_snapshot(job_queue, now)
+    if snap is None:
+        lines.append("*Scheduler:* _unavailable_")
+    else:
+        lines.append(f"*Event reminders scheduled:* {snap['event_jobs']}")
+        if snap["next_event_at"]:
+            when = snap["next_event_at"].astimezone(TZ)
+            lines.append(f"  next: {md(snap['next_event_name'] or '?')} "
+                         f"— {when.strftime('%Y-%m-%d %H:%M %Z')} "
+                         f"(in {_fmt_duration(when - now)})")
+        elif snap["event_jobs"] == 0:
+            lines.append("  ⚠️ none queued — no upcoming event has a reminder pending")
+        for name in sorted(snap["recurring"]):
+            nxt = snap["recurring"][name]
+            when = (f"{nxt.astimezone(TZ).strftime('%H:%M %Z')} "
+                    f"(in {_fmt_duration(nxt.astimezone(TZ) - now)})") if nxt else "not scheduled"
+            lines.append(f"  • {md(name)} — {when}")
+
+    last_notif = last_entry_of("NOTIFICATION")
+    if last_notif:
+        lines.append(f"*Last reminder delivered:* "
+                     f"{last_notif['at'].strftime('%Y-%m-%d %H:%M %Z')} "
+                     f"({_fmt_duration(now - last_notif['at'])} ago)")
+    else:
+        lines.append("*Last reminder delivered:* _none on record_")
+
     lines.append("")
     lines.append(f"*Errors — last 24h:* {len(last_24h)}")
     lines.append(f"*Errors — last {days}d:* {len(errors)}")
@@ -251,5 +342,6 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if view == "usage":
         text = await build_usage_report(days, clamped)
     else:
-        text = build_system_report(days, clamped)
+        job_queue = getattr(getattr(context, "application", None), "job_queue", None)
+        text = build_system_report(days, clamped, job_queue=job_queue)
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
