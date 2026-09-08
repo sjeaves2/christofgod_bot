@@ -63,6 +63,8 @@ import error_reporting
 import permissions
 import storage
 
+from network_watchdog import CHECK_INTERVAL, watchdog_job
+
 from permissions import (  # noqa: F401
     user_info,
 )
@@ -185,6 +187,7 @@ from handlers.user_basics import (  # noqa: F401
     cmd_settimezone,
     cmd_start,
     cmd_stop,
+    cmd_unknown,
     cmd_usercount,
     cmd_userlist,
     lang_select,
@@ -525,6 +528,16 @@ async def post_init(app: Application) -> None:
         name="daily_maintenance",
     )
 
+    # Network watchdog — exits the process after a sustained Telegram outage so
+    # systemd restarts it. Without this the bot can sit wedged but "active"
+    # indefinitely, which is exactly what happened on 2026-09-04.
+    app.job_queue.run_repeating(
+        watchdog_job,
+        interval=CHECK_INTERVAL,
+        first=CHECK_INTERVAL,
+        name="network_watchdog",
+    )
+
 
 async def reschedule_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     await schedule_all_upcoming(context.application)
@@ -731,6 +744,15 @@ def main() -> None:
             filters.TEXT & ~filters.COMMAND,
             handle_counter_propose_message,
         )
+    )
+
+    # LAST in group 0, deliberately: PTB runs only the first matching handler
+    # per group, so this catches commands nothing above recognised. In a later
+    # group it would instead fire on every valid command as well. Scoped to
+    # private chats — group/channel traffic is already dropped in group -1, but
+    # this should not depend on a handler registered far away.
+    app.add_handler(
+        MessageHandler(filters.ChatType.PRIVATE & filters.COMMAND, cmd_unknown)
     )
 
     app.add_error_handler(error_handler)
