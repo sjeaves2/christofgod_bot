@@ -181,6 +181,10 @@ STRINGS: dict[str, str] = {
         "For details on a command, send `/help <command>` (e.g. `/help appointment`)."
     ),
     "help_unknown_topic": "I don't have help for that. Try one of: {topics}",
+    "unknown_command": (
+        "{command} is not a valid command. "
+        "Please type /help to see the available commands."
+    ),
     "help_appointment": (
         "*/appointment* — Request a meeting with a church official.\n\n"
         "Pick the official, then enter a date and time. They (or their proxy) "

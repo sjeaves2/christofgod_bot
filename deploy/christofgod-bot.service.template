@@ -19,6 +19,22 @@ Documentation=https://github.com/sjeaves2/christofgod_bot
 After=network-online.target
 Wants=network-online.target
 
+# Stop a genuinely broken build (bad config, missing dependency) from
+# restart-looping forever — systemd gives up after 5 starts in 5 minutes, which
+# `systemctl status` then reports as "start request repeated too quickly".
+#
+# These MUST live in [Unit]. systemd has parsed them here since v229; left in
+# [Service] they are silently ignored ("Unknown key name ... ignoring" in the
+# journal) and the limiter never applies at all — which is exactly how this file
+# shipped until 2026-09-08.
+#
+# Note the interaction with the network self-heal in bot.py: that exits after
+# ~10 minutes of sustained failure, so self-heal restarts are spaced far wider
+# than this 5-minute window and can never trip the limit. Only a fast crash
+# loop does, which is the intent.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
 [Service]
 Type=simple
 User=__RUN_USER__
@@ -26,14 +42,11 @@ Group=__RUN_USER__
 WorkingDirectory=__REPO_DIR__
 ExecStart=__REPO_DIR__/.venv/bin/python bot.py
 
-# Keep it running: restart on crash, on a failed Telegram session, or after a
-# reboot. StartLimit* stops a genuinely broken build (bad config, missing
-# dependency) from restart-looping forever — it gives up after 5 tries in 5
-# minutes, which is visible in `systemctl status`.
+# Keep it running: restart on crash, on a failed Telegram session, on a
+# deliberate self-heal exit, or after a reboot. The rate limit that bounds this
+# lives in [Unit] above, where systemd actually reads it.
 Restart=always
 RestartSec=10
-StartLimitIntervalSec=300
-StartLimitBurst=5
 
 # Unbuffered output so journalctl shows log lines as they happen.
 Environment=PYTHONUNBUFFERED=1
