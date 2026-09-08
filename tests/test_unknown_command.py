@@ -8,16 +8,27 @@ the reply-text ones.
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from telegram.ext import CommandHandler, ConversationHandler, MessageHandler
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from handlers.user_basics import cmd_unknown  # noqa: E402
+
+
+def _run(coro):
+    """Drive a coroutine the way the rest of this suite does.
+
+    Deliberately NOT @pytest.mark.asyncio: every other test file uses this
+    helper, and introducing pytest-asyncio's own event-loop management into the
+    same session changes loop lifetime in ways that differ between Python 3.9
+    and 3.12. Matching the existing convention keeps both CI legs identical.
+    """
+    return asyncio.get_event_loop().run_until_complete(coro)
 
 
 def _upd(text: str = "/evnts", chat_id: int = 42) -> MagicMock:
@@ -30,72 +41,63 @@ def _upd(text: str = "/evnts", chat_id: int = 42) -> MagicMock:
     return upd
 
 
-async def _call(upd):
+def _call(upd):
     with patch("handlers.user_basics.get_user_prefs",
                AsyncMock(return_value=(None, "en"))):
-        await cmd_unknown(upd, MagicMock())
+        _run(cmd_unknown(upd, MagicMock()))
     return upd.message.reply_text
 
 
 class TestReply:
-    @pytest.mark.asyncio
-    async def test_names_the_command_and_points_at_help(self):
-        reply = await _call(_upd("/evnts"))
+    def test_names_the_command_and_points_at_help(self):
+        reply = _call(_upd("/evnts"))
         text = reply.call_args[0][0]
         assert "/evnts" in text
         assert "/help" in text
         assert "not a valid command" in text
 
-    @pytest.mark.asyncio
-    async def test_sent_as_plain_text(self):
+    def test_sent_as_plain_text(self):
         """No parse_mode: an unbalanced _ or * would make Telegram reject the
         whole message, restoring the very silence this fixes."""
-        reply = await _call(_upd("/we_ird_*command*"))
+        reply = _call(_upd("/we_ird_*command*"))
         assert "parse_mode" not in reply.call_args.kwargs
 
-    @pytest.mark.asyncio
-    async def test_markdown_metacharacters_survive_intact(self):
-        reply = await _call(_upd("/bad_*cmd"))
+    def test_markdown_metacharacters_survive_intact(self):
+        reply = _call(_upd("/bad_*cmd"))
         assert "/bad_*cmd" in reply.call_args[0][0]
 
-    @pytest.mark.asyncio
-    async def test_strips_bot_username_suffix(self):
-        reply = await _call(_upd("/evnts@ChristOfGodBot"))
+    def test_strips_bot_username_suffix(self):
+        reply = _call(_upd("/evnts@ChristOfGodBot"))
         text = reply.call_args[0][0]
         assert "/evnts" in text
         assert "@ChristOfGodBot" not in text
 
-    @pytest.mark.asyncio
-    async def test_ignores_arguments(self):
-        reply = await _call(_upd("/evnts tomorrow please"))
+    def test_ignores_arguments(self):
+        reply = _call(_upd("/evnts tomorrow please"))
         assert "tomorrow" not in reply.call_args[0][0]
 
-    @pytest.mark.asyncio
-    async def test_truncates_absurdly_long_input(self):
-        reply = await _call(_upd("/" + "x" * 500))
+    def test_truncates_absurdly_long_input(self):
+        reply = _call(_upd("/" + "x" * 500))
         assert len(reply.call_args[0][0]) < 200
 
-    @pytest.mark.asyncio
-    async def test_handles_empty_message_text(self):
+    def test_handles_empty_message_text(self):
         """update.message.text is None for a photo/sticker; must not crash."""
-        reply = await _call(_upd(None))
+        reply = _call(_upd(None))
         assert reply.called
 
-    @pytest.mark.asyncio
-    async def test_uses_the_users_language(self):
+    def test_uses_the_users_language(self):
         upd = _upd("/evnts")
         with patch("handlers.user_basics.get_user_prefs",
                    AsyncMock(return_value=(None, "es"))):
-            await cmd_unknown(upd, MagicMock())
+            _run(cmd_unknown(upd, MagicMock()))
         assert "no es un comando válido" in upd.message.reply_text.call_args[0][0]
 
-    @pytest.mark.asyncio
-    async def test_logged_for_stats(self):
+    def test_logged_for_stats(self):
         upd = _upd("/evnts")
         with patch("handlers.user_basics.activity.log_command") as log:
             with patch("handlers.user_basics.get_user_prefs",
                        AsyncMock(return_value=(None, "en"))):
-                await cmd_unknown(upd, MagicMock())
+                _run(cmd_unknown(upd, MagicMock()))
         assert log.called
         assert log.call_args[0][0] == "unknown"
         assert log.call_args.kwargs["details"] == "/evnts"
