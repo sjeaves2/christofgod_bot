@@ -209,6 +209,35 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
 
 
+async def cmd_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Reply to a command no handler recognised.
+
+    Registered LAST in handler group 0, so it only runs when nothing else
+    matched — PTB executes just the first matching handler per group. Putting it
+    in a later group instead would make it fire on every valid command too.
+
+    Silence was the old behaviour, and silence is indistinguishable from an
+    outage: after 2026-09-04 a congregant had no way to tell a typo from a bot
+    that had stopped answering. Replying is the difference between "I mistyped"
+    and "something is wrong".
+    """
+    uid, uname, dname = user_info(update)
+    _, lang = await get_user_prefs(uid)
+
+    text = (update.message.text or "").strip()
+    command = text.split()[0] if text else "/?"
+    # Trim @BotName suffixes and cap the length — the echo is untrusted input.
+    command = command.split("@")[0][:32]
+
+    activity.log_command("unknown", uid, uname, dname, details=command)
+    logger.info("Unknown command %r from %s", command, uid)
+
+    # Plain text, no parse_mode: the echoed command is whatever the user typed,
+    # and an unbalanced _ or * would make Telegram reject the whole message —
+    # turning "unknown command" back into the silence this fixes.
+    await update.message.reply_text(t("unknown_command", lang, command=command))
+
+
 async def cmd_donate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     uid, uname, dname = user_info(update)
     activity.log_command("donate", uid, uname, dname)

@@ -186,6 +186,10 @@ STRINGS: dict[str, str] = {
         "Ukuthola imininingwane ngomyalo, thumela `/help <umyalo>` (isb. `/help appointment`)."
     ),
     "help_unknown_topic": "Anginalo usizo ngalokho. Zama okukodwa kwalokhu: {topics}",
+    "unknown_command": (
+        "{command} akuwona umyalo ovumelekile. "
+        "Sicela uthayipha u-/help ukuze ubone imiyalo etholakalayo."
+    ),
     "help_appointment": (
         "*/appointment* — Cela umhlangano nesikhulu sebandla.\n\n"
         "Khetha isikhulu, bese ufaka usuku nesikhathi. Sona (noma ummeleli waso) "
