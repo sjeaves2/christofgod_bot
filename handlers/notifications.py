@@ -6,6 +6,7 @@ The media helpers (_send_media, CAPTION_LIMIT, …) also serve /broadcast.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,20 @@ from settings import BASE_DIR, TZ, activity
 import storage
 
 logger = logging.getLogger(__name__)
+
+# Serialises every read-modify-write of notification_state.
+#
+# Why this is needed: two reminders whose notification_time is the SAME instant
+# (a convocation falling on the Sabbath — Rosh Hashanah, 2026-09-11/12) each
+# loaded the state, awaited their Telegram sends, then wrote back. The second
+# write clobbered the first, the catch-up job saw no delivery record for the
+# lost one, and the congregation got that reminder twice ~85 seconds later.
+#
+# storage._load_notif_state() returns a FRESH dict whenever the state map is
+# empty (`(data or {}).get("states") or {}`), so the two jobs were not even
+# mutating the same object — which is why the loss was total rather than
+# partial, and why it showed up right after the catch-up job pruned the map.
+_state_lock = asyncio.Lock()
 
 def _render_notification(event: dict[str, Any], tz: "pytz.BaseTzInfo", lang: str) -> str:
     """Build a reminder message localized and time-zoned for one recipient."""
@@ -170,12 +185,14 @@ async def deliver_event_notifications(bot, event: dict[str, Any]) -> int:
     if not recipients:
         return 0  # no groups configured and nobody opted in
 
-    states = await storage._load_notif_state()
-    state = states.setdefault(
-        key,
-        {"name": event["name"], "service_time": service_time.isoformat(), "notified": []},
-    )
-    notified = set(state["notified"])
+    async with _state_lock:
+        states = await storage._load_notif_state()
+        state = states.get(key) or {
+            "name": event["name"],
+            "service_time": service_time.isoformat(),
+            "notified": [],
+        }
+        notified = set(state.get("notified") or [])
     pending = [c for c in recipients if c not in notified]
     if not pending:
         return 0
@@ -192,21 +209,34 @@ async def deliver_event_notifications(bot, event: dict[str, Any]) -> int:
 
     sent = 0
     failed = 0
+    delivered: set = set()
     for chat_id in pending:
         tz, lang = recipients[chat_id]
         text = _render_notification(event, tz, lang)
         try:
             await _send_notification_payload(bot, chat_id, media, text, caches)
-            notified.add(chat_id)
+            delivered.add(chat_id)
             sent += 1
         except TelegramError as exc:
             # Includes Forbidden (bot not in group) — leave pending for retry.
             failed += 1
             logger.warning("Notification post error for chat %s: %s", chat_id, exc)
 
-    state["notified"] = sorted(notified, key=lambda c: str(c))
-    states[key] = state
-    await storage._save_notif_state(states)
+    # Re-read under the lock and merge, rather than writing back the snapshot
+    # taken before the sends. Another reminder firing at this same instant may
+    # have recorded its own delivery in the meantime; writing the stale map
+    # would erase it and cause a duplicate send on the next catch-up.
+    async with _state_lock:
+        states = await storage._load_notif_state()
+        current = states.get(key) or {
+            "name": event["name"],
+            "service_time": service_time.isoformat(),
+            "notified": [],
+        }
+        merged = set(current.get("notified") or []) | delivered
+        current["notified"] = sorted(merged, key=lambda c: str(c))
+        states[key] = current
+        await storage._save_notif_state(states)
 
     if sent:
         activity.log_notification_sent(event["name"], sent)
@@ -238,11 +268,14 @@ async def notification_catchup_job(context: ContextTypes.DEFAULT_TYPE) -> None:
             await deliver_event_notifications(context.bot, ev)
 
     # Prune state for events that have started or fallen out of the window.
-    states = await storage._load_notif_state()
-    live_keys = {ev["key"] for ev in events if now < ev["service_time"]}
-    pruned = {k: v for k, v in states.items() if k in live_keys}
-    if len(pruned) != len(states):
-        await storage._save_notif_state(pruned)
+    # Under the same lock as delivery: pruning is a read-modify-write too, and
+    # racing it against a delivery write would drop a just-recorded send.
+    async with _state_lock:
+        states = await storage._load_notif_state()
+        live_keys = {ev["key"] for ev in events if now < ev["service_time"]}
+        pruned = {k: v for k, v in states.items() if k in live_keys}
+        if len(pruned) != len(states):
+            await storage._save_notif_state(pruned)
 
 
 def schedule_event_notification(app: Application, event: dict[str, Any]) -> None:

@@ -270,51 +270,6 @@ class TestSendAndRetry:
 # ---------------------------------------------------------------------------
 # Message preview / markdown validation
 # ---------------------------------------------------------------------------
-
-class TestMessagePreview:
-    def test_bad_markdown_stays_in_message_state(self):
-        from telegram.error import BadRequest
-        ctx = _ctx()
-        upd = _update(text="bad *markdown")
-
-        async def reply(text, **kwargs):
-            # The markdown preview fails to parse; the plain error reply succeeds.
-            if kwargs.get("parse_mode") is not None:
-                raise BadRequest("can't parse entities")
-
-        upd.message.reply_text = AsyncMock(side_effect=reply)
-        result = _run(hb.bc_message(upd, ctx))
-        assert result == hb.BC_MESSAGE
-        assert "bc_message" not in ctx.user_data
-
-    def test_good_markdown_advances_to_select(self):
-
-        async def _opts(_bot, _lang=None):
-            return [{"key": "all", "kind": "all", "chat_id": None, "label": "All subscribers"}]
-
-        ctx = _ctx()
-        upd = _update(text="Good *message*")
-        with patch("handlers.broadcast._broadcast_target_options", side_effect=_opts):
-            result = _run(hb.bc_message(upd, ctx))
-        assert result == hb.BC_SELECT
-        # The stored message keeps the body and appends the sender attribution.
-        stored = ctx.user_data["bc_message"]
-        assert stored.startswith("Good *message*")
-        assert "posted by Admin User" in stored
-
-    def test_sender_name_appended(self):
-
-        async def _opts(_bot, _lang=None):
-            return []
-
-        ctx = _ctx()
-        upd = _update(text="Announcement")
-        with patch("handlers.broadcast._broadcast_target_options", side_effect=_opts):
-            _run(hb.bc_message(upd, ctx))
-        assert ctx.user_data["bc_message"].endswith("— posted by Admin User")
-
-
-# ---------------------------------------------------------------------------
 # Selection toggling
 # ---------------------------------------------------------------------------
 

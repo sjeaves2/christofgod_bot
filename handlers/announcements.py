@@ -17,6 +17,7 @@ from typing import Any
 import storage
 import translation
 from common import _is_affirmative, get_user_prefs, now_tz
+from handlers.notifications import CAPTION_LIMIT
 from handlers.broadcast import (
     BC_SELECT,
     _append_sender,
@@ -28,6 +29,7 @@ from permissions import admin_only, user_info
 from settings import TZ, activity
 from telegram import Update
 from telegram.constants import ParseMode
+from telegram.error import BadRequest
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram.helpers import escape_markdown
 
@@ -87,15 +89,33 @@ ANN_BODY_MAX = 1024
 # Conversation states. Offset past the BC_* constants (0-2) because the
 # add-announcement conversation re-enters the broadcast target-selection
 # states after saving.
-AN_TITLE, AN_BODY, AN_EXPIRES, AN_CONFIRM = range(3, 7)
-DA_SELECT = 7
+AN_TITLE, AN_BODY, AN_MEDIA, AN_EXPIRES, AN_CONFIRM = range(3, 8)
+DA_SELECT = 8
 
 
-def _render_announcement(ann: dict[str, Any]) -> str:
-    """Markdown-safe '📢 title + body' block (admin-typed text is escaped)."""
-    title = escape_markdown(str(ann.get("title", "")), version=1)
-    body = escape_markdown(str(ann.get("body", "")), version=1)
+def _render_announcement(ann: dict[str, Any], escape: bool = True) -> str:
+    """'📢 title + body' block.
+
+    escape=False passes the admin's own Markdown straight through, so *bold* and
+    _italic_ work as typed. That is only safe for text the admin wrote and we
+    validated at entry (see an_body): Telegram rejects an entire message over one
+    unbalanced marker.
+
+    escape=True is used for MACHINE-TRANSLATED copies. A translator treats * and
+    _ as ordinary punctuation and may move, drop or duplicate them — and in an
+    agglutinative language like isiZulu an emphasised English phrase often maps
+    onto a single prefixed word, so the span has nowhere sensible to land.
+    Escaping means a translated announcement arrives correct but unemphasised,
+    which beats arriving broken or not at all.
+    """
+    title = str(ann.get("title", ""))
+    body = str(ann.get("body", ""))
+    if escape:
+        title = escape_markdown(title, version=1)
+        body = escape_markdown(body, version=1)
     return f"📢 *{title}*\n\n{body}"
+
+
 
 
 async def _announcement_for_lang(ann: dict[str, Any], lang: str) -> dict[str, Any]:
@@ -142,14 +162,29 @@ async def cmd_announcements(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if not live:
         await update.message.reply_text(t("ann_none", lang))
         return
-    parts = [t("ann_header", lang)]
-    for a in live:
-        localized = await _announcement_for_lang(a, lang)
-        parts.append(
-            _render_announcement(localized) + "\n"
-            + t("ann_until", lang, date=a.get("expires", "?"))
-        )
-    await update.message.reply_text("\n\n".join(parts), parse_mode=ParseMode.MARKDOWN)
+    def _build(force_escape: bool) -> str:
+        parts = [t("ann_header", lang)]
+        for a, localized in rendered:
+            # Show the admin's own formatting only in the language they wrote in.
+            # A machine-translated copy has been through a translator that treats
+            # * and _ as punctuation, so its markers can no longer be trusted.
+            translated = bool(a.get("lang")) and a.get("lang") != lang
+            parts.append(
+                _render_announcement(localized, escape=force_escape or translated) + "\n"
+                + t("ann_until", lang, date=a.get("expires", "?"))
+            )
+        return "\n\n".join(parts)
+
+    rendered = [(a, await _announcement_for_lang(a, lang)) for a in live]
+    try:
+        await update.message.reply_text(_build(False), parse_mode=ParseMode.MARKDOWN)
+    except BadRequest:
+        # One announcement's markup is unparseable — most likely a record created
+        # before formatting was supported, whose literal asterisks were stored
+        # escaped-on-render and are now taken as markup. Escaping everything
+        # loses emphasis but is far better than showing nobody anything.
+        logger.warning("Announcement Markdown failed to render; retrying escaped.")
+        await update.message.reply_text(_build(True), parse_mode=ParseMode.MARKDOWN)
 
 
 @admin_only
@@ -181,9 +216,71 @@ async def an_body(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text(
             f"Please send a body of 1–{ANN_BODY_MAX} characters:")
         return AN_BODY
+    # Validate the admin's Markdown now, by rendering it back to them, rather
+    # than at send time. One unbalanced * or _ makes Telegram reject the whole
+    # message, and finding that out mid-broadcast is far worse than here.
+    try:
+        await update.message.reply_text(
+            _render_announcement({"title": context.user_data["an_title"], "body": body},
+                                 escape=False),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+    except BadRequest as exc:
+        await update.message.reply_text(
+            f"⚠️ I couldn't render that as Markdown ({exc.message}).\n\n"
+            "Use *bold*, _italic_, `code` — each marker needs a matching pair. "
+            "Please edit and re-send the body:"
+        )
+        return AN_BODY
+
     context.user_data["an_body"] = body
-    await update.message.reply_text("Expiration date (YYYY-MM-DD) — the announcement "
-                                    "shows through the end of that day:")
+    await update.message.reply_text(
+        "Attach a photo or document now, or send /skip for a text-only announcement:")
+    return AN_MEDIA
+
+
+_EXPIRES_PROMPT = ("Expiration date (YYYY-MM-DD) — the announcement "
+                   "shows through the end of that day:")
+
+
+async def an_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Optional photo/document for the announcement push.
+
+    Telegram sends media *with* a caption rather than as a separate message, so
+    the whole announcement has to fit CAPTION_LIMIT. Rather than silently
+    truncating the body, say so and let the admin shorten it or skip the media.
+    """
+    msg = update.message
+    if msg.photo:
+        kind, file_id = "photo", msg.photo[-1].file_id
+    elif msg.document:
+        kind, file_id = "document", msg.document.file_id
+    else:
+        await msg.reply_text("Please send a photo or document, or /skip:")
+        return AN_MEDIA
+
+    rendered = _render_announcement(
+        {"title": context.user_data["an_title"], "body": context.user_data["an_body"]},
+        escape=False)
+    if len(rendered) > CAPTION_LIMIT:
+        await msg.reply_text(
+            f"⚠️ With an attachment the whole announcement becomes the caption, "
+            f"and Telegram caps that at {CAPTION_LIMIT} characters "
+            f"(yours is {len(rendered)}).\n\n"
+            "Send /skip to post it as text without the attachment, or /cancel and "
+            "start again with a shorter body:"
+        )
+        return AN_MEDIA
+
+    context.user_data["an_media"] = {"kind": kind, "file_id": file_id}
+    await msg.reply_text(_EXPIRES_PROMPT)
+    return AN_EXPIRES
+
+
+async def an_skip_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """/skip — post the announcement as text only."""
+    context.user_data.pop("an_media", None)
+    await update.message.reply_text(_EXPIRES_PROMPT)
     return AN_EXPIRES
 
 
@@ -200,7 +297,8 @@ async def an_expires(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return AN_EXPIRES
     context.user_data["an_expires"] = text
     preview = _render_announcement(
-        {"title": context.user_data["an_title"], "body": context.user_data["an_body"]})
+        {"title": context.user_data["an_title"], "body": context.user_data["an_body"]},
+        escape=False)
     await update.message.reply_text(
         f"{preview}\n\n_Expires: {text} (end of day)_\n\nSave this announcement? (yes/no)",
         parse_mode=ParseMode.MARKDOWN,
@@ -233,8 +331,19 @@ async def an_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     # Hand off to the broadcast target-selection flow so the new announcement
     # can be pushed out immediately (Cancel skips the push; it's already saved).
-    context.user_data["bc_message"] = _append_sender(_render_announcement(ann), dname)
-    context.user_data.pop("bc_media", None)
+    # The stored body keeps the admin's Markdown; escape=False so *bold* reaches
+    # the congregation as typed (it was validated in an_body).
+    rendered = _append_sender(_render_announcement(ann, escape=False), dname)
+    media = context.user_data.get("an_media")
+    if media:
+        # Media carries the text as its caption — Telegram has no "photo plus
+        # separate message" primitive in a single send.
+        caption = rendered if len(rendered) <= CAPTION_LIMIT else None
+        context.user_data["bc_media"] = {**media, "caption": caption}
+        context.user_data.pop("bc_message", None)
+    else:
+        context.user_data["bc_message"] = rendered
+        context.user_data.pop("bc_media", None)
     options = await _broadcast_target_options(context.bot, lang)
     context.user_data["bc_options"] = options
     context.user_data["bc_selected"] = set()
