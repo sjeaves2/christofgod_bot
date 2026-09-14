@@ -51,8 +51,8 @@ ADMIN_COMMANDS_TEXT = """\
 /modifyevent — modify an event
 /deleteevent — remove or annotate an event
 /setservicelink — set the join link for a convocation/Sabbath service
-/broadcast — send a message to groups and/or all subscribers
-/addannouncement — create an announcement (title, body, expiration)
+/addannouncement — create an announcement (title, body, optional photo/document,
+    expiration) and push it to groups and/or all subscribers
 /listannouncements — list active and recently-expired announcements
 /delannouncement — expire an active announcement now
 /listevents — events in the next 30 days (admin view)
@@ -372,7 +372,7 @@ async def cmd_listevents(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 # ---------------------------------------------------------------------------
-# /broadcast — admin sends an ad-hoc message to groups and/or all subscribers
+# Announcement push targets — the delivery engine shared with /addannouncement
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
