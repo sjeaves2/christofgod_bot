@@ -12,7 +12,6 @@ import pytz
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import handlers.broadcast as hb
 import handlers.notifications as hn
 
 TZ = pytz.timezone("America/New_York")
@@ -180,58 +179,3 @@ class TestDeliverWithMedia:
 
 # ---------------------------------------------------------------------------
 # Broadcast media capture + send
-# ---------------------------------------------------------------------------
-
-class TestBroadcastMedia:
-    def _ctx(self):
-        ctx = MagicMock()
-        ctx.user_data = {}
-        ctx.bot = _bot()
-        return ctx
-
-    def _photo_update(self, caption=None):
-        upd = MagicMock()
-        upd.effective_user.id = 1
-        upd.effective_user.username = "admin"
-        upd.effective_user.full_name = "Admin User"
-        m = upd.message
-        m.chat_id = 1
-        m.photo = [MagicMock(file_id="PIC1")]
-        m.document = None
-        m.caption = caption
-        m.reply_text = AsyncMock()
-        return upd
-
-    def test_photo_captured_into_bc_media(self):
-        ctx = self._ctx()
-        upd = self._photo_update(caption="Hello *world*")
-        with patch("handlers.broadcast._broadcast_target_options", return_value=[]):
-            result = _run(hb.bc_media(upd, ctx))
-        assert result == hb.BC_SELECT
-        media = ctx.user_data["bc_media"]
-        assert media["kind"] == "photo" and media["file_id"] == "PIC1"
-        # Caption keeps the body and appends the sender attribution.
-        assert media["caption"].startswith("Hello *world*")
-        assert "posted by Admin User" in media["caption"]
-        assert "bc_message" not in ctx.user_data
-
-    def test_bad_caption_markdown_stays(self):
-        from telegram.error import BadRequest
-        ctx = self._ctx()
-        ctx.bot.send_photo = AsyncMock(side_effect=BadRequest("can't parse entities"))
-        upd = self._photo_update(caption="bad *markdown")
-        result = _run(hb.bc_media(upd, ctx))
-        assert result == hb.BC_MESSAGE
-        assert "bc_media" not in ctx.user_data
-
-    def test_send_pending_uses_media(self):
-        ctx = self._ctx()
-        ctx.user_data.update({
-            "bc_media": {"kind": "photo", "file_id": "PIC1", "caption": "cap"},
-            "bc_recipients": [{"chat_id": 10, "label": "A"}, {"chat_id": 20, "label": "B"}],
-            "bc_done": set(),
-        })
-        failures = _run(hb._bc_send_pending(ctx.bot, ctx))
-        assert failures == []
-        assert ctx.bot.send_photo.await_count == 2
-        ctx.bot.send_message.assert_not_awaited()

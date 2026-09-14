@@ -68,26 +68,29 @@ from network_watchdog import CHECK_INTERVAL, watchdog_job
 from permissions import (  # noqa: F401
     user_info,
 )
+# The /broadcast command was retired in favour of /addannouncement, which does
+# the same push plus a stored, translatable, expiring record. The delivery
+# engine below (target selection, send, retry) is still very much in use — it
+# is what actually pushes an announcement out.
 from handlers.broadcast import (  # noqa: F401
-    BC_MESSAGE,
     BC_RETRY,
     BC_SELECT,
     CB_BC_PREFIX,
-    bc_media,
-    bc_message,
     bc_retry,
     bc_select,
-    cmd_broadcast,
 )
 from handlers.announcements import (  # noqa: F401
     AN_BODY,
     AN_CONFIRM,
     AN_EXPIRES,
+    AN_MEDIA,
     AN_TITLE,
     DA_SELECT,
     an_body,
     an_confirm,
     an_expires,
+    an_media,
+    an_skip_media,
     an_title,
     cmd_addannouncement,
     cmd_announcements,
@@ -601,19 +604,6 @@ def main() -> None:
         fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
     )
 
-    broadcast_conv = ConversationHandler(
-        entry_points=[CommandHandler("broadcast", cmd_broadcast)],
-        states={
-            BC_MESSAGE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, bc_message),
-                MessageHandler(filters.PHOTO | filters.Document.ALL, bc_media),
-            ],
-            BC_SELECT: [CallbackQueryHandler(bc_select, pattern=f"^{re.escape(CB_BC_PREFIX)}")],
-            BC_RETRY: [CallbackQueryHandler(bc_retry, pattern=f"^{re.escape(CB_BC_PREFIX)}retry:")],
-        },
-        fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
-    )
-
     appointment_conv = ConversationHandler(
         entry_points=[CommandHandler("appointment", cmd_appointment)],
         states={
@@ -697,7 +687,6 @@ def main() -> None:
     app.add_handler(modify_event_conv)
     app.add_handler(delete_event_conv)
     app.add_handler(set_service_link_conv)
-    app.add_handler(broadcast_conv)
     app.add_handler(CommandHandler("myappointments", cmd_myappointments))
     app.add_handler(CommandHandler("enable_appt_proxies", cmd_enable_appt_proxies))
     app.add_handler(appointment_conv)
@@ -715,6 +704,11 @@ def main() -> None:
         states={
             AN_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, an_title)],
             AN_BODY: [MessageHandler(filters.TEXT & ~filters.COMMAND, an_body)],
+            AN_MEDIA: [
+                CommandHandler("skip", an_skip_media),
+                MessageHandler(filters.PHOTO | filters.Document.ALL, an_media),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, an_media),
+            ],
             AN_EXPIRES: [MessageHandler(filters.TEXT & ~filters.COMMAND, an_expires)],
             AN_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, an_confirm)],
             # After saving, the flow re-uses the broadcast target selection.

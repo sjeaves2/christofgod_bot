@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import uuid
+import hashlib
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -35,6 +35,29 @@ def _make_calendar(name: str) -> Calendar:
     return cal
 
 
+def _event_uid(evt: dict[str, Any]) -> str:
+    """Stable UID derived from the event's own key.
+
+    Calendar clients use UID to decide whether an imported entry is new or an
+    update of one already held: same UID replaces, different UID adds a second
+    copy. This used to be a fresh uuid4() per export, so exporting twice left
+    the congregation with every service duplicated in their own calendars.
+
+    event["key"] is already the right handle — it is what notification state is
+    tracked by, so it is stable across restarts and unique per service (it
+    carries the date, and for a combined Sabbath+festival service the sorted
+    component keys). Falls back to a name+timestamp digest only if some caller
+    supplies an event with no key at all.
+    """
+    key = evt.get("key")
+    if not key:
+        svc = evt.get("service_time")
+        stamp = svc.isoformat() if hasattr(svc, "isoformat") else str(svc)
+        raw = f"{evt.get('name', 'event')}|{stamp}"
+        key = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+    return f"{key}@christofgodbot"
+
+
 def events_to_ics(events: list[dict[str, Any]],
                   calendar_name: str = "Christ of God Ministries Events") -> bytes:
     """Convert a list of event dicts to ICS bytes."""
@@ -46,7 +69,10 @@ def events_to_ics(events: list[dict[str, Any]],
         duration = timedelta(minutes=int(evt.get("duration_minutes", 60)))
         vevent.add("dtstart", svc_time)
         vevent.add("dtend", svc_time + duration)
-        vevent.add("uid", str(uuid.uuid4()))
+        vevent.add("uid", _event_uid(evt))
+        # Lets a client treat a re-import as an update (changed time or join
+        # link) rather than a conflict, as the appointment exports already do.
+        vevent.add("sequence", int(evt.get("sequence", 0)))
         _add_alarms(vevent)
         if evt.get("url"):
             vevent.add("url", evt["url"])

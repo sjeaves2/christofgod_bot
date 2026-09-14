@@ -176,6 +176,11 @@ async def ae_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 ME_SELECT, ME_FIELD, ME_VALUE = range(3)
 
+# Edits that move the gathering in time. Only these bump the exported ICS
+# SEQUENCE (RFC 5545 §3.8.7.4) — a rename or a reworded description is not a
+# revision an attendee needs to act on.
+SIGNIFICANT_FIELDS = {"date", "time", "duration"}
+
 
 @admin_only
 async def cmd_modifyevent(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -239,12 +244,20 @@ async def me_value(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "name": "name", "active": "active", "url": "url",
     }
     yaml_field = field_map[field]
+    previous = ev.get(yaml_field)
     if field in ("duration", "notification"):
         ev[yaml_field] = int(value)
     elif field == "active":
         ev[yaml_field] = value.lower() in ("true", "yes", "1")
     else:
         ev[yaml_field] = value
+
+    # RFC 5545 §3.8.7.4: bump SEQUENCE only for a *significant* revision — one
+    # that changes when the gathering happens, so anyone holding it in their
+    # calendar has to re-decide. Renames and description edits do not qualify,
+    # and neither does setting the same value again.
+    if field in SIGNIFICANT_FIELDS and ev[yaml_field] != previous:
+        ev["sequence"] = int(ev.get("sequence", 0)) + 1
 
     evdata = await storage.get_all_events_data()
     specials = evdata.get("special_events", [])

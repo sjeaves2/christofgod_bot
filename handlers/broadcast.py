@@ -10,21 +10,23 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from permissions import admin_only, user_info
+from permissions import user_info
 import storage
-from common import _answer_cb, get_user_prefs
-from handlers.notifications import CAPTION_LIMIT, _send_media
+from common import _answer_cb
+from handlers.notifications import _send_media
 from localization import DEFAULT_LANG, t
 from settings import activity
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatType, ParseMode
-from telegram.error import BadRequest, TelegramError
+from telegram.error import TelegramError
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram.helpers import escape_markdown
 
 logger = logging.getLogger(__name__)
 
-BC_MESSAGE, BC_SELECT, BC_RETRY = range(3)
+# BC_MESSAGE is gone with /broadcast; these two states still drive the
+# announcement push (target selection, then failure retry).
+BC_SELECT, BC_RETRY = range(2)
 
 CB_BC_PREFIX = "bc:"
 BC_MAX_RETRIES = 3
@@ -117,87 +119,6 @@ def _bc_keyboard(options: list[dict], selected: set[str]) -> InlineKeyboardMarku
     rows.append([InlineKeyboardButton("📤 Send", callback_data=f"{CB_BC_PREFIX}send")])
     rows.append([InlineKeyboardButton("✖️ Cancel", callback_data=f"{CB_BC_PREFIX}cancel")])
     return InlineKeyboardMarkup(rows)
-
-
-@admin_only
-async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    uid, uname, dname = user_info(update)
-    activity.log_command("broadcast", uid, uname, dname)
-    context.user_data.clear()
-    await update.message.reply_text(
-        "📣 *Broadcast*\n\nSend me the message to broadcast — plain text, or a "
-        "*photo* or *document* (with an optional caption). Markdown is supported; "
-        "I'll show you a preview before sending.",
-        parse_mode=ParseMode.MARKDOWN,
-    )
-    return BC_MESSAGE
-
-
-async def bc_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    uid, _, dname = user_info(update)
-    _, lang = await get_user_prefs(uid)
-    text = _append_sender(update.message.text, dname)
-    # Validate Markdown by rendering a preview (with the attribution) back to the admin.
-    try:
-        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
-    except BadRequest as exc:
-        await update.message.reply_text(
-            f"⚠️ I couldn't render that as Markdown ({exc.message}). "
-            "Please edit and re-send your message."
-        )
-        return BC_MESSAGE
-
-    context.user_data["bc_message"] = text
-    context.user_data.pop("bc_media", None)
-    options = await _broadcast_target_options(context.bot, lang)
-    context.user_data["bc_options"] = options
-    context.user_data["bc_selected"] = set()
-    await update.message.reply_text(
-        "👆 *Preview above.* Choose where to send it, then tap *Send*:",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=_bc_keyboard(options, set()),
-    )
-    return BC_SELECT
-
-
-async def bc_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Broadcast a photo or document (with an optional caption) instead of text."""
-    msg = update.message
-    if msg.photo:
-        kind, file_id = "photo", msg.photo[-1].file_id
-    elif msg.document:
-        kind, file_id = "document", msg.document.file_id
-    else:
-        return BC_MESSAGE
-
-    uid, _, dname = user_info(update)
-    _, lang = await get_user_prefs(uid)
-    caption = msg.caption or ""
-    # Append the sender attribution if it still fits within the caption limit.
-    with_sender = _append_sender(caption, dname)
-    caption = with_sender if len(with_sender) <= CAPTION_LIMIT else caption
-
-    # Preview it back (validates any Markdown in the caption).
-    try:
-        await _send_media(context.bot, msg.chat_id, kind, file_id, caption=caption or None)
-    except BadRequest as exc:
-        await msg.reply_text(
-            f"⚠️ I couldn't render that caption as Markdown ({exc.message}). "
-            "Please fix the caption and re-send."
-        )
-        return BC_MESSAGE
-
-    context.user_data["bc_media"] = {"kind": kind, "file_id": file_id, "caption": caption}
-    context.user_data.pop("bc_message", None)
-    options = await _broadcast_target_options(context.bot, lang)
-    context.user_data["bc_options"] = options
-    context.user_data["bc_selected"] = set()
-    await msg.reply_text(
-        "👆 *Preview above.* Choose where to send it, then tap *Send*:",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=_bc_keyboard(options, set()),
-    )
-    return BC_SELECT
 
 
 async def bc_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:

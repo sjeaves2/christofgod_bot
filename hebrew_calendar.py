@@ -260,6 +260,80 @@ def sabbath_events(tz: pytz.BaseTzInfo, days_ahead: int = 90) -> list[dict[str, 
     return events
 
 
+def _combined_name(sabbath: dict[str, Any], festivals: list[dict[str, Any]]) -> str:
+    """"God's Holy Convocation—Sabbath & Rosh Hashanah Eve".
+
+    Sabbath leads: it is the occasion the congregation keeps every week, and the
+    festival is what distinguishes this one.
+    """
+    parts = ["Sabbath"]
+    for fest in festivals:
+        phase = fest.get("phase")
+        parts.append(f"{fest['convocation_name']}{' ' + phase if phase else ''}")
+    return f"God's Holy Convocation—{' & '.join(parts)} {sabbath['label']}"
+
+
+def merge_sabbath_coincidences(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Fold a convocation that falls on the Sabbath into one combined service.
+
+    When a festival lands on Friday evening or Saturday it is not two gatherings
+    but one, and announcing it twice both duplicates the reminder and implies a
+    second service that does not exist. Events are combined when they share an
+    exact service time — the same moment is the only honest definition of "the
+    same gathering"; a festival at a genuinely different hour stays separate.
+
+    The combined event is built from the festival (so its biblical month, phase
+    and Hebrew year survive) with the Sabbath's identity folded in. Both
+    contribute their phase_keys and original keys, since the join link, media
+    and announcements may be configured against either.
+    """
+    by_time: dict[Any, list[dict[str, Any]]] = {}
+    for ev in events:
+        by_time.setdefault(ev["service_time"], []).append(ev)
+
+    out: list[dict[str, Any]] = []
+    for _, group in by_time.items():
+        sabbaths = [e for e in group if e.get("convocation_key") == "sabbath"]
+        festivals = [e for e in group if e.get("convocation_key") != "sabbath"]
+        if not sabbaths or not festivals:
+            out.extend(group)
+            continue
+
+        sabbath = sabbaths[0]
+        # Deterministic ordering so the key and title are stable across runs.
+        festivals.sort(key=lambda e: e["convocation_key"])
+        components = [sabbath] + festivals
+
+        combined = dict(festivals[0])
+        combined.update({
+            # Key is sorted purely for determinism; component_keys keeps the
+            # reading order (Sabbath first) so announcements appear in the same
+            # order as the names in the title.
+            "key": "+".join(sorted(e["key"] for e in components)),
+            "component_keys": [e["key"] for e in components],
+            # SABBATH FIRST, unconditionally. When a convocation falls on the
+            # Sabbath the congregation gathers in the standing Sabbath room, so
+            # the Sabbath's configuration wins even when the festival has its
+            # own entry. The festival keys stay as a fallback for a service the
+            # Sabbath has no entry for at all.
+            "phase_keys": [sabbath["phase_key"]] + [e["phase_key"] for e in festivals],
+            "name": _combined_name(sabbath, festivals),
+            "convocation_keys": [e["convocation_key"] for e in components],
+            "convocation_name": " & ".join(
+                ["Sabbath"] + [e["convocation_name"] for e in festivals]),
+            "combined": True,
+            # Earliest reminder and longest duration: never notify later than
+            # either would have, never end the calendar entry early.
+            "notification_time": min(e["notification_time"] for e in components),
+            "duration_minutes": max(e.get("duration_minutes", 60) for e in components),
+            "announcements": [],
+        })
+        out.append(combined)
+
+    out.sort(key=lambda e: e["service_time"])
+    return out
+
+
 def all_upcoming_events(tz: pytz.BaseTzInfo, days_ahead: int = 90) -> list[dict[str, Any]]:
     """Merge and sort Hebrew-calendar event types (Sabbath + convocations).
 
@@ -269,5 +343,6 @@ def all_upcoming_events(tz: pytz.BaseTzInfo, days_ahead: int = 90) -> list[dict[
     events: list[dict[str, Any]] = []
     events.extend(sabbath_events(tz, days_ahead))
     events.extend(upcoming_convocation_events(tz, days_ahead))
+    events = merge_sabbath_coincidences(events)
     events.sort(key=lambda e: e["service_time"])
     return events
