@@ -142,9 +142,11 @@ class TestCmdAnnouncements:
         msg = self._run_cmd([_ann(days_until_expiry=-1)])
         assert "no announcements" in msg.lower()
 
-    def test_markdown_in_title_escaped(self):
+    def test_markdown_preserved_in_the_source_language(self):
+        """Admins can format announcements; their own language shows it as typed."""
         msg = self._run_cmd([_ann(title="Q_A *update*")])
-        assert "Q\\_A" in msg and "\\*update\\*" in msg
+        assert "*update*" in msg
+        assert "\\*update\\*" not in msg
 
     def test_localized_for_spanish_user(self):
         msg = self._run_cmd([_ann()], lang="es")

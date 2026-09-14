@@ -114,7 +114,7 @@ class TestHandleContact:
     def test_admin_sees_admin_commands_listed(self):
         saved, upd = _run_contact(_contact_update(), is_adm=True)
         cmd_text = upd.message.reply_text.call_args_list[1][0][0]
-        assert "/broadcast" in cmd_text          # admin-only command present
+        assert "/addevent" in cmd_text           # admin-only command present
 
     def test_regular_user_does_not_see_admin_commands(self):
         saved, upd = _run_contact(_contact_update())

@@ -58,6 +58,9 @@ def _merge_special_events(
                             "document": defn.get("document", ""),
                             "targets": defn.get("targets", []),
                             "announcements": announcements_map.get(key, []),
+                            # ICS revision counter, bumped by /modifyevent when
+                            # the service is moved in time.
+                            "sequence": int(defn.get("sequence", 0)),
                         })
                 current += timedelta(days=1)
         elif etype == "once":
@@ -83,6 +86,7 @@ def _merge_special_events(
                     "document": defn.get("document", ""),
                     "targets": defn.get("targets", []),
                     "announcements": announcements_map.get(defn["id"], []),
+                    "sequence": int(defn.get("sequence", 0)),
                 })
     return results
 
@@ -129,15 +133,32 @@ async def all_upcoming(days_ahead: int = 90) -> list[dict[str, Any]]:
     convocations = all_upcoming_events(TZ, days_ahead)
     # Attach announcements, per-service join link, and notification target chats.
     for ev in convocations:
-        ev["announcements"] = announcements_map.get(ev["key"], [])
-        phase_key = ev.get("phase_key")
-        if phase_key and urls_map.get(phase_key):
-            ev["url"] = urls_map[phase_key]
-        if phase_key and images_map.get(phase_key):
-            ev["image"] = images_map[phase_key]
-        if phase_key and documents_map.get(phase_key):
-            ev["document"] = documents_map[phase_key]
-        names = convo_targets.get(phase_key) if phase_key else None
+        # A combined Sabbath+festival service carries several identities: the
+        # join link, media and announcements may be configured against either
+        # the festival or the Sabbath, so try each in turn (festival first).
+        phase_keys = [k for k in (ev.get("phase_keys") or [ev.get("phase_key")]) if k]
+        event_keys = ev.get("component_keys") or [ev["key"]]
+
+        # Union of announcements across every identity, order preserved, no dupes.
+        announcements: list[str] = []
+        for k in event_keys:
+            for ann in announcements_map.get(k, []):
+                if ann not in announcements:
+                    announcements.append(ann)
+        ev["announcements"] = announcements
+
+        for field, source in (("url", urls_map), ("image", images_map),
+                              ("document", documents_map)):
+            for k in phase_keys:
+                if source.get(k):
+                    ev[field] = source[k]
+                    break
+
+        names = None
+        for k in phase_keys:
+            if k in convo_targets:
+                names = convo_targets[k]
+                break
         if names is None:
             names = convo_targets_default
         ev["target_chat_ids"] = _resolve_targets(names, registry)
