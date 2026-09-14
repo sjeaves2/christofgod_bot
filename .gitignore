@@ -8,6 +8,11 @@ config/config.yaml
 generated/
 logs/
 
+# Event configuration. NOT tracked: the bot writes to it at runtime
+# (/setservicelink, /addevent, /modifyevent) and its join links embed Zoom
+# passcodes. Ship data/events.yaml.example instead.
+data/events.yaml
+
 # User and appointment data (contains personal information)
 data/users.yaml
 data/appointments.yaml

@@ -1,9 +1,21 @@
+# Template for data/events.yaml — copy to data/events.yaml and edit.
+#
+#   cp data/events.yaml.example data/events.yaml
+#
+# The real data/events.yaml is NOT tracked in git: the bot writes to it at
+# runtime (/setservicelink, /addevent, /modifyevent, /deleteevent), and it holds
+# join links whose URLs embed Zoom passcodes. Tracking it put those links in a
+# public repository and made every admin edit block deploy/update.sh.
+#
+# Every join link below is a placeholder. Set the real ones with
+# /setservicelink from Telegram rather than by editing this file by hand.
+
 # Notification target registry: friendly name -> Telegram chat_id of a group or
 # channel the bot has been added to. Groups/supergroups use negative numeric ids
 # (e.g. -1001234567890); public channels may use "@channelusername".
 # When the bot is added to a group/channel it logs the chat_id at INFO.
 notification_targets:
-  cogm_members: -1001178984510
+  cogm_members: -1001234567890
 # Example:
 # notification_targets:
 #   main_group: -1001234567890
@@ -30,7 +42,7 @@ special_events:
   duration_minutes: 20
   notification_minutes: 720
   description: Weekly Sunday Morning Prayer service — all are welcome.
-  url: https://us06web.zoom.us/j/83741547036?pwd=kttfvC4BKnmS6fQwvb7mqawRiCXCjH.1
+  url: https://us06web.zoom.us/j/0000000000?pwd=REPLACE_ME
   # Group(s)/channel(s) to post this reminder to (registry names or chat_ids).
   targets:
     - cogm_members
@@ -44,16 +56,16 @@ special_events:
 
 convocation_announcements: {}
 convocation_urls:
-  sabbath::Eve: https://us06web.zoom.us/j/81594253541?pwd=e3BzF98vLF2t2biXwRGbCVaRUUOrVN.1
-  sabbath::Morning: https://us06web.zoom.us/j/81977710637?pwd=7n8cMom08dSCWhBxMMtTWYf7KGkXMb
-  rosh_hashanah::Eve: https://us06web.zoom.us/j/81594253541?pwd=e3BzF98vLF2t2biXwRGbCVaRUUOrVN.1
-  rosh_hashanah::Morning: https://us06web.zoom.us/j/81977710637?pwd=7n8cMom08dSCWhBxMMtTWYf7KGkXMb.1
-  yom_kippur::Eve: https://us06web.zoom.us/j/82236413869?pwd=bD67cY0qARNtkIme8r42yQQoOvqcx3.1
-  yom_kippur::Morning: https://us06web.zoom.us/j/82272051160?pwd=MHi4c6y9khb5wTQJOb0Zxs4v8lwQ8a.1
-  succoth_opening::Eve: https://us06web.zoom.us/j/81594253541?pwd=e3BzF98vLF2t2biXwRGbCVaRUUOrVN.1
-  succoth_closing::Eve: https://us06web.zoom.us/j/81594253541?pwd=e3BzF98vLF2t2biXwRGbCVaRUUOrVN.1
-  succoth_opening::Day: https://us06web.zoom.us/j/81977710637?pwd=7n8cMom08dSCWhBxMMtTWYf7KGkXMb
-  succoth_closing::Day: https://us06web.zoom.us/j/81977710637?pwd=7n8cMom08dSCWhBxMMtTWYf7KGkXMb
+  sabbath::Eve: https://us06web.zoom.us/j/0000000000?pwd=REPLACE_ME
+  sabbath::Morning: https://us06web.zoom.us/j/0000000000?pwd=REPLACE_ME
+  rosh_hashanah::Eve: https://us06web.zoom.us/j/0000000000?pwd=REPLACE_ME
+  rosh_hashanah::Morning: https://us06web.zoom.us/j/0000000000?pwd=REPLACE_ME
+  yom_kippur::Eve: https://us06web.zoom.us/j/0000000000?pwd=REPLACE_ME
+  yom_kippur::Morning: https://us06web.zoom.us/j/0000000000?pwd=REPLACE_ME
+  succoth_opening::Eve: https://us06web.zoom.us/j/0000000000?pwd=REPLACE_ME
+  succoth_closing::Eve: https://us06web.zoom.us/j/0000000000?pwd=REPLACE_ME
+  succoth_opening::Day: https://us06web.zoom.us/j/0000000000?pwd=REPLACE_ME
+  succoth_closing::Day: https://us06web.zoom.us/j/0000000000?pwd=REPLACE_ME
 
 # Optional per-service media, keyed by phase_key (like convocation_urls). Each
 # value is a public https URL or a local file path (media/...). Example:
