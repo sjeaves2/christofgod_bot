@@ -35,6 +35,19 @@ echo "==> Installing Python dependencies"
 "$VENV/bin/pip" install --upgrade -q pip
 "$VENV/bin/pip" install -q -r requirements.txt
 
+# data/events.yaml is deliberately untracked (it holds join links and the bot
+# rewrites it at runtime), so a fresh clone has no copy. Seed it from the
+# template; never overwrite an existing one.
+echo "==> Seeding event configuration (if absent)"
+if [ ! -f data/events.yaml ]; then
+    mkdir -p data
+    cp data/events.yaml.example data/events.yaml
+    echo "    created data/events.yaml from the template"
+    echo "    set the real join links with /setservicelink once the bot is running"
+else
+    echo "    data/events.yaml already present — left untouched"
+fi
+
 echo "==> Checking configuration"
 missing=0
 if [ ! -f config/config.yaml ]; then

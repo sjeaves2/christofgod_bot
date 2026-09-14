@@ -152,6 +152,32 @@ second argument if it is not the default `christofgod_bot`:
 ./deploy/migrate.sh ubuntu@<your-ip> repos/christofgod_bot
 ```
 
+`data/events.yaml` is **not** in git — it holds your join links (whose URLs
+embed Zoom passcodes) and the bot rewrites it at runtime, so tracking it would
+both publish those links and leave the server's working tree dirty, which
+`update.sh` refuses to deploy over. `migrate.sh` copies it across with the rest
+of `data/`; on a server with no copy at all, `setup.sh` seeds one from
+`data/events.yaml.example`. Set the real links from Telegram with
+`/setservicelink`.
+
+> **One-time step when deploying the change that untracked `data/events.yaml`.**
+> That commit removes the file from git, and a checkout deletes the working
+> copy along with it — taking the live join links with it. Back it up first and
+> put it back afterwards:
+>
+> ```bash
+> cp data/events.yaml /tmp/events.yaml.bak
+> git checkout -- data/events.yaml 2>/dev/null || true   # clean the tree
+> ./deploy/update.sh v0.14.0
+> cp /tmp/events.yaml.bak data/events.yaml
+> sudo systemctl restart christofgod-bot
+> ```
+>
+> Only needed for that one release. Afterwards the file is untracked, so no
+> checkout touches it and `update.sh` no longer trips over admin edits.
+
+```
+
 That copies `config/*.yaml` and `data/`, and deliberately **skips `logs/`** —
 see "Before you migrate" below. Then back **on the server**:
 
