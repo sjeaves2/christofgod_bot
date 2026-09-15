@@ -135,11 +135,14 @@ async def _announcement_for_lang(ann: dict[str, Any], lang: str) -> dict[str, An
         return {**ann, "title": cached.get("title") or ann.get("title"),
                 "body": cached.get("body") or ann.get("body")}
 
-    loop = asyncio.get_event_loop()
-    title = await loop.run_in_executor(
-        None, translation.translate, str(ann.get("title", "")), src, lang)
-    body = await loop.run_in_executor(
-        None, translation.translate, str(ann.get("body", "")), src, lang)
+    # to_thread rather than get_event_loop().run_in_executor(): translate() is a
+    # blocking network call, and this says so in one line without a loop handle.
+    # get_event_loop() is also the loose idiom — it works inside a coroutine but
+    # is deprecated where no loop is running.
+    title = await asyncio.to_thread(
+        translation.translate, str(ann.get("title", "")), src, lang)
+    body = await asyncio.to_thread(
+        translation.translate, str(ann.get("body", "")), src, lang)
     if title is None and body is None:
         return ann  # translator unavailable — show the original
 
