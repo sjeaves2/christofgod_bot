@@ -299,6 +299,24 @@ class TestAnnouncementTranslation:
         assert out is ann
         tr.assert_not_called()
 
+    async def test_translates_from_the_source_language_to_the_viewer_s(self):
+        """Direction matters: swapping src and dst translates the wrong way and
+        would otherwise pass unnoticed — the mock only records that it was called."""
+        ann = _ann(title="Sabbath service", body="Bring your Bible")
+        ann["lang"] = "en"
+        _, _, tr = await self._run_for_lang(ann, "es")
+        for call in tr.call_args_list:
+            text, src, dst = call.args
+            assert src == "en", f"source must be the announcement's language, got {src!r}"
+            assert dst == "es", f"target must be the viewer's language, got {dst!r}"
+
+    async def test_translates_both_title_and_body(self):
+        ann = _ann(title="Sabbath service", body="Bring your Bible")
+        ann["lang"] = "en"
+        _, _, tr = await self._run_for_lang(ann, "fr")
+        sent = {call.args[0] for call in tr.call_args_list}
+        assert sent == {"Sabbath service", "Bring your Bible"}
+
     async def test_translates_and_caches_on_first_view(self):
         ann = _ann(ann_id="TX1")
         ann["lang"] = "en"
