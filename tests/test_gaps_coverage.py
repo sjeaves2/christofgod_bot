@@ -12,7 +12,6 @@ slipped through.
 
 from __future__ import annotations
 
-import asyncio
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -25,11 +24,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 TZ = pytz.timezone("America/New_York")
 
 
-def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
 
 
-def _update(user_id: int, username: "str | None" = None) -> MagicMock:
+def _update(user_id: int, username: str | None = None) -> MagicMock:
     upd = MagicMock()
     upd.effective_user.id = user_id
     upd.effective_user.username = username
@@ -41,30 +38,30 @@ def _update(user_id: int, username: "str | None" = None) -> MagicMock:
 # ---------------------------------------------------------------------------
 
 class TestPhoneAdminRecognition:
-    def test_phone_registration_grants_admin(self):
+    async def test_phone_registration_grants_admin(self):
         import permissions
         with patch.object(permissions, "ADMIN_PHONES", {"15550001234"}), \
              patch.object(permissions, "ADMIN_USERNAMES", set()), \
              patch.object(permissions, "_admin_chat_ids", set()):
             upd = _update(4242)
             assert permissions.is_admin(upd) is False        # not yet known
-            _run(permissions._register_admin_by_phone(4242, "+1 (555) 000-1234"))
+            await permissions._register_admin_by_phone(4242, "+1 (555) 000-1234")
             assert permissions.is_admin(upd) is True         # recognised after sharing
 
-    def test_non_admin_phone_does_not_grant_admin(self):
+    async def test_non_admin_phone_does_not_grant_admin(self):
         import permissions
         with patch.object(permissions, "ADMIN_PHONES", {"15550001234"}), \
              patch.object(permissions, "ADMIN_USERNAMES", set()), \
              patch.object(permissions, "_admin_chat_ids", set()):
-            _run(permissions._register_admin_by_phone(4242, "+1 (555) 999-0000"))
+            await permissions._register_admin_by_phone(4242, "+1 (555) 999-0000")
             assert permissions.is_admin(_update(4242)) is False
 
-    def test_registration_is_per_user(self):
+    async def test_registration_is_per_user(self):
         import permissions
         with patch.object(permissions, "ADMIN_PHONES", {"15550001234"}), \
              patch.object(permissions, "ADMIN_USERNAMES", set()), \
              patch.object(permissions, "_admin_chat_ids", set()):
-            _run(permissions._register_admin_by_phone(1, "+15550001234"))
+            await permissions._register_admin_by_phone(1, "+15550001234")
             assert permissions.is_admin(_update(1)) is True
             assert permissions.is_admin(_update(2)) is False
 
@@ -76,12 +73,12 @@ class TestPhoneAdminRecognition:
             assert permissions.is_admin(_update(7, "Alice")) is True
             assert permissions.is_admin(_update(8, "mallory")) is False
 
-    def test_username_registration_grants_admin(self):
+    async def test_username_registration_grants_admin(self):
         import permissions
         with patch.object(permissions, "ADMIN_PHONES", set()), \
              patch.object(permissions, "ADMIN_USERNAMES", {"alice"}), \
              patch.object(permissions, "_admin_chat_ids", set()):
-            _run(permissions._register_admin_by_username(55, "alice"))
+            await permissions._register_admin_by_username(55, "alice")
             # Recognised by chat_id even if the username is later cleared.
             assert permissions.is_admin(_update(55, None)) is True
 
@@ -106,7 +103,7 @@ class TestAllUpcomingOrdering:
                 "convocation_targets_default": [],
                 "special_events": [spec(3, 20), spec(1, 1), spec(2, 10)]}
 
-    def _run_all_upcoming(self):
+    async def _run_all_upcoming(self):
         import events
 
         async def _fake_data():
@@ -114,18 +111,18 @@ class TestAllUpcomingOrdering:
 
         with patch("storage.get_all_events_data", side_effect=_fake_data), \
              patch("events.all_upcoming_events", return_value=[]):
-            return _run(events.all_upcoming(days_ahead=60))
+            return await events.all_upcoming(days_ahead=60)
 
-    def test_result_is_sorted_by_service_time(self):
-        evs = self._run_all_upcoming()
+    async def test_result_is_sorted_by_service_time(self):
+        evs = await self._run_all_upcoming()
         times = [e["service_time"] for e in evs]
         assert times == sorted(times), "all_upcoming must return events in chronological order"
 
-    def test_specific_order_of_out_of_order_input(self):
-        evs = self._run_all_upcoming()
+    async def test_specific_order_of_out_of_order_input(self):
+        evs = await self._run_all_upcoming()
         assert [e["name"] for e in evs] == ["Event 1", "Event 2", "Event 3"]
 
-    def test_convocations_and_specials_interleave_chronologically(self):
+    async def test_convocations_and_specials_interleave_chronologically(self):
         import events
         soon = datetime.now(TZ) + timedelta(days=5, hours=3)
         convo = {"key": "c1", "phase_key": "sabbath::Eve", "name": "Convocation",
@@ -137,7 +134,7 @@ class TestAllUpcomingOrdering:
 
         with patch("storage.get_all_events_data", side_effect=_fake_data), \
              patch("events.all_upcoming_events", return_value=[convo]):
-            evs = _run(events.all_upcoming(days_ahead=60))
+            evs = await events.all_upcoming(days_ahead=60)
         times = [e["service_time"] for e in evs]
         assert times == sorted(times)
         # The convocation (day 7) falls between Event 1 (day 3) and Event 2 (day 12).
@@ -153,52 +150,52 @@ class TestStorageAccessors:
         from cache import FileCache
         return FileCache(tmp_path / name)
 
-    def test_users_round_trip(self, tmp_path):
+    async def test_users_round_trip(self, tmp_path):
         import storage
         with patch.object(storage, "users_cache", self._cache(tmp_path, "u.yaml")):
-            assert _run(storage.get_all_users()) == []
-            _run(storage.save_users([{"chat_id": 1, "display_name": "A"}]))
-            got = _run(storage.get_all_users())
+            assert await storage.get_all_users() == []
+            await storage.save_users([{"chat_id": 1, "display_name": "A"}])
+            got = await storage.get_all_users()
         assert got == [{"chat_id": 1, "display_name": "A"}]
 
-    def test_appointments_round_trip(self, tmp_path):
+    async def test_appointments_round_trip(self, tmp_path):
         import storage
         with patch.object(storage, "appts_cache", self._cache(tmp_path, "a.yaml")):
-            assert _run(storage.get_appointments()) == []
-            _run(storage.save_appointments([{"id": "X1", "status": "pending"}]))
-            got = _run(storage.get_appointments())
+            assert await storage.get_appointments() == []
+            await storage.save_appointments([{"id": "X1", "status": "pending"}])
+            got = await storage.get_appointments()
         assert got == [{"id": "X1", "status": "pending"}]
 
-    def test_announcements_round_trip(self, tmp_path):
+    async def test_announcements_round_trip(self, tmp_path):
         import storage
         with patch.object(storage, "ann_cache", self._cache(tmp_path, "n.yaml")):
-            assert _run(storage.get_announcements()) == []
-            _run(storage.save_announcements([{"id": "A1", "title": "T"}]))
-            got = _run(storage.get_announcements())
+            assert await storage.get_announcements() == []
+            await storage.save_announcements([{"id": "A1", "title": "T"}])
+            got = await storage.get_announcements()
         assert got == [{"id": "A1", "title": "T"}]
 
-    def test_notif_state_round_trip(self, tmp_path):
+    async def test_notif_state_round_trip(self, tmp_path):
         import storage
         with patch.object(storage, "notif_state_cache", self._cache(tmp_path, "s.yaml")):
-            assert _run(storage._load_notif_state()) == {}
-            _run(storage._save_notif_state({"k": {"notified": [1]}}))
-            got = _run(storage._load_notif_state())
+            assert await storage._load_notif_state() == {}
+            await storage._save_notif_state({"k": {"notified": [1]}})
+            got = await storage._load_notif_state()
         assert got == {"k": {"notified": [1]}}
 
-    def test_known_groups_round_trip(self, tmp_path):
+    async def test_known_groups_round_trip(self, tmp_path):
         import storage
         with patch.object(storage, "groups_cache", self._cache(tmp_path, "g.yaml")):
-            assert _run(storage._load_known_groups()) == {}
-            _run(storage._save_known_groups({"-100": {"title": "Main"}}))
-            got = _run(storage._load_known_groups())
+            assert await storage._load_known_groups() == {}
+            await storage._save_known_groups({"-100": {"title": "Main"}})
+            got = await storage._load_known_groups()
         assert got == {"-100": {"title": "Main"}}
 
-    def test_users_save_preserves_other_top_level_keys(self, tmp_path):
+    async def test_users_save_preserves_other_top_level_keys(self, tmp_path):
         import storage
         cache = self._cache(tmp_path, "u2.yaml")
         cache.save_sync({"users": [], "schema_version": 3})
         with patch.object(storage, "users_cache", cache):
-            _run(storage.save_users([{"chat_id": 9}]))
+            await storage.save_users([{"chat_id": 9}])
         assert cache.get_sync()["schema_version"] == 3
 
 

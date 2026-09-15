@@ -104,7 +104,7 @@ async def purge_archived_appointments() -> int:
 
 
 
-def _appt_datetime(appt: dict[str, Any]) -> "datetime | None":
+def _appt_datetime(appt: dict[str, Any]) -> datetime | None:
     """Best-effort tz-aware datetime for an appointment (confirmed, else requested)."""
     dt_raw = appt.get("confirmed_datetime") or appt.get("requested_datetime", "")
     try:
@@ -190,8 +190,8 @@ async def appointment_reminder_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         await storage.save_appointments(appts)
 
 
-def _appt_dt_label(appt: dict[str, Any], tz: "pytz.BaseTzInfo | None" = None,
-                   lang: "str | None" = None) -> str:
+def _appt_dt_label(appt: dict[str, Any], tz: pytz.BaseTzInfo | None = None,
+                   lang: str | None = None) -> str:
     """Human-readable date/time for an appointment, falling back to the raw value."""
     dt_obj = _appt_datetime(appt)
     if dt_obj is None:
@@ -218,7 +218,7 @@ def _appt_is_past(appt: dict[str, Any]) -> bool:
     return dt_obj is not None and dt_obj <= now_tz()
 
 
-def _user_is_appt_official(appt: dict[str, Any], user_id: int, username: "str | None") -> bool:
+def _user_is_appt_official(appt: dict[str, Any], user_id: int, username: str | None) -> bool:
     """True if this user is the official assigned to the given appointment."""
     off = next((o for o in permissions.OFFICIALS if o.get("id") == appt.get("official_id")), None)
     if not off:
@@ -289,8 +289,8 @@ def _overlapping_appt(
     user_id: int,
     start: datetime,
     duration_minutes: int,
-    exclude_id: "str | None" = None,
-) -> "dict | None":
+    exclude_id: str | None = None,
+) -> dict | None:
     """Return the user's active appointment whose time overlaps [start, start+duration)."""
     end = start + timedelta(minutes=duration_minutes)
     for a in appts:
@@ -313,7 +313,7 @@ def _overlapping_appt(
 
 def _confirmed_overlap(
     appts: list[dict[str, Any]], appt: dict[str, Any], confirmed_iso: str
-) -> "dict | None":
+) -> dict | None:
     """Check a to-be-confirmed time against the requester's *other* active appointments."""
     start = datetime.fromisoformat(confirmed_iso)
     if start.tzinfo is None:
@@ -358,9 +358,9 @@ def _stamp_appt_action(appt: dict[str, Any]) -> None:
 
 def _user_last_action_at(
     appts: list[dict[str, Any]], user_id: int
-) -> "datetime | None":
+) -> datetime | None:
     """Most recent last_action_at across this user's appointments, or None."""
-    latest: "datetime | None" = None
+    latest: datetime | None = None
     for a in appts:
         if a.get("user_chat_id") != user_id:
             continue

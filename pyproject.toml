@@ -5,9 +5,21 @@
 # Lines may run to 100 characters — comfortably wider than PEP 8's 79, which
 # suits this codebase's long localized strings and Telegram API calls.
 line-length = 100
-target-version = "py39"
+# Matches the CI matrix and the server (Ubuntu 24.04 ships 3.12).
+target-version = "py312"
 
 [tool.ruff.lint]
 # E/W  = pycodestyle style rules (includes E501 line-too-long)
 # F    = pyflakes real errors (undefined names, unused/duplicate imports)
 select = ["E", "W", "F"]
+
+[tool.pytest.ini_options]
+# Async tests are written the ordinary way — `async def test_...` with no
+# marker. Before this, every file drove coroutines through a local
+# `asyncio.get_event_loop().run_until_complete()` helper; a single
+# @pytest.mark.asyncio test anywhere then broke 493 unrelated tests, because
+# pytest-asyncio clears the current loop after each of its tests and
+# get_event_loop() raises on Python 3.12 when no loop is set.
+asyncio_mode = "auto"
+asyncio_default_test_loop_scope = "function"
+asyncio_default_fixture_loop_scope = "function"

@@ -91,7 +91,7 @@ def _merge_special_events(
     return results
 
 
-def _resolve_targets(names: "list", registry: dict) -> list[int]:
+def _resolve_targets(names: list, registry: dict) -> list[int]:
     """Map target names to chat_ids via the registry; pass through raw ids.
 
     Accepts a list of registry names and/or literal chat ids (int, or a string

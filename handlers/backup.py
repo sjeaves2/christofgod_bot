@@ -55,7 +55,7 @@ STATE_FILE = GEN_DIR / "backup_state.json"
 FORCE_AFTER_DAYS = 7
 
 
-def data_fingerprint() -> "tuple[str, list[str]]":
+def data_fingerprint() -> tuple[str, list[str]]:
     """SHA-256 over the *contents* of data/, plus the file names covered.
 
     Hashing contents rather than the zip matters: a zip embeds each file's
@@ -92,7 +92,7 @@ def save_backup_state(fingerprint: str, when: datetime) -> None:
         logger.warning("Could not record backup state: %s", exc)
 
 
-def backup_needed(fingerprint: str, now: "datetime | None" = None) -> "tuple[bool, str]":
+def backup_needed(fingerprint: str, now: datetime | None = None) -> tuple[bool, str]:
     """Decide whether tonight's backup is worth sending; returns (needed, why)."""
     now = now or now_tz()
     state = load_backup_state()
@@ -111,7 +111,7 @@ def backup_needed(fingerprint: str, now: "datetime | None" = None) -> "tuple[boo
     return False, f"no changes since {last.strftime('%Y-%m-%d')}"
 
 
-def build_backup(now: "datetime | None" = None) -> "tuple[bytes, str, list[str]]":
+def build_backup(now: datetime | None = None) -> tuple[bytes, str, list[str]]:
     """Zip every file in data/ in memory.
 
     Returns (zip_bytes, filename, member_names). Built in memory because the
@@ -131,7 +131,7 @@ def build_backup(now: "datetime | None" = None) -> "tuple[bytes, str, list[str]]
     return payload, filename, members
 
 
-def verify_backup(payload: bytes) -> "str | None":
+def verify_backup(payload: bytes) -> str | None:
     """Return the name of the first corrupt member, or None if the zip is sound.
 
     A backup that cannot be opened is worse than no backup, because it looks
@@ -145,7 +145,7 @@ def verify_backup(payload: bytes) -> "str | None":
 
 
 async def build_caption(members: list[str], size: int,
-                        now: "datetime | None" = None) -> str:
+                        now: datetime | None = None) -> str:
     """A short summary so the contents can be sanity-checked without opening it."""
     now = now or now_tz()
     users = await storage.get_all_users()
@@ -159,7 +159,7 @@ async def build_caption(members: list[str], size: int,
     )
 
 
-async def send_backup(bot, now: "datetime | None" = None, force: bool = False) -> int:
+async def send_backup(bot, now: datetime | None = None, force: bool = False) -> int:
     """Build, verify and DM the backup. Returns the number of admins reached.
 
     Skips sending when data/ is byte-for-byte identical to the last backup,

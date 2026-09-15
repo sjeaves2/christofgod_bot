@@ -7,7 +7,6 @@ plain-text alert format.
 
 from __future__ import annotations
 
-import asyncio
 import sys
 from datetime import timedelta
 from pathlib import Path
@@ -19,8 +18,6 @@ import error_reporting as er
 import permissions
 
 
-def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
 
 
 def _raise(kind=ValueError, msg="something broke"):
@@ -194,33 +191,33 @@ class TestErrorLog:
 
 
 class TestOpsRecipients:
-    def test_ops_admin_by_username(self):
+    async def test_ops_admin_by_username(self):
         async def _users():
             return [{"chat_id": 1, "username": "bishop"}, {"chat_id": 2, "username": "other"}]
         with patch("storage.get_all_users", side_effect=_users), \
              patch.object(permissions, "OPS_USERNAMES", {"bishop"}), \
              patch.object(permissions, "_ops_chat_ids", set()):
-            assert _run(er.ops_chat_ids()) == {1}
+            assert await er.ops_chat_ids() == {1}
 
-    def test_ops_admin_registered_by_phone(self):
+    async def test_ops_admin_registered_by_phone(self):
         async def _users():
             return []
         with patch("storage.get_all_users", side_effect=_users), \
              patch.object(permissions, "OPS_USERNAMES", set()), \
              patch.object(permissions, "_ops_chat_ids", {99}):
-            assert _run(er.ops_chat_ids()) == {99}
+            assert await er.ops_chat_ids() == {99}
 
-    def test_non_ops_admins_excluded(self):
+    async def test_non_ops_admins_excluded(self):
         async def _users():
             return [{"chat_id": 5, "username": "plainadmin"}]
         with patch("storage.get_all_users", side_effect=_users), \
              patch.object(permissions, "OPS_USERNAMES", {"bishop"}), \
              patch.object(permissions, "_ops_chat_ids", set()):
-            assert _run(er.ops_chat_ids()) == set()
+            assert await er.ops_chat_ids() == set()
 
 
 class TestReportException:
-    def _report(self, exc, tmp_path, users=None, ops={"bishop"}):
+    async def _report(self, exc, tmp_path, users=None, ops={"bishop"}):
         bot = MagicMock()
         bot.send_message = AsyncMock()
 
@@ -231,32 +228,32 @@ class TestReportException:
              patch("storage.get_all_users", side_effect=_users), \
              patch.object(permissions, "OPS_USERNAMES", ops), \
              patch.object(permissions, "_ops_chat_ids", set()):
-            error_id = _run(er.report_exception(bot, exc, note="user 7"))
+            error_id = await er.report_exception(bot, exc, note="user 7")
         return error_id, bot, (tmp_path / "errors.log")
 
-    def test_alerts_ops_admin_in_plain_text(self, tmp_path):
+    async def test_alerts_ops_admin_in_plain_text(self, tmp_path):
         _reset()
-        error_id, bot, _ = self._report(_raise(ValueError, "boom"), tmp_path)
+        error_id, bot, _ = await self._report(_raise(ValueError, "boom"), tmp_path)
         assert error_id.startswith("ERR-")
         bot.send_message.assert_awaited_once()
         assert bot.send_message.await_args[0][0] == 7
         # Plain text: a traceback is not valid Markdown.
         assert "parse_mode" not in bot.send_message.await_args.kwargs
 
-    def test_logs_even_when_alert_suppressed(self, tmp_path):
+    async def test_logs_even_when_alert_suppressed(self, tmp_path):
         _reset()
         from telegram.error import NetworkError
-        error_id, bot, log = self._report(_raise(NetworkError, "Bad Gateway"), tmp_path)
+        error_id, bot, log = await self._report(_raise(NetworkError, "Bad Gateway"), tmp_path)
         bot.send_message.assert_not_awaited()          # single blip stays quiet
         assert error_id in log.read_text()             # but is still recorded
 
-    def test_survives_no_reachable_ops_admin(self, tmp_path):
+    async def test_survives_no_reachable_ops_admin(self, tmp_path):
         _reset()
-        error_id, bot, log = self._report(_raise(ValueError, "boom"), tmp_path, users=[])
+        error_id, bot, log = await self._report(_raise(ValueError, "boom"), tmp_path, users=[])
         bot.send_message.assert_not_awaited()
         assert error_id in log.read_text()
 
-    def test_send_failure_does_not_raise(self, tmp_path):
+    async def test_send_failure_does_not_raise(self, tmp_path):
         _reset()
         bot = MagicMock()
         bot.send_message = AsyncMock(side_effect=RuntimeError("telegram down"))
@@ -268,15 +265,15 @@ class TestReportException:
              patch("storage.get_all_users", side_effect=_users), \
              patch.object(permissions, "OPS_USERNAMES", {"bishop"}), \
              patch.object(permissions, "_ops_chat_ids", set()):
-            _run(er.report_exception(bot, _raise(ValueError, "boom")))  # must not raise
+            await er.report_exception(bot, _raise(ValueError, "boom"))  # must not raise
 
-    def test_none_exception_is_ignored(self, tmp_path):
-        assert _run(er.report_exception(MagicMock(), None)) is None
+    async def test_none_exception_is_ignored(self, tmp_path):
+        assert await er.report_exception(MagicMock(), None) is None
 
-    def test_activity_log_records_error_id(self, tmp_path):
+    async def test_activity_log_records_error_id(self, tmp_path):
         _reset()
         with patch.object(er.activity, "log_error") as log_error:
-            self._report(_raise(ValueError, "boom"), tmp_path)
+            await self._report(_raise(ValueError, "boom"), tmp_path)
         assert log_error.called
         assert "ERR-" in log_error.call_args[0][0]
         assert "ValueError" in log_error.call_args[0][0]

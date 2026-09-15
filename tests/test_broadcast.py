@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -14,8 +13,6 @@ import handlers.broadcast as hb
 import telegram.ext as ext
 
 
-def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
 
 
 def _ctx():
@@ -44,7 +41,7 @@ def _update(chat_id=1, text=None):
 # ---------------------------------------------------------------------------
 
 class TestTargetOptions:
-    def _run_opts(self, known_groups, registry, get_chat=None, lang="en"):
+    async def _run_opts(self, known_groups, registry, get_chat=None, lang="en"):
 
         saved = {"groups": dict(known_groups)}
 
@@ -68,37 +65,37 @@ class TestTargetOptions:
         with patch("storage._load_known_groups", side_effect=_kg), \
              patch("storage._save_known_groups", side_effect=_save), \
              patch("storage.get_all_events_data", side_effect=_ev):
-            opts = _run(hb._broadcast_target_options(bot_obj, lang))
+            opts = await hb._broadcast_target_options(bot_obj, lang)
         return opts, saved["groups"]
 
-    def test_all_subscribers_always_first(self):
-        opts, _ = self._run_opts({}, {})
+    async def test_all_subscribers_always_first(self):
+        opts, _ = await self._run_opts({}, {})
         assert opts[0]["kind"] == "all"
         assert opts[0]["key"] == "all"
 
-    def test_individual_subscribers_label_localized(self):
+    async def test_individual_subscribers_label_localized(self):
         from localization import t
-        en, _ = self._run_opts({}, {}, lang="en")
-        es, _ = self._run_opts({}, {}, lang="es")
+        en, _ = await self._run_opts({}, {}, lang="en")
+        es, _ = await self._run_opts({}, {}, lang="es")
         assert en[0]["label"] == t("bcast_individual_subscribers", "en")
         assert es[0]["label"] == t("bcast_individual_subscribers", "es")
         assert en[0]["label"] != es[0]["label"]  # actually translated
 
-    def test_includes_tracked_groups(self):
-        opts, _ = self._run_opts(
+    async def test_includes_tracked_groups(self):
+        opts, _ = await self._run_opts(
             {"-100": {"chat_id": -100, "title": "COGM Members", "status": "member"}}, {})
         labels = [o["label"] for o in opts]
         assert "COGM Members" in labels
 
-    def test_unresolvable_registry_group_uses_symbolic_name(self):
+    async def test_unresolvable_registry_group_uses_symbolic_name(self):
         # get_chat fails → registry entry still offered, labelled with its key.
-        opts, _ = self._run_opts({}, {"cogm_members": -1001178984510})
+        opts, _ = await self._run_opts({}, {"cogm_members": -1001178984510})
         ids = [o["chat_id"] for o in opts if o["kind"] == "group"]
         labels = [o["label"] for o in opts if o["kind"] == "group"]
         assert -1001178984510 in ids
         assert "cogm_members" in labels
 
-    def test_registry_resolved_to_pretty_title_and_recorded(self):
+    async def test_registry_resolved_to_pretty_title_and_recorded(self):
         # get_chat succeeds → the pretty title is used AND recorded in known_groups.
         async def _get_chat(cid):
             chat = MagicMock()
@@ -108,14 +105,14 @@ class TestTargetOptions:
             chat.type = ChatType.SUPERGROUP
             return chat
 
-        opts, saved = self._run_opts({}, {"cogm_members": -1001178984510}, get_chat=_get_chat)
+        opts, saved = await self._run_opts({}, {"cogm_members": -1001178984510}, get_chat=_get_chat)
         labels = [o["label"] for o in opts if o["kind"] == "group"]
         assert "COGM Members" in labels
         assert "cogm_members" not in labels           # symbolic name replaced
         assert str(-1001178984510) in saved            # persisted into known_groups
 
-    def test_union_dedupes_by_chat_id(self):
-        opts, _ = self._run_opts(
+    async def test_union_dedupes_by_chat_id(self):
+        opts, _ = await self._run_opts(
             {"-100": {"chat_id": -100, "title": "Tracked", "status": "member"}},
             {"same": -100},
         )
@@ -128,32 +125,32 @@ class TestTargetOptions:
 # ---------------------------------------------------------------------------
 
 class TestExpandRecipients:
-    def _expand(self, options, selected, users):
+    async def _expand(self, options, selected, users):
 
         async def _users():
             return users
 
         with patch("storage.get_all_users", side_effect=_users):
-            return _run(hb._bc_expand_recipients(options, set(selected)))
+            return await hb._bc_expand_recipients(options, set(selected))
 
-    def test_all_expands_to_subscribers(self):
+    async def test_all_expands_to_subscribers(self):
         opts = [{"key": "all", "kind": "all", "chat_id": None, "label": "All subscribers"}]
-        recips = self._expand(opts, ["all"], [{"chat_id": 1, "display_name": "A"},
+        recips = await self._expand(opts, ["all"], [{"chat_id": 1, "display_name": "A"},
                                               {"chat_id": 2, "display_name": "B"}])
         assert {r["chat_id"] for r in recips} == {1, 2}
         assert all(r["kind"] == "user" for r in recips)
 
-    def test_group_selection_adds_group(self):
+    async def test_group_selection_adds_group(self):
         opts = [{"key": "-100", "kind": "group", "chat_id": -100, "label": "G"}]
-        recips = self._expand(opts, ["-100"], [])
+        recips = await self._expand(opts, ["-100"], [])
         assert recips == [{"kind": "group", "chat_id": -100, "label": "G"}]
 
-    def test_mixed_selection(self):
+    async def test_mixed_selection(self):
         opts = [
             {"key": "all", "kind": "all", "chat_id": None, "label": "All subscribers"},
             {"key": "-100", "kind": "group", "chat_id": -100, "label": "G"},
         ]
-        recips = self._expand(opts, ["all", "-100"], [{"chat_id": 5, "display_name": "E"}])
+        recips = await self._expand(opts, ["all", "-100"], [{"chat_id": 5, "display_name": "E"}])
         kinds = {(r["kind"], r["chat_id"]) for r in recips}
         assert ("user", 5) in kinds
         assert ("group", -100) in kinds
@@ -170,37 +167,37 @@ class TestSendAndRetry:
         ctx.user_data["bc_done"] = set()
         ctx.user_data["bc_retries"] = 0
 
-    def test_send_pending_skips_done(self):
+    async def test_send_pending_skips_done(self):
         ctx = _ctx()
         self._prime(ctx, [{"kind": "user", "chat_id": 1, "label": "A"},
                           {"kind": "user", "chat_id": 2, "label": "B"}])
         ctx.user_data["bc_done"] = {1}
-        failures = _run(hb._bc_send_pending(ctx.application.bot, ctx))
+        failures = await hb._bc_send_pending(ctx.application.bot, ctx)
         assert failures == []
         # Only chat 2 was (re)sent.
         assert ctx.application.bot.send_message.await_count == 1
         assert ctx.application.bot.send_message.await_args[0][0] == 2
 
-    def test_failure_recorded_and_not_marked_done(self):
+    async def test_failure_recorded_and_not_marked_done(self):
         from telegram.error import NetworkError
         ctx = _ctx()
         ctx.application.bot.send_message = AsyncMock(side_effect=NetworkError("x"))
         self._prime(ctx, [{"kind": "group", "chat_id": -100, "label": "G"}])
-        failures = _run(hb._bc_send_pending(ctx.application.bot, ctx))
+        failures = await hb._bc_send_pending(ctx.application.bot, ctx)
         assert len(failures) == 1
         assert ctx.user_data["bc_done"] == set()
 
-    def test_all_success_ends_conversation(self):
+    async def test_all_success_ends_conversation(self):
         ctx = _ctx()
         self._prime(ctx, [{"kind": "user", "chat_id": 1, "label": "A"}])
         upd = _update(chat_id=99)
-        result = _run(hb._bc_attempt_and_prompt(upd, ctx))
+        result = await hb._bc_attempt_and_prompt(upd, ctx)
         assert result == ext.ConversationHandler.END
         # Confirmation message sent to admin chat.
         assert any("delivered to all" in str(c.args[1]).lower()
                    for c in ctx.application.bot.send_message.await_args_list)
 
-    def test_partial_failure_prompts_retry(self):
+    async def test_partial_failure_prompts_retry(self):
         from telegram.error import NetworkError
         ctx = _ctx()
 
@@ -212,11 +209,11 @@ class TestSendAndRetry:
         self._prime(ctx, [{"kind": "user", "chat_id": 1, "label": "A"},
                           {"kind": "user", "chat_id": 2, "label": "B"}])
         upd = _update(chat_id=99)
-        result = _run(hb._bc_attempt_and_prompt(upd, ctx))
+        result = await hb._bc_attempt_and_prompt(upd, ctx)
         assert result == hb.BC_RETRY
         assert ctx.user_data["bc_done"] == {1}
 
-    def test_retry_limit_stops_without_prompt(self):
+    async def test_retry_limit_stops_without_prompt(self):
         from telegram.error import NetworkError
         ctx = _ctx()
 
@@ -228,12 +225,12 @@ class TestSendAndRetry:
         self._prime(ctx, [{"kind": "user", "chat_id": 1, "label": "A"}])
         ctx.user_data["bc_retries"] = hb.BC_MAX_RETRIES  # already at limit
         upd = _update(chat_id=99)
-        result = _run(hb._bc_attempt_and_prompt(upd, ctx))
+        result = await hb._bc_attempt_and_prompt(upd, ctx)
         assert result == ext.ConversationHandler.END
         assert any("retry limit" in str(c.args[1]).lower()
                    for c in ctx.application.bot.send_message.await_args_list)
 
-    def test_retry_yes_increments_and_resends(self):
+    async def test_retry_yes_increments_and_resends(self):
         ctx = _ctx()
         self._prime(ctx, [{"kind": "user", "chat_id": 1, "label": "A"}])
         query = MagicMock()
@@ -246,12 +243,12 @@ class TestSendAndRetry:
         upd.effective_user.id = 99
         upd.effective_user.username = "a"
         upd.effective_user.full_name = "Admin"
-        result = _run(hb.bc_retry(upd, ctx))
+        result = await hb.bc_retry(upd, ctx)
         assert ctx.user_data["bc_retries"] == 1
         # Succeeds on retry → conversation ends.
         assert result == ext.ConversationHandler.END
 
-    def test_retry_no_ends(self):
+    async def test_retry_no_ends(self):
         ctx = _ctx()
         self._prime(ctx, [{"kind": "user", "chat_id": 1, "label": "A"},
                           {"kind": "user", "chat_id": 2, "label": "B"}])
@@ -262,7 +259,7 @@ class TestSendAndRetry:
         query.data = "bc:retry:no"
         upd = MagicMock()
         upd.callback_query = query
-        result = _run(hb.bc_retry(upd, ctx))
+        result = await hb.bc_retry(upd, ctx)
         assert result == ext.ConversationHandler.END
         assert "1/2" in query.edit_message_text.await_args[0][0]
 
@@ -294,29 +291,29 @@ class TestSelectionToggle:
         upd.effective_chat.id = 99
         return upd, query
 
-    def test_toggle_adds_selection(self):
+    async def test_toggle_adds_selection(self):
         ctx = self._ctx_with_options()
         upd, query = self._query_update("bc:toggle:all")
-        result = _run(hb.bc_select(upd, ctx))
+        result = await hb.bc_select(upd, ctx)
         assert "all" in ctx.user_data["bc_selected"]
         assert result == hb.BC_SELECT
 
-    def test_toggle_twice_removes(self):
+    async def test_toggle_twice_removes(self):
         ctx = self._ctx_with_options()
         upd, query = self._query_update("bc:toggle:-100")
-        _run(hb.bc_select(upd, ctx))
-        _run(hb.bc_select(upd, ctx))
+        await hb.bc_select(upd, ctx)
+        await hb.bc_select(upd, ctx)
         assert "-100" not in ctx.user_data["bc_selected"]
 
-    def test_send_with_no_selection_alerts(self):
+    async def test_send_with_no_selection_alerts(self):
         ctx = self._ctx_with_options()
         upd, query = self._query_update("bc:send")
-        result = _run(hb.bc_select(upd, ctx))
+        result = await hb.bc_select(upd, ctx)
         assert result == hb.BC_SELECT
         query.answer.assert_awaited()
 
-    def test_cancel_ends(self):
+    async def test_cancel_ends(self):
         ctx = self._ctx_with_options()
         upd, query = self._query_update("bc:cancel")
-        result = _run(hb.bc_select(upd, ctx))
+        result = await hb.bc_select(upd, ctx)
         assert result == ext.ConversationHandler.END

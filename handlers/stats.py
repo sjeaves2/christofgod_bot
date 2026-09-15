@@ -45,7 +45,7 @@ _LINE_RE = re.compile(
 )
 
 
-def parse_args(args: "list[str] | None") -> "tuple[str, int, bool]":
+def parse_args(args: list[str] | None) -> tuple[str, int, bool]:
     """Interpret /stats arguments.
 
     Returns (view, days, clamped) where view is "system" or "usage".
@@ -67,7 +67,7 @@ def parse_args(args: "list[str] | None") -> "tuple[str, int, bool]":
     return view, days, clamped
 
 
-def read_activity(days: int, now: "datetime | None" = None) -> list[dict]:
+def read_activity(days: int, now: datetime | None = None) -> list[dict]:
     """Parse activity-log entries newer than *days* ago.
 
     Malformed or undated lines are skipped: a stats command must never fail
@@ -95,7 +95,7 @@ def read_activity(days: int, now: "datetime | None" = None) -> list[dict]:
     return entries
 
 
-def last_entry_of(kind: str) -> "dict | None":
+def last_entry_of(kind: str) -> dict | None:
     """Most recent activity entry of *kind*, scanning the whole log.
 
     Deliberately not limited to the report period: "no reminder in the last 7
@@ -121,7 +121,7 @@ def last_entry_of(kind: str) -> "dict | None":
     return latest
 
 
-def scheduler_snapshot(job_queue, now: "datetime | None" = None) -> "dict | None":
+def scheduler_snapshot(job_queue, now: datetime | None = None) -> dict | None:
     """What the job queue currently holds.
 
     Reminder delivery depends on one-shot jobs being scheduled ahead of time.
@@ -179,7 +179,7 @@ def _notification_recipients(detail: str) -> int:
     return int(m.group(1)) if m else 0
 
 
-def build_system_report(days: int, clamped: bool, now: "datetime | None" = None,
+def build_system_report(days: int, clamped: bool, now: datetime | None = None,
                         job_queue=None) -> str:
     """Health view: uptime, scheduler state, error volume, recent errors."""
     now = now or now_tz()
@@ -249,7 +249,7 @@ def build_system_report(days: int, clamped: bool, now: "datetime | None" = None,
 
 
 async def build_usage_report(days: int, clamped: bool,
-                             now: "datetime | None" = None) -> str:
+                             now: datetime | None = None) -> str:
     """Ministry view: people, appointments, announcements, reminders, commands."""
     now = now or now_tz()
     entries = read_activity(days, now)

@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 ANNOUNCEMENT_PURGE_AFTER_DAYS = 30
 
 
-def _ann_expiry_dt(ann: dict[str, Any]) -> "datetime | None":
+def _ann_expiry_dt(ann: dict[str, Any]) -> datetime | None:
     """An announcement expires at the END of its `expires` day, church time."""
     try:
         d = datetime.strptime(str(ann.get("expires", "")), "%Y-%m-%d")
@@ -49,13 +49,13 @@ def _ann_expiry_dt(ann: dict[str, Any]) -> "datetime | None":
     return TZ.localize(d.replace(hour=23, minute=59, second=59))
 
 
-def _ann_is_active(ann: dict[str, Any], now: "datetime | None" = None) -> bool:
+def _ann_is_active(ann: dict[str, Any], now: datetime | None = None) -> bool:
     exp = _ann_expiry_dt(ann)
     return exp is not None and (now or now_tz()) <= exp
 
 
 def active_announcements(anns: list[dict[str, Any]],
-                         now: "datetime | None" = None) -> list[dict[str, Any]]:
+                         now: datetime | None = None) -> list[dict[str, Any]]:
     """Active announcements, newest first."""
     now = now or now_tz()
     live = [a for a in anns if _ann_is_active(a, now)]

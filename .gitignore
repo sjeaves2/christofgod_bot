@@ -1,5 +1,9 @@
 # Virtual environment
 .venv/
+# Second virtualenv on Python 3.12, matching CI's other leg and the server
+# (the laptop's system Python is Xcode's 3.9.6). See deploy notes.
+.venv312/
+.venv*/
 
 # Bot configuration — contains the live token, never commit this
 config/config.yaml

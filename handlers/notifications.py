@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 # partial, and why it showed up right after the catch-up job pruned the map.
 _state_lock = asyncio.Lock()
 
-def _render_notification(event: dict[str, Any], tz: "pytz.BaseTzInfo", lang: str) -> str:
+def _render_notification(event: dict[str, Any], tz: pytz.BaseTzInfo, lang: str) -> str:
     """Build a reminder message localized and time-zoned for one recipient."""
     lines = [
         t("notif_reminder_title", lang, name=md(event["name"])),
@@ -71,7 +71,7 @@ def _render_notification(event: dict[str, Any], tz: "pytz.BaseTzInfo", lang: str
 CAPTION_LIMIT = 1024  # Telegram's caption length limit for photos/documents
 
 
-def _is_media_url(src: "str | None") -> bool:
+def _is_media_url(src: str | None) -> bool:
     return isinstance(src, str) and src.lower().startswith(("http://", "https://"))
 
 
@@ -81,7 +81,7 @@ def _looks_like_path(src: str) -> bool:
     return "/" in src or "\\" in src or "." in src
 
 
-def _resolve_local_media(src: "str | None") -> "Path | None":
+def _resolve_local_media(src: str | None) -> Path | None:
     """Resolve a local media path (relative to the project root) to an existing file."""
     if not src:
         return None
@@ -92,7 +92,7 @@ def _resolve_local_media(src: "str | None") -> "Path | None":
 
 
 async def _send_media(bot, chat_id, kind: str, source: str,
-                      caption: "str | None" = None, cache: "dict | None" = None):
+                      caption: str | None = None, cache: dict | None = None):
     """Send a photo or document to one chat.
 
     *source* may be an https URL, a local file path, or a Telegram file_id.

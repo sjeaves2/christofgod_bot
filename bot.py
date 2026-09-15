@@ -290,7 +290,7 @@ async def _ignore_group_messages(update: Update, context: ContextTypes.DEFAULT_T
     raise ApplicationHandlerStop
 
 
-async def _refresh_user_identity(uid: int, uname: "str | None", dname: str) -> None:
+async def _refresh_user_identity(uid: int, uname: str | None, dname: str) -> None:
     """Keep the stored user record's username/display_name in sync with Telegram.
 
     A user may create, change, or remove their @username (or rename themselves)
@@ -328,7 +328,7 @@ _reported_username_drift: set = set()
 
 
 async def _warn_official_username_drift(context: ContextTypes.DEFAULT_TYPE,
-                                        uid: int, uname: "str | None") -> None:
+                                        uid: int, uname: str | None) -> None:
     """Alert admins when an official's/proxy's configured username goes stale.
 
     Their chat_id still identifies them, but any username-based match in
