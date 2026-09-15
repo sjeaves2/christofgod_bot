@@ -22,11 +22,11 @@ def now_tz() -> datetime:
     return datetime.now(TZ)
 
 
-def format_dt(dt: datetime, tz: "pytz.BaseTzInfo | None" = None, lang: "str | None" = None) -> str:
+def format_dt(dt: datetime, tz: pytz.BaseTzInfo | None = None, lang: str | None = None) -> str:
     return localized_datetime(dt.astimezone(tz or TZ), lang or DEFAULT_LANG)
 
 
-def _coerce_tz(name: "str | None") -> "pytz.BaseTzInfo":
+def _coerce_tz(name: str | None) -> pytz.BaseTzInfo:
     """Return a pytz timezone for *name*, falling back to the church timezone."""
     if name:
         try:
@@ -36,18 +36,18 @@ def _coerce_tz(name: "str | None") -> "pytz.BaseTzInfo":
     return TZ
 
 
-def user_tz_of(record: "dict | None") -> "pytz.BaseTzInfo":
+def user_tz_of(record: dict | None) -> pytz.BaseTzInfo:
     """Timezone for a user record, defaulting to the configured church timezone."""
     return _coerce_tz((record or {}).get("timezone"))
 
 
-def user_lang_of(record: "dict | None") -> str:
+def user_lang_of(record: dict | None) -> str:
     """Language code for a user record, defaulting to the catalog default."""
     lang = (record or {}).get("language")
     return lang if lang in CATALOG else DEFAULT_LANG
 
 
-async def get_user_prefs(chat_id: int) -> "tuple[pytz.BaseTzInfo, str]":
+async def get_user_prefs(chat_id: int) -> tuple[pytz.BaseTzInfo, str]:
     """Return (timezone, language) preferences for a user (with safe defaults)."""
     users = await storage.get_all_users()
     record = next((u for u in users if u.get("chat_id") == chat_id), None)
@@ -76,7 +76,7 @@ def _event_category(event: dict[str, Any]) -> str:
     return "special"
 
 
-def user_notif_prefs(record: "dict | None") -> set:
+def user_notif_prefs(record: dict | None) -> set:
     """Set of event categories a user has opted into for personal reminders."""
     return {c for c in ((record or {}).get("notif_prefs") or []) if c in _NOTIF_CATEGORY_KEYS}
 
@@ -99,11 +99,11 @@ async def _answer_cb(query) -> None:
 _AFFIRMATIVE_WORDS = {"yes", "y", "sí", "si", "s", "oui", "o"}
 
 
-def _is_affirmative(text: "str | None") -> bool:
+def _is_affirmative(text: str | None) -> bool:
     return (text or "").strip().lower() in _AFFIRMATIVE_WORDS
 
 
-def md(value: "Any") -> str:
+def md(value: Any) -> str:
     """Escape runtime text for Telegram's legacy Markdown parse mode.
 
     Any value authored by a user or admin — display names, appointment

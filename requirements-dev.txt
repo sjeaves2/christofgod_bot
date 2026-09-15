@@ -3,3 +3,8 @@
 -r requirements.txt
 pytest>=8.0,<9.0
 pytest-asyncio>=1.0,<2.0
+
+# Linting. CI installs ruff separately (see .github/workflows), but a locally
+# rebuilt venv had no ruff at all until this was added — the rules and line
+# length come from pyproject.toml either way.
+ruff>=0.16,<0.17

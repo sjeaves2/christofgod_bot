@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -17,8 +16,6 @@ import handlers.notifications as hn
 TZ = pytz.timezone("America/New_York")
 
 
-def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
 
 
 def _bot():
@@ -65,30 +62,30 @@ class TestMediaHelpers:
 # ---------------------------------------------------------------------------
 
 class TestSendMedia:
-    def test_url_photo_passed_through(self):
+    async def test_url_photo_passed_through(self):
         b = _bot()
-        fid = _run(hn._send_media(b, 5, "photo", "https://x/y.jpg", caption="hi"))
+        fid = await hn._send_media(b, 5, "photo", "https://x/y.jpg", caption="hi")
         b.send_photo.assert_awaited_once()
         assert b.send_photo.await_args[0][1] == "https://x/y.jpg"
         assert fid == "PHOTOID"
 
-    def test_document_via_file_id(self):
+    async def test_document_via_file_id(self):
         b = _bot()
-        _run(hn._send_media(b, 5, "document", "SOMEFILEID", caption=None))
+        await hn._send_media(b, 5, "document", "SOMEFILEID", caption=None)
         b.send_document.assert_awaited_once()
         assert b.send_document.await_args[0][1] == "SOMEFILEID"
 
-    def test_local_file_uploaded_and_cached(self, tmp_path):
+    async def test_local_file_uploaded_and_cached(self, tmp_path):
         f = tmp_path / "flyer.jpg"
         f.write_bytes(b"\xff\xd8\xff\xe0")
         b = _bot()
         cache = {}
         # First send uploads (InputFile), returns + caches file_id.
-        fid1 = _run(hn._send_media(b, 5, "photo", str(f), cache=cache))
+        fid1 = await hn._send_media(b, 5, "photo", str(f), cache=cache)
         assert fid1 == "PHOTOID"
         assert cache["file_id"] == "PHOTOID"
         # Second send reuses the cached file_id (no re-upload).
-        _run(hn._send_media(b, 6, "photo", str(f), cache=cache))
+        await hn._send_media(b, 6, "photo", str(f), cache=cache)
         second_arg = b.send_photo.await_args_list[1][0][1]
         assert second_arg == "PHOTOID"
 
@@ -98,37 +95,37 @@ class TestSendMedia:
 # ---------------------------------------------------------------------------
 
 class TestNotificationPayload:
-    def test_text_only_when_no_media(self):
+    async def test_text_only_when_no_media(self):
         b = _bot()
-        _run(hn._send_notification_payload(b, 9, {}, "hello", {"image": {}, "document": {}}))
+        await hn._send_notification_payload(b, 9, {}, "hello", {"image": {}, "document": {}})
         b.send_message.assert_awaited_once()
         b.send_photo.assert_not_awaited()
 
-    def test_image_with_caption(self):
+    async def test_image_with_caption(self):
         b = _bot()
-        _run(hn._send_notification_payload(
+        await hn._send_notification_payload(
             b, 9, {"image": "https://x/y.jpg"}, "caption text",
-            {"image": {}, "document": {}}))
+            {"image": {}, "document": {}})
         b.send_photo.assert_awaited_once()
         assert b.send_photo.await_args.kwargs["caption"] == "caption text"
         # Caption fit → no separate text message.
         b.send_message.assert_not_awaited()
 
-    def test_long_text_sent_separately(self):
+    async def test_long_text_sent_separately(self):
         b = _bot()
         long_text = "x" * (hn.CAPTION_LIMIT + 50)
-        _run(hn._send_notification_payload(
+        await hn._send_notification_payload(
             b, 9, {"image": "https://x/y.jpg"}, long_text,
-            {"image": {}, "document": {}}))
+            {"image": {}, "document": {}})
         # Image sent without caption, text as its own message.
         assert b.send_photo.await_args.kwargs["caption"] is None
         b.send_message.assert_awaited_once()
 
-    def test_image_and_document_caption_on_image_only(self):
+    async def test_image_and_document_caption_on_image_only(self):
         b = _bot()
-        _run(hn._send_notification_payload(
+        await hn._send_notification_payload(
             b, 9, {"image": "https://x/i.jpg", "document": "https://x/d.pdf"},
-            "cap", {"image": {}, "document": {}}))
+            "cap", {"image": {}, "document": {}})
         assert b.send_photo.await_args.kwargs["caption"] == "cap"
         assert b.send_document.await_args.kwargs["caption"] is None
 
@@ -148,7 +145,7 @@ class TestDeliverWithMedia:
         ev.update(extra)
         return ev
 
-    def _deliver(self, event):
+    async def _deliver(self, event):
         b = _bot()
         state = {"states": {}}
 
@@ -160,17 +157,17 @@ class TestDeliverWithMedia:
 
         with patch("storage._load_notif_state", side_effect=_load), \
              patch("storage._save_notif_state", side_effect=_save):
-            sent = _run(hn.deliver_event_notifications(b, event))
+            sent = await hn.deliver_event_notifications(b, event)
         return b, sent
 
-    def test_image_posted_to_each_target(self):
-        b, sent = self._deliver(self._event(image="https://x/y.jpg"))
+    async def test_image_posted_to_each_target(self):
+        b, sent = await self._deliver(self._event(image="https://x/y.jpg"))
         assert sent == 2
         assert b.send_photo.await_count == 2
         b.send_message.assert_not_awaited()
 
-    def test_missing_local_file_falls_back_to_text(self):
-        b, sent = self._deliver(self._event(image="media/nope-missing.jpg"))
+    async def test_missing_local_file_falls_back_to_text(self):
+        b, sent = await self._deliver(self._event(image="media/nope-missing.jpg"))
         # Local file missing → dropped → plain text reminder still sent.
         assert sent == 2
         b.send_photo.assert_not_awaited()

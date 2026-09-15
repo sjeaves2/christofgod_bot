@@ -13,8 +13,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 3.9 is the project's runtime; 3.12 guards against future drift.
-        python-version: ["3.9", "3.12"]
+        # 3.12 is the runtime: it is what the Lightsail server runs (Ubuntu
+        # 24.04) and what the development venv uses. 3.13 guards against
+        # future drift. 3.9 was dropped once no machine ran it any more —
+        # the laptop's Xcode Python was the only reason it was here.
+        python-version: ["3.12", "3.13"]
 
     steps:
       - name: Check out repository

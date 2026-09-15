@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -191,8 +190,6 @@ def _make_appt(official_chat_id: int | None = 999) -> dict:
     }
 
 
-def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
 
 
 class TestFinalizeAppointment:
@@ -211,7 +208,7 @@ class TestFinalizeAppointment:
             off["chat_id"] = chat_id
         return [off]
 
-    def _run_finalize(self, appt: dict, officials: list) -> MagicMock:
+    async def _run_finalize(self, appt: dict, officials: list) -> MagicMock:
 
         ctx = self._make_context()
 
@@ -221,119 +218,119 @@ class TestFinalizeAppointment:
         with patch("permissions.OFFICIALS", officials), \
              patch("storage.save_appointments", side_effect=_fake_save):
             from handlers.appointments import _finalize_appointment
-            _run(_finalize_appointment(ctx, appt, [appt.copy()]))
+            await _finalize_appointment(ctx, appt, [appt.copy()])
 
         return ctx
 
-    def test_user_receives_confirmation_message(self):
+    async def test_user_receives_confirmation_message(self):
         appt = _make_appt(official_chat_id=999)
-        ctx = self._run_finalize(appt, self._make_officials(999))
+        ctx = await self._run_finalize(appt, self._make_officials(999))
         user_calls = [c for c in ctx.bot.send_message.call_args_list
                       if c.args[0] == 111]
         assert len(user_calls) == 1
 
-    def test_user_message_contains_confirmed(self):
+    async def test_user_message_contains_confirmed(self):
         appt = _make_appt(official_chat_id=999)
-        ctx = self._run_finalize(appt, self._make_officials(999))
+        ctx = await self._run_finalize(appt, self._make_officials(999))
         user_msg = next(c.args[1] for c in ctx.bot.send_message.call_args_list
                         if c.args[0] == 111)
         assert "confirmed" in user_msg.lower()
 
-    def test_user_message_contains_formatted_datetime(self):
+    async def test_user_message_contains_formatted_datetime(self):
         appt = _make_appt(official_chat_id=999)
-        ctx = self._run_finalize(appt, self._make_officials(999))
+        ctx = await self._run_finalize(appt, self._make_officials(999))
         user_msg = next(c.args[1] for c in ctx.bot.send_message.call_args_list
                         if c.args[0] == 111)
         assert "Thursday" in user_msg
         assert "AM" in user_msg
 
-    def test_user_message_does_not_contain_raw_iso_date(self):
+    async def test_user_message_does_not_contain_raw_iso_date(self):
         appt = _make_appt(official_chat_id=999)
-        ctx = self._run_finalize(appt, self._make_officials(999))
+        ctx = await self._run_finalize(appt, self._make_officials(999))
         user_msg = next(c.args[1] for c in ctx.bot.send_message.call_args_list
                         if c.args[0] == 111)
         assert "2026-06-18T" not in user_msg
 
-    def test_user_receives_ics_document(self):
+    async def test_user_receives_ics_document(self):
         appt = _make_appt(official_chat_id=999)
-        ctx = self._run_finalize(appt, self._make_officials(999))
+        ctx = await self._run_finalize(appt, self._make_officials(999))
         user_doc_calls = [c for c in ctx.bot.send_document.call_args_list
                           if c.args[0] == 111]
         assert len(user_doc_calls) == 1
 
-    def test_user_ics_filename_is_appointment_ics(self):
+    async def test_user_ics_filename_is_appointment_ics(self):
         appt = _make_appt(official_chat_id=999)
-        ctx = self._run_finalize(appt, self._make_officials(999))
+        ctx = await self._run_finalize(appt, self._make_officials(999))
         user_doc_call = next(c for c in ctx.bot.send_document.call_args_list
                              if c.args[0] == 111)
         doc_arg = user_doc_call.kwargs.get("document") or user_doc_call.args[1]
         assert doc_arg.filename == "appointment.ics"
 
-    def test_official_receives_confirmation_message_when_chat_id_known(self):
+    async def test_official_receives_confirmation_message_when_chat_id_known(self):
         appt = _make_appt(official_chat_id=999)
-        ctx = self._run_finalize(appt, self._make_officials(999))
+        ctx = await self._run_finalize(appt, self._make_officials(999))
         off_calls = [c for c in ctx.bot.send_message.call_args_list
                      if c.args[0] == 999]
         assert len(off_calls) == 1
 
-    def test_official_message_contains_user_display_name(self):
+    async def test_official_message_contains_user_display_name(self):
         appt = _make_appt(official_chat_id=999)
-        ctx = self._run_finalize(appt, self._make_officials(999))
+        ctx = await self._run_finalize(appt, self._make_officials(999))
         off_msg = next(c.args[1] for c in ctx.bot.send_message.call_args_list
                        if c.args[0] == 999)
         assert "Test User" in off_msg
 
-    def test_official_message_contains_username(self):
+    async def test_official_message_contains_username(self):
         appt = _make_appt(official_chat_id=999)
-        ctx = self._run_finalize(appt, self._make_officials(999))
+        ctx = await self._run_finalize(appt, self._make_officials(999))
         off_msg = next(c.args[1] for c in ctx.bot.send_message.call_args_list
                        if c.args[0] == 999)
         assert "@testuser" in off_msg
 
-    def test_official_message_contains_formatted_datetime(self):
+    async def test_official_message_contains_formatted_datetime(self):
         appt = _make_appt(official_chat_id=999)
-        ctx = self._run_finalize(appt, self._make_officials(999))
+        ctx = await self._run_finalize(appt, self._make_officials(999))
         off_msg = next(c.args[1] for c in ctx.bot.send_message.call_args_list
                        if c.args[0] == 999)
         assert "Thursday" in off_msg
         assert "AM" in off_msg
 
-    def test_official_message_contains_description(self):
+    async def test_official_message_contains_description(self):
         appt = _make_appt(official_chat_id=999)
-        ctx = self._run_finalize(appt, self._make_officials(999))
+        ctx = await self._run_finalize(appt, self._make_officials(999))
         off_msg = next(c.args[1] for c in ctx.bot.send_message.call_args_list
                        if c.args[0] == 999)
         assert "Test meeting" in off_msg
 
-    def test_official_receives_ics_document(self):
+    async def test_official_receives_ics_document(self):
         appt = _make_appt(official_chat_id=999)
-        ctx = self._run_finalize(appt, self._make_officials(999))
+        ctx = await self._run_finalize(appt, self._make_officials(999))
         off_doc_calls = [c for c in ctx.bot.send_document.call_args_list
                          if c.args[0] == 999]
         assert len(off_doc_calls) == 1
 
-    def test_official_ics_filename_is_appointment_ics(self):
+    async def test_official_ics_filename_is_appointment_ics(self):
         appt = _make_appt(official_chat_id=999)
-        ctx = self._run_finalize(appt, self._make_officials(999))
+        ctx = await self._run_finalize(appt, self._make_officials(999))
         off_doc_call = next(c for c in ctx.bot.send_document.call_args_list
                             if c.args[0] == 999)
         doc_arg = off_doc_call.kwargs.get("document") or off_doc_call.args[1]
         assert doc_arg.filename == "appointment.ics"
 
-    def test_total_send_message_calls_is_two(self):
+    async def test_total_send_message_calls_is_two(self):
         appt = _make_appt(official_chat_id=999)
-        ctx = self._run_finalize(appt, self._make_officials(999))
+        ctx = await self._run_finalize(appt, self._make_officials(999))
         assert ctx.bot.send_message.call_count == 2
 
-    def test_total_send_document_calls_is_two(self):
+    async def test_total_send_document_calls_is_two(self):
         appt = _make_appt(official_chat_id=999)
-        ctx = self._run_finalize(appt, self._make_officials(999))
+        ctx = await self._run_finalize(appt, self._make_officials(999))
         assert ctx.bot.send_document.call_count == 2
 
-    def test_ics_buffers_are_independent(self):
+    async def test_ics_buffers_are_independent(self):
         """Each party gets a separate BytesIO so reading one doesn't exhaust the other."""
         appt = _make_appt(official_chat_id=999)
-        ctx = self._run_finalize(appt, self._make_officials(999))
+        ctx = await self._run_finalize(appt, self._make_officials(999))
         docs = [c.kwargs.get("document") or c.args[1]
                 for c in ctx.bot.send_document.call_args_list]
         assert len(docs) == 2
@@ -343,35 +340,35 @@ class TestFinalizeAppointment:
             data = raw.read(5) if hasattr(raw, "read") else raw[:5]
             assert data == b"BEGIN"  # ICS starts with "BEGIN:VCALENDAR"
 
-    def test_no_message_to_official_when_chat_id_unknown(self):
+    async def test_no_message_to_official_when_chat_id_unknown(self):
         """If official hasn't started the bot (no chat_id), skip silently."""
         appt = _make_appt(official_chat_id=None)
-        ctx = self._run_finalize(appt, self._make_officials(None))
+        ctx = await self._run_finalize(appt, self._make_officials(None))
         # Only the user message should be sent
         assert ctx.bot.send_message.call_count == 1
         assert ctx.bot.send_document.call_count == 1
 
-    def test_no_ics_to_official_when_chat_id_unknown(self):
+    async def test_no_ics_to_official_when_chat_id_unknown(self):
         appt = _make_appt(official_chat_id=None)
-        ctx = self._run_finalize(appt, self._make_officials(None))
+        ctx = await self._run_finalize(appt, self._make_officials(None))
         off_doc_calls = [c for c in ctx.bot.send_document.call_args_list
                          if c.args[0] != 111]
         assert len(off_doc_calls) == 0
 
-    def test_official_not_found_does_not_raise(self):
+    async def test_official_not_found_does_not_raise(self):
         """Unknown official_id should not crash — user still gets their ICS."""
         appt = _make_appt(official_chat_id=999)
-        ctx = self._run_finalize(appt, [])  # empty officials list
+        ctx = await self._run_finalize(appt, [])  # empty officials list
         assert ctx.bot.send_message.call_count == 1
 
-    def test_naive_confirmed_datetime_localised(self):
+    async def test_naive_confirmed_datetime_localised(self):
         """A naive datetime in confirmed_datetime must not raise."""
         appt = _make_appt(official_chat_id=None)
         appt["confirmed_datetime"] = "2026-06-18T10:15:00"  # no tz offset
-        ctx = self._run_finalize(appt, self._make_officials(None))
+        ctx = await self._run_finalize(appt, self._make_officials(None))
         assert ctx.bot.send_message.call_count == 1
 
-    def test_appt_status_saved_as_confirmed(self):
+    async def test_appt_status_saved_as_confirmed(self):
         """_finalize_appointment is called after status is set to confirmed."""
         appt = _make_appt(official_chat_id=None)
         appt["status"] = "confirmed"
@@ -384,6 +381,6 @@ class TestFinalizeAppointment:
         with patch("permissions.OFFICIALS", []), \
              patch("storage.save_appointments", side_effect=_fake_save):
             from handlers.appointments import _finalize_appointment
-            _run(_finalize_appointment(ctx, appt, [appt.copy()]))
+            await _finalize_appointment(ctx, appt, [appt.copy()])
 
         assert any(a["status"] == "confirmed" for a in saved)

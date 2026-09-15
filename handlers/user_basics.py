@@ -408,7 +408,7 @@ async def _set_user_field(chat_id: int, field: str, value: str) -> None:
 CB_TZ_PREFIX = "tz:"
 
 
-async def _apply_timezone(uid: int, lang: str, tz_name: str) -> "str | None":
+async def _apply_timezone(uid: int, lang: str, tz_name: str) -> str | None:
     """Validate and persist a timezone; return the confirmation text, or None if invalid."""
     try:
         tz = pytz.timezone(tz_name)
@@ -545,7 +545,7 @@ async def _get_user_notif_prefs(chat_id: int) -> set:
     return user_notif_prefs(rec)
 
 
-async def _set_user_notif_prefs(chat_id: int, uname: "str | None",
+async def _set_user_notif_prefs(chat_id: int, uname: str | None,
                                 dname: str, prefs: set) -> None:
     """Persist a user's notification categories, creating a record if needed
     (so friends-of-the-congregation can opt in without a full /start first)."""

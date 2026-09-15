@@ -8,7 +8,6 @@ its text/media capture steps were removed.
 
 from __future__ import annotations
 
-import asyncio
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -20,8 +19,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import handlers.announcements as A  # noqa: E402
 
 
-def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
 
 
 def _ctx(**user_data):
@@ -74,7 +71,7 @@ class TestRenderAnnouncement:
 
 class TestBodyValidatesMarkdown:
     @staticmethod
-    def _submit(body, markdown_ok=True):
+    async def _submit(body, markdown_ok=True):
         ctx = _ctx(an_title="Notice")
         upd = _update(text=body)
 
@@ -83,28 +80,28 @@ class TestBodyValidatesMarkdown:
                 raise BadRequest("can't parse entities")
 
         upd.message.reply_text = AsyncMock(side_effect=reply)
-        return _run(A.an_body(upd, ctx)), ctx, upd
+        return await A.an_body(upd, ctx), ctx, upd
 
-    def test_valid_markdown_advances_to_the_media_step(self):
-        state, ctx, _ = self._submit("Bring *your Bible*")
+    async def test_valid_markdown_advances_to_the_media_step(self):
+        state, ctx, _ = await self._submit("Bring *your Bible*")
         assert state == A.AN_MEDIA
         assert ctx.user_data["an_body"] == "Bring *your Bible*"
 
-    def test_unbalanced_markdown_is_rejected_at_entry(self):
+    async def test_unbalanced_markdown_is_rejected_at_entry(self):
         """One stray marker makes Telegram reject the WHOLE message — catch it
         while the admin is still typing, not mid-push."""
-        state, ctx, _ = self._submit("Bring *your Bible", markdown_ok=False)
+        state, ctx, _ = await self._submit("Bring *your Bible", markdown_ok=False)
         assert state == A.AN_BODY
         assert "an_body" not in ctx.user_data
 
-    def test_rejection_explains_how_to_fix_it(self):
-        _, _, upd = self._submit("bad *markup", markdown_ok=False)
+    async def test_rejection_explains_how_to_fix_it(self):
+        _, _, upd = await self._submit("bad *markup", markdown_ok=False)
         said = " ".join(str(c.args[0]) for c in upd.message.reply_text.call_args_list)
         assert "matching pair" in said          # how to fix it
         assert "parse entities" in said         # what Telegram actually objected to
 
-    def test_overlong_body_still_rejected(self):
-        state, ctx, _ = self._submit("x" * (A.ANN_BODY_MAX + 1))
+    async def test_overlong_body_still_rejected(self):
+        state, ctx, _ = await self._submit("x" * (A.ANN_BODY_MAX + 1))
         assert state == A.AN_BODY
         assert "an_body" not in ctx.user_data
 
@@ -118,37 +115,37 @@ class TestAnnouncementMedia:
     def _ctx_ready(body="Short body"):
         return _ctx(an_title="Notice", an_body=body)
 
-    def test_photo_is_captured(self):
+    async def test_photo_is_captured(self):
         ctx = self._ctx_ready()
         upd = _update(photo=[MagicMock(file_id="PIC1")])
-        assert _run(A.an_media(upd, ctx)) == A.AN_EXPIRES
+        assert await A.an_media(upd, ctx) == A.AN_EXPIRES
         assert ctx.user_data["an_media"] == {"kind": "photo", "file_id": "PIC1"}
 
-    def test_document_is_captured(self):
+    async def test_document_is_captured(self):
         ctx = self._ctx_ready()
         upd = _update(document=MagicMock(file_id="DOC1"))
-        assert _run(A.an_media(upd, ctx)) == A.AN_EXPIRES
+        assert await A.an_media(upd, ctx) == A.AN_EXPIRES
         assert ctx.user_data["an_media"] == {"kind": "document", "file_id": "DOC1"}
 
-    def test_skip_leaves_it_text_only(self):
+    async def test_skip_leaves_it_text_only(self):
         ctx = self._ctx_ready()
         ctx.user_data["an_media"] = {"kind": "photo", "file_id": "OLD"}
         upd = _update(text="/skip")
-        assert _run(A.an_skip_media(upd, ctx)) == A.AN_EXPIRES
+        assert await A.an_skip_media(upd, ctx) == A.AN_EXPIRES
         assert "an_media" not in ctx.user_data
 
-    def test_plain_text_at_the_media_step_reprompts(self):
+    async def test_plain_text_at_the_media_step_reprompts(self):
         ctx = self._ctx_ready()
         upd = _update(text="not a photo")
-        assert _run(A.an_media(upd, ctx)) == A.AN_MEDIA
+        assert await A.an_media(upd, ctx) == A.AN_MEDIA
         assert "an_media" not in ctx.user_data
 
-    def test_body_too_long_for_a_caption_is_refused(self):
+    async def test_body_too_long_for_a_caption_is_refused(self):
         """Media carries the text as a caption; Telegram caps that length.
         Refuse rather than silently truncating the announcement."""
         ctx = self._ctx_ready(body="x" * (A.CAPTION_LIMIT + 50))
         upd = _update(photo=[MagicMock(file_id="PIC1")])
-        assert _run(A.an_media(upd, ctx)) == A.AN_MEDIA
+        assert await A.an_media(upd, ctx) == A.AN_MEDIA
         assert "an_media" not in ctx.user_data
         said = str(upd.message.reply_text.call_args[0][0])
         assert str(A.CAPTION_LIMIT) in said
@@ -160,7 +157,7 @@ class TestAnnouncementMedia:
 
 class TestConfirmHandsOffToDelivery:
     @staticmethod
-    def _confirm(user_data):
+    async def _confirm(user_data):
         ctx = _ctx(**user_data)
         upd = _update(text="yes")
 
@@ -172,35 +169,35 @@ class TestConfirmHandsOffToDelivery:
              patch.object(A, "get_user_prefs", AsyncMock(return_value=(None, "en"))), \
              patch.object(A, "_broadcast_target_options", side_effect=_opts), \
              patch.object(A.activity, "log_command", lambda *a, **k: None):
-            _run(A.an_confirm(upd, ctx))
+            await A.an_confirm(upd, ctx)
         return ctx
 
     _BASE = {"an_title": "Notice", "an_body": "Bring *your Bible*",
              "an_expires": "2099-01-01"}
 
-    def test_text_announcement_keeps_the_admins_formatting(self):
-        ctx = self._confirm(dict(self._BASE))
+    async def test_text_announcement_keeps_the_admins_formatting(self):
+        ctx = await self._confirm(dict(self._BASE))
         assert "*your Bible*" in ctx.user_data["bc_message"]
         assert "\\*" not in ctx.user_data["bc_message"]
 
-    def test_text_announcement_carries_the_sender_attribution(self):
-        ctx = self._confirm(dict(self._BASE))
+    async def test_text_announcement_carries_the_sender_attribution(self):
+        ctx = await self._confirm(dict(self._BASE))
         assert "posted by" in ctx.user_data["bc_message"]
 
-    def test_text_announcement_sets_no_media(self):
-        ctx = self._confirm(dict(self._BASE))
+    async def test_text_announcement_sets_no_media(self):
+        ctx = await self._confirm(dict(self._BASE))
         assert "bc_media" not in ctx.user_data
 
-    def test_media_announcement_is_handed_to_the_engine(self):
-        ctx = self._confirm(
+    async def test_media_announcement_is_handed_to_the_engine(self):
+        ctx = await self._confirm(
             dict(self._BASE, an_media={"kind": "photo", "file_id": "PIC1"}))
         assert ctx.user_data["bc_media"]["file_id"] == "PIC1"
         assert ctx.user_data["bc_media"]["kind"] == "photo"
         assert "*your Bible*" in ctx.user_data["bc_media"]["caption"]
 
-    def test_media_announcement_sends_no_separate_text(self):
+    async def test_media_announcement_sends_no_separate_text(self):
         """Telegram has no 'photo plus separate message' single send."""
-        ctx = self._confirm(
+        ctx = await self._confirm(
             dict(self._BASE, an_media={"kind": "photo", "file_id": "PIC1"}))
         assert "bc_message" not in ctx.user_data
 
@@ -268,7 +265,7 @@ class TestBroadcastRetired:
 
 class TestViewEscapesOnlyTranslations:
     @staticmethod
-    def _view(ann, viewer_lang, translated_body=None):
+    async def _view(ann, viewer_lang, translated_body=None):
         """Render /announcements for a viewer and return the message sent."""
         upd = _update(text="/announcements")
         upd.message.reply_text = AsyncMock()
@@ -284,32 +281,32 @@ class TestViewEscapesOnlyTranslations:
              patch.object(A, "_announcement_for_lang", _for_lang), \
              patch.object(A.activity, "log_command", lambda *a, **k: None), \
              patch.object(A, "t", lambda key, lang, **kw: key):
-            _run(A.cmd_announcements(upd, ctx))
+            await A.cmd_announcements(upd, ctx)
         return upd.message.reply_text.call_args[0][0]
 
     _ANN = {"id": "A1", "title": "Notice", "body": "Bring *your Bible*",
             "lang": "en", "expires": "2099-01-01", "created": "2026-01-01"}
 
-    def test_source_language_viewer_sees_real_formatting(self):
-        msg = self._view(dict(self._ANN), "en")
+    async def test_source_language_viewer_sees_real_formatting(self):
+        msg = await self._view(dict(self._ANN), "en")
         assert "*your Bible*" in msg
         assert "\\*" not in msg
 
-    def test_translated_viewer_gets_escaped_markup(self):
+    async def test_translated_viewer_gets_escaped_markup(self):
         """A translator treats * as punctuation and may move or drop it, so the
         markers in a translated copy can no longer be trusted."""
-        msg = self._view(dict(self._ANN), "es",
+        msg = await self._view(dict(self._ANN), "es",
                          translated_body="Traiga *su Biblia")  # unbalanced!
         assert "\\*su Biblia" in msg
         assert "Traiga \\*su Biblia" in msg
 
-    def test_legacy_record_without_a_source_lang_is_trusted(self):
+    async def test_legacy_record_without_a_source_lang_is_trusted(self):
         """No 'lang' means it was never translated, so it is the admin's own text."""
         ann = {k: v for k, v in self._ANN.items() if k != "lang"}
-        msg = self._view(ann, "es")
+        msg = await self._view(ann, "es")
         assert "*your Bible*" in msg
 
-    def test_unparseable_markup_falls_back_to_an_escaped_send(self):
+    async def test_unparseable_markup_falls_back_to_an_escaped_send(self):
         """An older record whose literal asterisks are now read as markup must
         not stop the whole announcement list from being shown."""
         upd = _update(text="/announcements")
@@ -332,7 +329,7 @@ class TestViewEscapesOnlyTranslations:
              patch.object(A, "_announcement_for_lang", _for_lang), \
              patch.object(A.activity, "log_command", lambda *a, **k: None), \
              patch.object(A, "t", lambda key, lang, **kw: key):
-            _run(A.cmd_announcements(upd, ctx))
+            await A.cmd_announcements(upd, ctx)
 
         assert len(calls) == 2, "should retry with everything escaped"
         assert "\\*markup" in calls[1]

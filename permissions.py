@@ -121,7 +121,7 @@ def _save_officials() -> None:
         _rt_yaml.dump(_officials_doc, fh)
 
 
-def _official_by_id(official_id: "str | None") -> "dict | None":
+def _official_by_id(official_id: str | None) -> dict | None:
     return next((o for o in OFFICIALS if o.get("id") == official_id), None)
 
 
@@ -133,14 +133,14 @@ def _person_matches(rec: dict, user_id: int, uname_lower: str) -> bool:
     return bool(uname_lower) and rname == uname_lower
 
 
-def _enabled_proxies(off: "dict | None") -> list[dict]:
+def _enabled_proxies(off: dict | None) -> list[dict]:
     """Proxy records for an official, only if proxies are enabled."""
     if not off or not off.get("proxies_enabled"):
         return []
     return off.get("proxies") or []
 
 
-def _user_can_act_for_official(off: "dict | None", user_id: int, username: "str | None") -> bool:
+def _user_can_act_for_official(off: dict | None, user_id: int, username: str | None) -> bool:
     """True if the user is the official, or an enabled proxy for that official."""
     if not off:
         return False
@@ -150,11 +150,11 @@ def _user_can_act_for_official(off: "dict | None", user_id: int, username: "str 
     return any(_person_matches(p, user_id, uname_lower) for p in _enabled_proxies(off))
 
 
-def _user_can_act_for_appt(appt: dict, user_id: int, username: "str | None") -> bool:
+def _user_can_act_for_appt(appt: dict, user_id: int, username: str | None) -> bool:
     return _user_can_act_for_official(_official_by_id(appt.get("official_id")), user_id, username)
 
 
-def _acting_identity(off: dict, user_id: int, username: "str | None") -> "tuple[str | None, bool]":
+def _acting_identity(off: dict, user_id: int, username: str | None) -> tuple[str | None, bool]:
     """Return (display_name, is_proxy) for the acting official/proxy, else (None, False)."""
     uname_lower = (username or "").lstrip("@").lower()
     if _person_matches(off, user_id, uname_lower):
@@ -191,7 +191,7 @@ def admin_only(handler):
 
 
 
-def official_username_drift(user_id: int, username: "str | None") -> "dict | None":
+def official_username_drift(user_id: int, username: str | None) -> dict | None:
     """Detect a known official/proxy whose configured telegram_username is stale.
 
     Matching is by chat_id — which the bot auto-filled when they ran /start — so

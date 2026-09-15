@@ -185,7 +185,7 @@ async def _bc_expand_recipients(options: list[dict], selected: set[str]) -> list
 
 async def _bc_send_pending(bot, context) -> list[dict]:
     """Send the message/media to all recipients not yet delivered. Returns failures."""
-    media: "dict | None" = context.user_data.get("bc_media")
+    media: dict | None = context.user_data.get("bc_media")
     message: str = context.user_data.get("bc_message", "")
     recipients: list[dict] = context.user_data["bc_recipients"]
     done: set = context.user_data["bc_done"]

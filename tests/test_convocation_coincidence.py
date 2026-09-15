@@ -30,8 +30,6 @@ from hebrew_calendar import merge_sabbath_coincidences  # noqa: E402
 TZ = pytz.timezone("America/New_York")
 
 
-def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
 
 
 def _sabbath(label="Eve", hour=18, date=(2026, 9, 11), notify_min=90):
@@ -82,7 +80,7 @@ class TestNoDuplicateNotifications:
                 "notification_time": now, "target_chat_ids": [-100123],
                 "announcements": [], "url": "", "description": ""}
 
-    def _deliver_both(self, sends):
+    async def _deliver_both(self, sends):
         async def fake_send(bot, chat_id, media, text, caches):
             sends.append(chat_id)
             await asyncio.sleep(0.01)  # real network latency: forces interleaving
@@ -94,32 +92,32 @@ class TestNoDuplicateNotifications:
                     N.deliver_event_notifications(AsyncMock(), self._event("sab", "Sabbath Eve")),
                     N.deliver_event_notifications(AsyncMock(), self._event("rh", "Rosh Eve")),
                 )
-        _run(go())
+        await go()
 
-    def test_simultaneous_reminders_both_record_their_delivery(self):
+    async def test_simultaneous_reminders_both_record_their_delivery(self):
         """The lost write: the second save used to erase the first."""
         self._isolate()
-        self._deliver_both([])
-        states = _run(storage._load_notif_state())
+        await self._deliver_both([])
+        states = await storage._load_notif_state()
         assert sorted(states) == ["rh", "sab"], (
             "both simultaneous reminders must persist their delivery record; "
             "losing one makes the catch-up job re-send it"
         )
 
-    def test_catchup_does_not_resend_after_simultaneous_delivery(self):
+    async def test_catchup_does_not_resend_after_simultaneous_delivery(self):
         """End-to-end reproduction of what the congregation experienced."""
         self._isolate()
         sends: list = []
-        self._deliver_both(sends)
+        await self._deliver_both(sends)
         first_round = len(sends)
-        self._deliver_both(sends)  # the catch-up job, 85s later
+        await self._deliver_both(sends)  # the catch-up job, 85s later
         assert first_round == 2
         assert len(sends) == first_round, (
             f"catch-up re-sent {len(sends) - first_round} reminder(s) — "
             "this is the duplicate the congregation received"
         )
 
-    def test_delivery_is_still_recorded_when_nothing_races(self):
+    async def test_delivery_is_still_recorded_when_nothing_races(self):
         """Guard against 'fixing' the race by never writing state at all."""
         self._isolate()
 
@@ -131,14 +129,14 @@ class TestNoDuplicateNotifications:
                 await N.deliver_event_notifications(AsyncMock(), self._event("solo", "Solo"))
             return await storage._load_notif_state()
 
-        states = _run(go())
+        states = await go()
         assert states["solo"]["notified"] == [-100123]
 
-    def test_a_concurrent_write_does_not_erase_an_existing_record(self):
+    async def test_a_concurrent_write_does_not_erase_an_existing_record(self):
         """Delivery must merge into current state, not overwrite a snapshot."""
         self._isolate()
-        _run(storage._save_notif_state(
-            {"other": {"name": "Other", "service_time": "x", "notified": [-999]}}))
+        await storage._save_notif_state(
+            {"other": {"name": "Other", "service_time": "x", "notified": [-999]}})
 
         async def go():
             async def fake_send(bot, chat_id, media, text, caches):
@@ -148,7 +146,7 @@ class TestNoDuplicateNotifications:
                 await N.deliver_event_notifications(AsyncMock(), self._event("new", "New"))
             return await storage._load_notif_state()
 
-        states = _run(go())
+        states = await go()
         assert "other" in states, "an unrelated event's record was erased"
         assert states["other"]["notified"] == [-999]
 
@@ -287,65 +285,65 @@ class TestCombinedEventPlumbing:
     """events.all_upcoming must resolve config against BOTH identities."""
 
     @staticmethod
-    def _all_upcoming(evdata):
+    async def _all_upcoming(evdata):
         import events as E
         with patch.object(E, "all_upcoming_events",
                           lambda tz, d: merge_sabbath_coincidences([_sabbath(), _festival()])), \
              patch.object(E.storage, "get_all_events_data",
                           AsyncMock(return_value=evdata)):
-            return _run(E.all_upcoming(30))
+            return await E.all_upcoming(30)
 
-    def test_announcements_from_either_component_are_included(self):
-        evs = self._all_upcoming({"convocation_announcements": {
+    async def test_announcements_from_either_component_are_included(self):
+        evs = await self._all_upcoming({"convocation_announcements": {
             _sabbath()["key"]: ["Bring a dish"],
             _festival()["key"]: ["Shofar at sunset"],
         }})
         assert evs[0]["announcements"] == ["Bring a dish", "Shofar at sunset"]
 
-    def test_announcements_are_not_duplicated(self):
-        evs = self._all_upcoming({"convocation_announcements": {
+    async def test_announcements_are_not_duplicated(self):
+        evs = await self._all_upcoming({"convocation_announcements": {
             _sabbath()["key"]: ["Same notice"],
             _festival()["key"]: ["Same notice"],
         }})
         assert evs[0]["announcements"] == ["Same notice"]
 
-    def test_sabbath_join_link_wins_even_when_the_festival_has_one(self):
+    async def test_sabbath_join_link_wins_even_when_the_festival_has_one(self):
         """The congregation gathers in the standing Sabbath room."""
-        evs = self._all_upcoming({"convocation_urls": {
+        evs = await self._all_upcoming({"convocation_urls": {
             "sabbath::Eve": "https://zoom.test/sabbath",
             "rosh_hashanah::Eve": "https://zoom.test/rosh",
         }})
         assert evs[0]["url"] == "https://zoom.test/sabbath"
 
-    def test_sabbath_link_used_when_the_festival_has_none(self):
-        evs = self._all_upcoming({"convocation_urls": {
+    async def test_sabbath_link_used_when_the_festival_has_none(self):
+        evs = await self._all_upcoming({"convocation_urls": {
             "sabbath::Eve": "https://zoom.test/sabbath"}})
         assert evs[0]["url"] == "https://zoom.test/sabbath"
 
-    def test_festival_link_used_only_when_the_sabbath_has_none(self):
+    async def test_festival_link_used_only_when_the_sabbath_has_none(self):
         """Fallback, not precedence: better some link than none."""
-        evs = self._all_upcoming({"convocation_urls": {
+        evs = await self._all_upcoming({"convocation_urls": {
             "rosh_hashanah::Eve": "https://zoom.test/rosh"}})
         assert evs[0]["url"] == "https://zoom.test/rosh"
 
-    def test_sabbath_image_wins(self):
+    async def test_sabbath_image_wins(self):
         """Sabbath-first applies to media as well as the join link."""
-        evs = self._all_upcoming({"convocation_images": {
+        evs = await self._all_upcoming({"convocation_images": {
             "sabbath::Eve": "media/sabbath.jpg",
             "rosh_hashanah::Eve": "media/rosh.jpg",
         }})
         assert evs[0]["image"] == "media/sabbath.jpg"
 
-    def test_sabbath_document_wins(self):
-        evs = self._all_upcoming({"convocation_documents": {
+    async def test_sabbath_document_wins(self):
+        evs = await self._all_upcoming({"convocation_documents": {
             "sabbath::Eve": "media/sabbath-order.pdf",
             "rosh_hashanah::Eve": "media/rosh-order.pdf",
         }})
         assert evs[0]["document"] == "media/sabbath-order.pdf"
 
-    def test_sabbath_notification_targets_win(self):
+    async def test_sabbath_notification_targets_win(self):
         """Who gets told follows the Sabbath's configuration too."""
-        evs = self._all_upcoming({
+        evs = await self._all_upcoming({
             "notification_targets": {"sab_group": -100, "rh_group": -200},
             "convocation_targets": {
                 "sabbath::Eve": ["sab_group"],
@@ -354,8 +352,8 @@ class TestCombinedEventPlumbing:
         })
         assert evs[0]["target_chat_ids"] == [-100]
 
-    def test_festival_media_used_only_as_a_fallback(self):
-        evs = self._all_upcoming({"convocation_images": {
+    async def test_festival_media_used_only_as_a_fallback(self):
+        evs = await self._all_upcoming({"convocation_images": {
             "rosh_hashanah::Eve": "media/rosh.jpg"}})
         assert evs[0]["image"] == "media/rosh.jpg"
 
@@ -422,7 +420,7 @@ class TestIcsSequenceRevisions:
     """
 
     @staticmethod
-    def _modify(field, value, start=None):
+    async def _modify(field, value, start=None):
         """Drive the real /modifyevent value step and return the stored event."""
         import handlers.events_admin as EA
         ev = {"id": "sunday_morning_prayer", "name": "Sunday Morning Prayer",
@@ -442,36 +440,36 @@ class TestIcsSequenceRevisions:
              patch.object(EA.storage, "save_events_data", AsyncMock()), \
              patch.object(EA, "schedule_event_notification", lambda a, e: None), \
              patch.object(EA.activity, "log_command", lambda *a, **k: None):
-            _run(EA.me_value(upd, ctx))
+            await EA.me_value(upd, ctx)
         return ev
 
-    def test_changing_the_time_bumps_sequence(self):
-        assert self._modify("time", "10:30").get("sequence") == 1
+    async def test_changing_the_time_bumps_sequence(self):
+        assert (await self._modify("time", "10:30")).get("sequence") == 1
 
-    def test_changing_the_date_bumps_sequence(self):
-        assert self._modify("date", "2026-10-11").get("sequence") == 1
+    async def test_changing_the_date_bumps_sequence(self):
+        assert (await self._modify("date", "2026-10-11")).get("sequence") == 1
 
-    def test_changing_the_duration_bumps_sequence(self):
-        assert self._modify("duration", "90").get("sequence") == 1
+    async def test_changing_the_duration_bumps_sequence(self):
+        assert (await self._modify("duration", "90")).get("sequence") == 1
 
-    def test_renaming_does_not_bump_sequence(self):
+    async def test_renaming_does_not_bump_sequence(self):
         """A rename is not something attendees must re-decide about."""
-        assert self._modify("name", "Morning Prayer").get("sequence", 0) == 0
+        assert (await self._modify("name", "Morning Prayer")).get("sequence", 0) == 0
 
-    def test_description_edit_does_not_bump_sequence(self):
-        assert self._modify("description", "New wording").get("sequence", 0) == 0
+    async def test_description_edit_does_not_bump_sequence(self):
+        assert (await self._modify("description", "New wording")).get("sequence", 0) == 0
 
-    def test_url_change_does_not_bump_sequence(self):
+    async def test_url_change_does_not_bump_sequence(self):
         """URL is not a significant revision under RFC 5545."""
-        assert self._modify("url", "https://zoom.test/new").get("sequence", 0) == 0
+        assert (await self._modify("url", "https://zoom.test/new")).get("sequence", 0) == 0
 
-    def test_setting_the_same_value_does_not_bump_sequence(self):
+    async def test_setting_the_same_value_does_not_bump_sequence(self):
         """Re-saving an unchanged value is not a revision."""
-        assert self._modify("time", "09:00").get("sequence", 0) == 0
+        assert (await self._modify("time", "09:00")).get("sequence", 0) == 0
 
-    def test_sequence_increments_from_its_previous_value(self):
+    async def test_sequence_increments_from_its_previous_value(self):
         """Monotonic: clients treat a lower SEQUENCE as stale."""
-        assert self._modify("time", "11:00", start=4).get("sequence") == 5
+        assert (await self._modify("time", "11:00", start=4)).get("sequence") == 5
 
     def test_sequence_reaches_the_exported_ics(self):
         """The counter is worthless if the export never reads it."""
