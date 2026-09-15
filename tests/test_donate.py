@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -12,8 +11,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import handlers.user_basics as hub
 
 
-def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
 
 
 def _make_update(chat_id: int = 111) -> MagicMock:
@@ -26,7 +23,7 @@ def _make_update(chat_id: int = 111) -> MagicMock:
     return upd
 
 
-def _run_donate(url, users=None):
+async def _run_donate(url, users=None):
     upd = _make_update()
     ctx = MagicMock()
     ctx.bot = MagicMock()
@@ -36,27 +33,27 @@ def _run_donate(url, users=None):
 
     with patch("handlers.user_basics.DONATION_URL", url), \
          patch("storage.get_all_users", side_effect=_fake_users):
-        _run(hub.cmd_donate(upd, ctx))
+        await hub.cmd_donate(upd, ctx)
     return upd
 
 
 class TestDonate:
-    def test_configured_sends_message_with_link_button(self):
-        upd = _run_donate("https://paypal.me/example")
+    async def test_configured_sends_message_with_link_button(self):
+        upd = await _run_donate("https://paypal.me/example")
         text = upd.message.reply_text.call_args[0][0]
         assert "Support Christ of God Ministries" in text
         markup = upd.message.reply_text.call_args.kwargs["reply_markup"]
         btn = markup.inline_keyboard[0][0]
         assert btn.url == "https://paypal.me/example"
 
-    def test_unconfigured_sends_fallback(self):
-        upd = _run_donate("")
+    async def test_unconfigured_sends_fallback(self):
+        upd = await _run_donate("")
         text = upd.message.reply_text.call_args[0][0]
         assert "isn't set up yet" in text
         assert "reply_markup" not in upd.message.reply_text.call_args.kwargs
 
-    def test_localized_for_spanish_user(self):
-        upd = _run_donate(
+    async def test_localized_for_spanish_user(self):
+        upd = await _run_donate(
             "https://paypal.me/example",
             users=[{"chat_id": 111, "language": "es"}],
         )

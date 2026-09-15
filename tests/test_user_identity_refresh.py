@@ -7,7 +7,6 @@ group -1 pre-handler.
 
 from __future__ import annotations
 
-import asyncio
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -15,8 +14,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
-def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
 
 
 def _patched(users, saved):
@@ -31,54 +28,54 @@ def _patched(users, saved):
 
 
 class TestRefreshHelper:
-    def _refresh(self, users, uid=111, uname="newname", dname="New Name"):
+    async def _refresh(self, users, uid=111, uname="newname", dname="New Name"):
         import bot
         saved: dict = {}
         p_get, p_save = _patched(users, saved)
         with p_get, p_save:
-            _run(bot._refresh_user_identity(uid, uname, dname))
+            await bot._refresh_user_identity(uid, uname, dname)
         return saved
 
-    def test_username_added_later_is_stored(self):
+    async def test_username_added_later_is_stored(self):
         users = [{"chat_id": 111, "username": None, "display_name": "New Name"}]
-        saved = self._refresh(users)
+        saved = await self._refresh(users)
         assert saved["users"][0]["username"] == "newname"
 
-    def test_username_change_is_stored(self):
+    async def test_username_change_is_stored(self):
         users = [{"chat_id": 111, "username": "oldname", "display_name": "New Name"}]
-        saved = self._refresh(users)
+        saved = await self._refresh(users)
         assert saved["users"][0]["username"] == "newname"
 
-    def test_username_removed_is_stored(self):
+    async def test_username_removed_is_stored(self):
         users = [{"chat_id": 111, "username": "oldname", "display_name": "New Name"}]
-        saved = self._refresh(users, uname=None)
+        saved = await self._refresh(users, uname=None)
         assert saved["users"][0]["username"] is None
 
-    def test_display_name_change_is_stored(self):
+    async def test_display_name_change_is_stored(self):
         users = [{"chat_id": 111, "username": "newname", "display_name": "Old Name"}]
-        saved = self._refresh(users)
+        saved = await self._refresh(users)
         assert saved["users"][0]["display_name"] == "New Name"
 
-    def test_no_change_does_not_save(self):
+    async def test_no_change_does_not_save(self):
         users = [{"chat_id": 111, "username": "newname", "display_name": "New Name"}]
-        saved = self._refresh(users)
+        saved = await self._refresh(users)
         assert "users" not in saved
 
-    def test_unregistered_user_not_created(self):
-        saved = self._refresh([])
+    async def test_unregistered_user_not_created(self):
+        saved = await self._refresh([])
         assert "users" not in saved
 
-    def test_other_fields_preserved(self):
+    async def test_other_fields_preserved(self):
         users = [{"chat_id": 111, "username": None, "display_name": "New Name",
                   "timezone": "Europe/Paris", "notif_prefs": ["special"]}]
-        saved = self._refresh(users)
+        saved = await self._refresh(users)
         rec = saved["users"][0]
         assert rec["timezone"] == "Europe/Paris"
         assert rec["notif_prefs"] == ["special"]
 
 
 class TestCommandHookRefreshes:
-    def test_any_command_triggers_refresh(self):
+    async def test_any_command_triggers_refresh(self):
         import bot
         upd = MagicMock()
         upd.effective_message.text = "/events"
@@ -92,14 +89,14 @@ class TestCommandHookRefreshes:
         saved: dict = {}
         p_get, p_save = _patched(users, saved)
         with p_get, p_save:
-            _run(bot._log_command_invocation(upd, ctx))
+            await bot._log_command_invocation(upd, ctx)
         assert saved["users"][0]["username"] == "newname"
 
-    def test_non_text_update_is_ignored(self):
+    async def test_non_text_update_is_ignored(self):
         import bot
         upd = MagicMock()
         upd.effective_message = None
         refresh = AsyncMock()
         with patch("bot._refresh_user_identity", refresh):
-            _run(bot._log_command_invocation(upd, MagicMock()))
+            await bot._log_command_invocation(upd, MagicMock())
         refresh.assert_not_called()

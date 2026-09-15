@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import sys
 from datetime import timedelta
 from pathlib import Path
@@ -21,8 +20,6 @@ import settings
 TZ = pytz.timezone("America/New_York")
 
 
-def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
 
 
 def _make_context() -> MagicMock:
@@ -92,21 +89,21 @@ class TestUserNotifPrefs:
 # ---------------------------------------------------------------------------
 
 class TestNotificationRecipients:
-    def _recipients(self, event, users):
+    async def _recipients(self, event, users):
 
         async def _fake_users():
             return users
 
         with patch("storage.get_all_users", side_effect=_fake_users):
-            return _run(hn._notification_recipients(event))
+            return await hn._notification_recipients(event)
 
-    def test_groups_only_when_nobody_opted_in(self):
-        rec = self._recipients(
+    async def test_groups_only_when_nobody_opted_in(self):
+        rec = await self._recipients(
             {"type": "convocation", "target_chat_ids": [-100]}, [])
         assert rec == {-100: (settings.TZ, localization.DEFAULT_LANG)}
 
-    def test_opted_in_user_added_with_own_prefs(self):
-        rec = self._recipients(
+    async def test_opted_in_user_added_with_own_prefs(self):
+        rec = await self._recipients(
             {"type": "convocation", "target_chat_ids": [-100]},
             [{"chat_id": 111, "timezone": "America/Los_Angeles",
               "language": "es", "notif_prefs": ["convocations"]}],
@@ -117,15 +114,15 @@ class TestNotificationRecipients:
         assert str(tz) == "America/Los_Angeles"
         assert lang == "es"
 
-    def test_user_not_added_for_uncategorised_event(self):
-        rec = self._recipients(
+    async def test_user_not_added_for_uncategorised_event(self):
+        rec = await self._recipients(
             {"type": "special", "target_chat_ids": []},
             [{"chat_id": 111, "notif_prefs": ["convocations"]}],
         )
         assert 111 not in rec
 
-    def test_empty_when_no_groups_and_no_optins(self):
-        rec = self._recipients(
+    async def test_empty_when_no_groups_and_no_optins(self):
+        rec = await self._recipients(
             {"type": "convocation", "target_chat_ids": []},
             [{"chat_id": 111, "notif_prefs": ["special"]}],
         )
@@ -137,7 +134,7 @@ class TestNotificationRecipients:
 # ---------------------------------------------------------------------------
 
 class TestSetGetPrefs:
-    def test_creates_record_when_missing(self):
+    async def test_creates_record_when_missing(self):
         users = []
         saved = {}
 
@@ -149,13 +146,13 @@ class TestSetGetPrefs:
 
         with patch("storage.get_all_users", side_effect=_get), \
              patch("storage.save_users", side_effect=_save):
-            _run(hub._set_user_notif_prefs(111, "friend", "Church Friend",
-                                           {"convocations"}))
+            await hub._set_user_notif_prefs(111, "friend", "Church Friend",
+                                           {"convocations"})
         rec = saved["users"][0]
         assert rec["chat_id"] == 111
         assert rec["notif_prefs"] == ["convocations"]
 
-    def test_updates_existing_record(self):
+    async def test_updates_existing_record(self):
         users = [{"chat_id": 111, "language": "en"}]
         saved = {}
 
@@ -167,18 +164,18 @@ class TestSetGetPrefs:
 
         with patch("storage.get_all_users", side_effect=_get), \
              patch("storage.save_users", side_effect=_save):
-            _run(hub._set_user_notif_prefs(111, "friend", "Church Friend",
-                                           {"special", "convocations"}))
+            await hub._set_user_notif_prefs(111, "friend", "Church Friend",
+                                           {"special", "convocations"})
         assert saved["users"][0]["notif_prefs"] == ["convocations", "special"]
 
-    def test_get_reads_prefs(self):
+    async def test_get_reads_prefs(self):
         users = [{"chat_id": 111, "notif_prefs": ["sunday_prayer"]}]
 
         async def _get():
             return users
 
         with patch("storage.get_all_users", side_effect=_get):
-            prefs = _run(hub._get_user_notif_prefs(111))
+            prefs = await hub._get_user_notif_prefs(111)
         assert prefs == {"sunday_prayer"}
 
 
@@ -187,7 +184,7 @@ class TestSetGetPrefs:
 # ---------------------------------------------------------------------------
 
 class TestCmdNotifications:
-    def test_shows_keyboard(self):
+    async def test_shows_keyboard(self):
         ctx = _make_context()
         upd = _msg_update()
 
@@ -195,7 +192,7 @@ class TestCmdNotifications:
             return [{"chat_id": 111}]
 
         with patch("storage.get_all_users", side_effect=_get):
-            _run(hub.cmd_notifications(upd, ctx))
+            await hub.cmd_notifications(upd, ctx)
         markup = upd.message.reply_text.call_args.kwargs["reply_markup"]
         cbs = [b.callback_data for row in markup.inline_keyboard for b in row]
         assert "np:toggle:convocations" in cbs
@@ -203,7 +200,7 @@ class TestCmdNotifications:
 
 
 class TestNotifCallback:
-    def _run_cb(self, data, users):
+    async def _run_cb(self, data, users):
         ctx = _make_context()
         upd, q = _cb_update(data)
         saved = {}
@@ -216,26 +213,26 @@ class TestNotifCallback:
 
         with patch("storage.get_all_users", side_effect=_get), \
              patch("storage.save_users", side_effect=_save):
-            _run(hub.notif_prefs_callback(upd, ctx))
+            await hub.notif_prefs_callback(upd, ctx)
         return q, saved
 
-    def test_toggle_on(self):
-        q, saved = self._run_cb("np:toggle:convocations", [{"chat_id": 111}])
+    async def test_toggle_on(self):
+        q, saved = await self._run_cb("np:toggle:convocations", [{"chat_id": 111}])
         assert saved["users"][0]["notif_prefs"] == ["convocations"]
         q.edit_message_reply_markup.assert_awaited()
 
-    def test_toggle_off(self):
-        q, saved = self._run_cb(
+    async def test_toggle_off(self):
+        q, saved = await self._run_cb(
             "np:toggle:convocations",
             [{"chat_id": 111, "notif_prefs": ["convocations"]}])
         assert saved["users"][0]["notif_prefs"] == []
 
-    def test_toggle_unknown_category_ignored(self):
-        q, saved = self._run_cb("np:toggle:bogus", [{"chat_id": 111}])
+    async def test_toggle_unknown_category_ignored(self):
+        q, saved = await self._run_cb("np:toggle:bogus", [{"chat_id": 111}])
         assert "users" not in saved
 
-    def test_done_shows_summary(self):
-        q, saved = self._run_cb(
+    async def test_done_shows_summary(self):
+        q, saved = await self._run_cb(
             "np:done", [{"chat_id": 111, "notif_prefs": ["special"]}])
         q.edit_message_text.assert_awaited()
         assert "users" not in saved  # done doesn't save
@@ -246,7 +243,7 @@ class TestNotifCallback:
 # ---------------------------------------------------------------------------
 
 class TestDeliveryToOptedIn:
-    def test_opted_in_user_receives_dm(self):
+    async def test_opted_in_user_receives_dm(self):
         service_time = common.now_tz() + timedelta(hours=2)
         event = {
             "key": "conv_2099", "name": "Sabbath Eve",
@@ -276,7 +273,7 @@ class TestDeliveryToOptedIn:
              patch("storage._load_notif_state", side_effect=_load_state), \
              patch("storage._save_notif_state", side_effect=_save_state), \
              patch("handlers.notifications._send_notification_payload", side_effect=_send_payload):
-            count = _run(hn.deliver_event_notifications(MagicMock(), event))
+            count = await hn.deliver_event_notifications(MagicMock(), event)
         assert count == 1
         assert sent == [111]
 
@@ -286,7 +283,7 @@ class TestDeliveryToOptedIn:
 # ---------------------------------------------------------------------------
 
 class TestHelpTopics:
-    def _run_help(self, args):
+    async def _run_help(self, args):
         ctx = _make_context()
         ctx.args = args
         upd = _msg_update()
@@ -296,22 +293,22 @@ class TestHelpTopics:
 
         with patch("storage.get_all_users", side_effect=_get), \
              patch("permissions.is_admin", return_value=False):
-            _run(hub.cmd_help(upd, ctx))
+            await hub.cmd_help(upd, ctx)
         return upd.message.reply_text.call_args[0][0]
 
-    def test_no_arg_lists_commands_with_hint(self):
-        msg = self._run_help([])
+    async def test_no_arg_lists_commands_with_hint(self):
+        msg = await self._run_help([])
         assert "/appointment" in msg
         assert "/help" in msg.lower()
 
-    def test_known_topic(self):
-        msg = self._run_help(["appointment"])
+    async def test_known_topic(self):
+        msg = await self._run_help(["appointment"])
         assert msg == localization.t("help_appointment", "en")
 
-    def test_topic_with_leading_slash(self):
-        msg = self._run_help(["/notifications"])
+    async def test_topic_with_leading_slash(self):
+        msg = await self._run_help(["/notifications"])
         assert msg == localization.t("help_notifications", "en")
 
-    def test_unknown_topic_lists_available(self):
-        msg = self._run_help(["frobnicate"])
+    async def test_unknown_topic_lists_available(self):
+        msg = await self._run_help(["frobnicate"])
         assert "appointment" in msg

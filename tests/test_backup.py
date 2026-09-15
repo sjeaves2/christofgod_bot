@@ -8,7 +8,6 @@ failure path records something an admin can see in /stats.
 
 from __future__ import annotations
 
-import asyncio
 import io
 import sys
 import zipfile
@@ -27,8 +26,6 @@ import permissions
 TZ = pytz.timezone("America/New_York")
 
 
-def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
 
 
 @pytest.fixture(autouse=True)
@@ -125,30 +122,30 @@ class TestVerifyBackup:
 
 
 class TestSendBackup:
-    def test_sends_to_ops_admin(self, tmp_path):
+    async def test_sends_to_ops_admin(self, tmp_path):
         bot = _bot()
         u, ops_u, ops_c = _ops()
         with patch.object(bk, "DATA_DIR", _data_dir(tmp_path)), u, ops_u, ops_c:
-            sent = _run(bk.send_backup(bot))
+            sent = await bk.send_backup(bot)
         assert sent == 1
         assert bot.send_document.await_args[0][0] == 7
 
-    def test_sends_to_every_ops_admin(self, tmp_path):
+    async def test_sends_to_every_ops_admin(self, tmp_path):
         bot = _bot()
         u, ops_u, ops_c = _ops(chat_ids=(7, 8))
         with patch.object(bk, "DATA_DIR", _data_dir(tmp_path)), u, ops_u, ops_c:
-            sent = _run(bk.send_backup(bot))
+            sent = await bk.send_backup(bot)
         assert sent == 2
 
-    def test_attached_file_is_a_valid_zip(self, tmp_path):
+    async def test_attached_file_is_a_valid_zip(self, tmp_path):
         bot = _bot()
         u, ops_u, ops_c = _ops()
         with patch.object(bk, "DATA_DIR", _data_dir(tmp_path)), u, ops_u, ops_c:
-            _run(bk.send_backup(bot))
+            await bk.send_backup(bot)
         attached = bot.send_document.await_args.kwargs["document"]
         assert attached.filename.endswith(".zip")
 
-    def test_caption_summarises_contents(self, tmp_path):
+    async def test_caption_summarises_contents(self, tmp_path):
         bot = _bot()
         u, ops_u, ops_c = _ops()
 
@@ -157,12 +154,12 @@ class TestSendBackup:
 
         with patch.object(bk, "DATA_DIR", _data_dir(tmp_path)), u, ops_u, ops_c, \
              patch("storage.get_appointments", side_effect=_appts):
-            _run(bk.send_backup(bot))
+            await bk.send_backup(bot)
         caption = bot.send_document.await_args.kwargs["caption"]
         assert "2 appointment(s)" in caption
         assert "file(s)" in caption
 
-    def test_empty_data_dir_is_not_sent(self, tmp_path):
+    async def test_empty_data_dir_is_not_sent(self, tmp_path):
         """An empty archive is not a backup — refuse rather than reassure."""
         d = tmp_path / "data"
         d.mkdir()
@@ -170,33 +167,33 @@ class TestSendBackup:
         u, ops_u, ops_c = _ops()
         with patch.object(bk, "DATA_DIR", d), u, ops_u, ops_c, \
              patch.object(bk.activity, "log_error") as log_error:
-            sent = _run(bk.send_backup(bot))
+            sent = await bk.send_backup(bot)
         assert sent == 0
         bot.send_document.assert_not_awaited()
         assert log_error.called, "a skipped backup must be recorded"
 
-    def test_corrupt_archive_is_not_sent(self, tmp_path):
+    async def test_corrupt_archive_is_not_sent(self, tmp_path):
         bot = _bot()
         u, ops_u, ops_c = _ops()
         with patch.object(bk, "DATA_DIR", _data_dir(tmp_path)), u, ops_u, ops_c, \
              patch.object(bk, "verify_backup", return_value="users.yaml"), \
              patch.object(bk.activity, "log_error") as log_error:
-            sent = _run(bk.send_backup(bot))
+            sent = await bk.send_backup(bot)
         assert sent == 0
         bot.send_document.assert_not_awaited()
         assert log_error.called
 
-    def test_oversized_archive_is_not_sent(self, tmp_path):
+    async def test_oversized_archive_is_not_sent(self, tmp_path):
         bot = _bot()
         u, ops_u, ops_c = _ops()
         with patch.object(bk, "DATA_DIR", _data_dir(tmp_path)), u, ops_u, ops_c, \
              patch.object(bk, "MAX_UPLOAD_BYTES", 10), \
              patch.object(bk.activity, "log_error") as log_error:
-            sent = _run(bk.send_backup(bot))
+            sent = await bk.send_backup(bot)
         assert sent == 0
         assert log_error.called
 
-    def test_no_reachable_ops_admin_is_recorded(self, tmp_path):
+    async def test_no_reachable_ops_admin_is_recorded(self, tmp_path):
         bot = _bot()
 
         async def _none():
@@ -207,27 +204,27 @@ class TestSendBackup:
              patch.object(permissions, "OPS_USERNAMES", {"bishop"}), \
              patch.object(permissions, "_ops_chat_ids", set()), \
              patch.object(bk.activity, "log_error") as log_error:
-            sent = _run(bk.send_backup(bot))
+            sent = await bk.send_backup(bot)
         assert sent == 0
         assert log_error.called
 
-    def test_send_failure_does_not_raise(self, tmp_path):
+    async def test_send_failure_does_not_raise(self, tmp_path):
         from telegram.error import TelegramError
         bot = _bot()
         bot.send_document = AsyncMock(side_effect=TelegramError("blocked"))
         u, ops_u, ops_c = _ops()
         with patch.object(bk, "DATA_DIR", _data_dir(tmp_path)), u, ops_u, ops_c, \
              patch.object(bk.activity, "log_error") as log_error:
-            sent = _run(bk.send_backup(bot))       # must not raise
+            sent = await bk.send_backup(bot)       # must not raise
         assert sent == 0
         assert log_error.called, "an undelivered backup must be recorded"
 
-    def test_successful_backup_is_logged_for_stats(self, tmp_path):
+    async def test_successful_backup_is_logged_for_stats(self, tmp_path):
         bot = _bot()
         u, ops_u, ops_c = _ops()
         with patch.object(bk, "DATA_DIR", _data_dir(tmp_path)), u, ops_u, ops_c, \
              patch.object(bk.activity, "log_command") as log_command:
-            _run(bk.send_backup(bot))
+            await bk.send_backup(bot)
         assert log_command.called
         assert log_command.call_args[0][0] == "backup"
 
@@ -240,17 +237,17 @@ class TestSchedule:
     def test_scheduled_in_church_timezone(self):
         assert bk.BACKUP_TIME.tzinfo is not None
 
-    def test_job_delegates_to_send_backup(self):
+    async def test_job_delegates_to_send_backup(self):
         ctx = MagicMock()
         ctx.bot = MagicMock()
         send = AsyncMock(return_value=1)
         with patch.object(bk, "send_backup", send):
-            _run(bk.nightly_backup_job(ctx))
+            await bk.nightly_backup_job(ctx)
         send.assert_awaited_once_with(ctx.bot)
 
 
 class TestManualCommand:
-    def _run_cmd(self, sent_count, is_admin=True):
+    async def _run_cmd(self, sent_count, is_admin=True):
         upd = MagicMock()
         upd.effective_user.id = 1
         upd.effective_user.username = "admin"
@@ -260,19 +257,19 @@ class TestManualCommand:
         ctx.bot = MagicMock()
         with patch("permissions.is_admin", return_value=is_admin), \
              patch.object(bk, "send_backup", AsyncMock(return_value=sent_count)):
-            _run(bk.cmd_backup(upd, ctx))
+            await bk.cmd_backup(upd, ctx)
         return upd.message.reply_text.call_args[0][0]
 
-    def test_reports_success(self):
-        assert "1 ops admin" in self._run_cmd(1)
+    async def test_reports_success(self):
+        assert "1 ops admin" in await self._run_cmd(1)
 
-    def test_reports_failure_with_guidance(self):
-        text = self._run_cmd(0)
+    async def test_reports_failure_with_guidance(self):
+        text = await self._run_cmd(0)
         assert "could not be sent" in text
         assert "ops admin" in text
 
-    def test_non_admin_blocked(self):
-        assert "Unknown command" in self._run_cmd(1, is_admin=False)
+    async def test_non_admin_blocked(self):
+        assert "Unknown command" in await self._run_cmd(1, is_admin=False)
 
 
 class TestScopeExcludesSecrets:
@@ -404,52 +401,52 @@ class TestBackupNeeded:
 
 
 class TestSendRespectsChangeDetection:
-    def _send(self, tmp_path, data_dir, force=False):
+    async def _send(self, tmp_path, data_dir, force=False):
         bot = _bot()
         u, ops_u, ops_c = _ops()
         with patch.object(bk, "DATA_DIR", data_dir), \
              patch.object(bk, "STATE_FILE", tmp_path / "backup_state.json"), \
              u, ops_u, ops_c:
-            sent = _run(bk.send_backup(bot, force=force))
+            sent = await bk.send_backup(bot, force=force)
         return sent, bot
 
-    def test_first_run_sends(self, tmp_path):
-        sent, bot = self._send(tmp_path, _data_dir(tmp_path))
+    async def test_first_run_sends(self, tmp_path):
+        sent, bot = await self._send(tmp_path, _data_dir(tmp_path))
         assert sent == 1
 
-    def test_second_unchanged_run_does_not_send(self, tmp_path):
+    async def test_second_unchanged_run_does_not_send(self, tmp_path):
         d = _data_dir(tmp_path)
-        self._send(tmp_path, d)
-        sent, bot = self._send(tmp_path, d)
+        await self._send(tmp_path, d)
+        sent, bot = await self._send(tmp_path, d)
         assert sent == 0
         bot.send_document.assert_not_awaited()
 
-    def test_changed_data_sends_again(self, tmp_path):
+    async def test_changed_data_sends_again(self, tmp_path):
         d = _data_dir(tmp_path)
-        self._send(tmp_path, d)
+        await self._send(tmp_path, d)
         (d / "users.yaml").write_text("users:\n- chat_id: 2\n")
-        sent, _ = self._send(tmp_path, d)
+        sent, _ = await self._send(tmp_path, d)
         assert sent == 1
 
-    def test_force_sends_even_when_unchanged(self, tmp_path):
+    async def test_force_sends_even_when_unchanged(self, tmp_path):
         d = _data_dir(tmp_path)
-        self._send(tmp_path, d)
-        sent, _ = self._send(tmp_path, d, force=True)
+        await self._send(tmp_path, d)
+        sent, _ = await self._send(tmp_path, d, force=True)
         assert sent == 1
 
-    def test_skip_is_recorded_for_stats(self, tmp_path):
+    async def test_skip_is_recorded_for_stats(self, tmp_path):
         d = _data_dir(tmp_path)
-        self._send(tmp_path, d)
+        await self._send(tmp_path, d)
         bot = _bot()
         u, ops_u, ops_c = _ops()
         with patch.object(bk, "DATA_DIR", d), \
              patch.object(bk, "STATE_FILE", tmp_path / "backup_state.json"), \
              u, ops_u, ops_c, patch.object(bk.activity, "log_command") as log_command:
-            _run(bk.send_backup(bot))
+            await bk.send_backup(bot)
         assert log_command.called
         assert "skipped" in log_command.call_args.kwargs["details"]
 
-    def test_state_only_recorded_after_a_successful_send(self, tmp_path):
+    async def test_state_only_recorded_after_a_successful_send(self, tmp_path):
         """A failed delivery must not mark the data as backed up."""
         from telegram.error import TelegramError
         d = _data_dir(tmp_path)
@@ -459,14 +456,14 @@ class TestSendRespectsChangeDetection:
         u, ops_u, ops_c = _ops()
         with patch.object(bk, "DATA_DIR", d), patch.object(bk, "STATE_FILE", state), \
              u, ops_u, ops_c:
-            _run(bk.send_backup(bot))
+            await bk.send_backup(bot)
         assert not state.exists(), "failed send must not record a successful backup"
 
     def test_state_file_lives_outside_data(self):
         """Writing state into data/ would itself count as a change every night."""
         assert bk.DATA_DIR not in bk.STATE_FILE.parents
 
-    def test_manual_command_forces(self):
+    async def test_manual_command_forces(self):
         upd = MagicMock()
         upd.effective_user.id = 1
         upd.effective_user.username = "admin"
@@ -475,5 +472,5 @@ class TestSendRespectsChangeDetection:
         send = AsyncMock(return_value=1)
         with patch("permissions.is_admin", return_value=True), \
              patch.object(bk, "send_backup", send):
-            _run(bk.cmd_backup(upd, MagicMock()))
+            await bk.cmd_backup(upd, MagicMock())
         assert send.await_args.kwargs.get("force") is True

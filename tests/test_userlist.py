@@ -4,7 +4,6 @@ parse entities). See the 2026-07-12 incident."""
 
 from __future__ import annotations
 
-import asyncio
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -14,8 +13,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import handlers.user_basics as hub
 
 
-def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
 
 
 def _make_update(chat_id: int = 1) -> MagicMock:
@@ -35,7 +32,7 @@ def _make_context() -> MagicMock:
     return ctx
 
 
-def _run_userlist(users):
+async def _run_userlist(users):
     upd = _make_update()
     ctx = _make_context()
 
@@ -44,32 +41,32 @@ def _run_userlist(users):
 
     with patch("storage.get_all_users", side_effect=_fake_users), \
          patch("permissions.is_admin", return_value=True):
-        _run(hub.cmd_userlist(upd, ctx))
+        await hub.cmd_userlist(upd, ctx)
     return upd.message.reply_text.call_args[0][0]
 
 
 class TestUserlistEscaping:
-    def test_underscore_in_display_name_escaped(self):
-        msg = _run_userlist([{"chat_id": 111, "display_name": "John_Doe",
+    async def test_underscore_in_display_name_escaped(self):
+        msg = await _run_userlist([{"chat_id": 111, "display_name": "John_Doe",
                               "username": "jd"}])
         assert "John\\_Doe" in msg
         assert "John_Doe" not in msg.replace("John\\_Doe", "")
 
-    def test_special_chars_in_username_escaped(self):
-        msg = _run_userlist([{"chat_id": 111, "display_name": "Jane",
+    async def test_special_chars_in_username_escaped(self):
+        msg = await _run_userlist([{"chat_id": 111, "display_name": "Jane",
                               "username": "jane_2026"}])
         assert "@jane\\_2026" in msg
 
-    def test_asterisk_and_backtick_escaped(self):
-        msg = _run_userlist([{"chat_id": 111, "display_name": "*VIP* `boss`",
+    async def test_asterisk_and_backtick_escaped(self):
+        msg = await _run_userlist([{"chat_id": 111, "display_name": "*VIP* `boss`",
                               "username": "boss"}])
         assert "\\*VIP\\*" in msg
         assert "\\`boss\\`" in msg
 
-    def test_missing_fields_render_dash(self):
-        msg = _run_userlist([{"chat_id": 111}])
+    async def test_missing_fields_render_dash(self):
+        msg = await _run_userlist([{"chat_id": 111}])
         assert "1. — (—)" in msg
 
-    def test_empty_userlist(self):
-        msg = _run_userlist([])
+    async def test_empty_userlist(self):
+        msg = await _run_userlist([])
         assert "No registered users" in msg

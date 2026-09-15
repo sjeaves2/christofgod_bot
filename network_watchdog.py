@@ -60,7 +60,7 @@ class NetworkWatchdog:
 
     def __init__(self, grace: timedelta = FAILURE_GRACE) -> None:
         self.grace = grace
-        self.first_failure_at: "datetime | None" = None
+        self.first_failure_at: datetime | None = None
         self.consecutive_failures = 0
 
     @property
@@ -73,7 +73,7 @@ class NetworkWatchdog:
             return timedelta(0)
         return now - self.first_failure_at
 
-    def record_success(self, now: "datetime | None" = None) -> timedelta:
+    def record_success(self, now: datetime | None = None) -> timedelta:
         """Clear the outage. Returns how long it had lasted (zero if healthy)."""
         now = now or now_tz()
         recovered_after = self.outage_duration(now)
@@ -81,7 +81,7 @@ class NetworkWatchdog:
         self.consecutive_failures = 0
         return recovered_after
 
-    def record_failure(self, now: "datetime | None" = None) -> bool:
+    def record_failure(self, now: datetime | None = None) -> bool:
         """Note a failed probe. True once the grace period has been exhausted.
 
         The first failure starts the clock rather than tripping immediately, so
