@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -17,8 +16,6 @@ import handlers.stats as st
 TZ = pytz.timezone("America/New_York")
 
 
-def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
 
 
 def _log_line(when: datetime, kind: str, detail: str, who: str = "system") -> str:
@@ -176,7 +173,7 @@ class TestSystemReport:
 # ---------------------------------------------------------------------------
 
 class TestUsageReport:
-    def _report(self, tmp_path, lines, users=None, appts=None, anns=None,
+    async def _report(self, tmp_path, lines, users=None, appts=None, anns=None,
                 days=7, clamped=False, now=None):
         now = now or datetime.now(TZ)
         p = _write_log(tmp_path, lines)
@@ -194,31 +191,31 @@ class TestUsageReport:
              patch("storage.get_all_users", side_effect=_users), \
              patch("storage.get_appointments", side_effect=_appts), \
              patch("storage.get_announcements", side_effect=_anns):
-            return _run(st.build_usage_report(days, clamped, now))
+            return await st.build_usage_report(days, clamped, now)
 
-    def test_user_counts_and_joins(self, tmp_path):
+    async def test_user_counts_and_joins(self, tmp_path):
         now = datetime.now(TZ)
         lines = [_log_line(now - timedelta(days=1), "USER_JOINED", "User started the bot"),
                  _log_line(now - timedelta(days=2), "USER_LEFT", "User stopped the bot")]
-        text = self._report(tmp_path, lines,
+        text = await self._report(tmp_path, lines,
                             users=[{"chat_id": 1, "language": "en"},
                                    {"chat_id": 2, "language": "es"}], now=now)
         assert "*Registered users:* 2" in text
         assert "+1 new" in text and "-1 left" in text
         assert "en 1" in text and "es 1" in text
 
-    def test_reminder_opt_ins_counted(self, tmp_path):
+    async def test_reminder_opt_ins_counted(self, tmp_path):
         users = [{"chat_id": 1, "notif_prefs": ["convocations", "special"]},
                  {"chat_id": 2, "notif_prefs": ["convocations"]}]
-        text = self._report(tmp_path, [], users=users)
+        text = await self._report(tmp_path, [], users=users)
         assert "convocations 2" in text
         assert "special 1" in text
 
-    def test_no_opt_ins_reported_cleanly(self, tmp_path):
-        text = self._report(tmp_path, [], users=[{"chat_id": 1}])
+    async def test_no_opt_ins_reported_cleanly(self, tmp_path):
+        text = await self._report(tmp_path, [], users=[{"chat_id": 1}])
         assert "opt-ins:* none" in text
 
-    def test_only_upcoming_appointments_are_counted(self, tmp_path):
+    async def test_only_upcoming_appointments_are_counted(self, tmp_path):
         now = datetime.now(TZ)
         soon = (now + timedelta(days=3)).isoformat()
         far = (now + timedelta(days=60)).isoformat()
@@ -227,63 +224,63 @@ class TestUsageReport:
                  {"status": "pending", "requested_datetime": far},
                  {"status": "cancelled", "requested_datetime": soon},
                  {"status": "confirmed", "confirmed_datetime": past}]   # already happened
-        text = self._report(tmp_path, [], appts=appts, now=now)
+        text = await self._report(tmp_path, [], appts=appts, now=now)
         assert "*Upcoming appointments:* 3" in text
         assert "within next 30 days: 2" in text
 
-    def test_past_appointments_excluded_from_status_breakdown(self, tmp_path):
+    async def test_past_appointments_excluded_from_status_breakdown(self, tmp_path):
         now = datetime.now(TZ)
         future = (now + timedelta(days=2)).isoformat()
         past = (now - timedelta(days=9)).isoformat()
         appts = [{"status": "confirmed", "confirmed_datetime": future},
                  {"status": "declined", "requested_datetime": past}]
-        text = self._report(tmp_path, [], appts=appts, now=now)
+        text = await self._report(tmp_path, [], appts=appts, now=now)
         assert "confirmed: 1" in text
         assert "declined" not in text, "a past appointment must not appear in the breakdown"
 
-    def test_all_past_reports_zero(self, tmp_path):
+    async def test_all_past_reports_zero(self, tmp_path):
         now = datetime.now(TZ)
         appts = [{"status": "confirmed",
                   "confirmed_datetime": (now - timedelta(days=k)).isoformat()}
                  for k in (1, 20, 200)]
-        text = self._report(tmp_path, [], appts=appts, now=now)
+        text = await self._report(tmp_path, [], appts=appts, now=now)
         assert "*Upcoming appointments:* 0" in text
 
-    def test_unparseable_appointment_date_flagged_not_counted(self, tmp_path):
+    async def test_unparseable_appointment_date_flagged_not_counted(self, tmp_path):
         appts = [{"status": "pending", "requested_datetime": "not-a-date"}]
-        text = self._report(tmp_path, [], appts=appts)
+        text = await self._report(tmp_path, [], appts=appts)
         assert "*Upcoming appointments:* 0" in text
         assert "unreadable date" in text
 
-    def test_notification_recipients_totalled(self, tmp_path):
+    async def test_notification_recipients_totalled(self, tmp_path):
         now = datetime.now(TZ)
         lines = [_log_line(now, "NOTIFICATION", "Sent notification for 'A' to 3 user(s)"),
                  _log_line(now, "NOTIFICATION", "Sent notification for 'B' to 5 user(s)")]
-        text = self._report(tmp_path, lines, now=now)
+        text = await self._report(tmp_path, lines, now=now)
         assert "2 broadcast(s), 8 recipient(s)" in text
 
-    def test_top_commands_listed(self, tmp_path):
+    async def test_top_commands_listed(self, tmp_path):
         now = datetime.now(TZ)
         lines = ([_log_line(now, "COMMAND", "/events")] * 3
                  + [_log_line(now, "COMMAND", "/help — topic=x")] * 2)
-        text = self._report(tmp_path, lines, now=now)
+        text = await self._report(tmp_path, lines, now=now)
         assert "*Commands used:* 5" in text
         assert "/events — 3" in text
         assert "/help — 2" in text
 
-    def test_active_announcements_counted(self, tmp_path):
+    async def test_active_announcements_counted(self, tmp_path):
         now = datetime.now(TZ)
         anns = [{"id": "A", "expires": (now + timedelta(days=2)).strftime("%Y-%m-%d"),
                  "created": now.isoformat()},
                 {"id": "B", "expires": (now - timedelta(days=2)).strftime("%Y-%m-%d"),
                  "created": now.isoformat()}]
-        text = self._report(tmp_path, [], anns=anns, now=now)
+        text = await self._report(tmp_path, [], anns=anns, now=now)
         assert "*Active announcements:* 1" in text
 
-    def test_markdown_in_command_names_escaped(self, tmp_path):
+    async def test_markdown_in_command_names_escaped(self, tmp_path):
         now = datetime.now(TZ)
         lines = [_log_line(now, "COMMAND", "/contact_share")]
-        text = self._report(tmp_path, lines, now=now)
+        text = await self._report(tmp_path, lines, now=now)
         assert "/contact\\_share" in text
 
 
@@ -292,7 +289,7 @@ class TestUsageReport:
 # ---------------------------------------------------------------------------
 
 class TestCmdStats:
-    def _run_cmd(self, args):
+    async def _run_cmd(self, args):
         ctx = MagicMock()
         ctx.args = args
         upd = _upd()
@@ -300,35 +297,35 @@ class TestCmdStats:
              patch.object(st, "build_system_report", return_value="SYSTEM-VIEW") as sysrep, \
              patch.object(st, "build_usage_report",
                           new=AsyncMock(return_value="USAGE-VIEW")) as usagerep:
-            _run(st.cmd_stats(upd, ctx))
+            await st.cmd_stats(upd, ctx)
         return upd.message.reply_text.call_args[0][0], sysrep, usagerep
 
-    def test_default_shows_system_view(self):
-        text, sysrep, usagerep = self._run_cmd([])
+    async def test_default_shows_system_view(self):
+        text, sysrep, usagerep = await self._run_cmd([])
         assert text == "SYSTEM-VIEW"
         assert sysrep.call_args[0][0] == 7
         usagerep.assert_not_awaited()
 
-    def test_usage_argument_shows_usage_view(self):
-        text, sysrep, usagerep = self._run_cmd(["usage"])
+    async def test_usage_argument_shows_usage_view(self):
+        text, sysrep, usagerep = await self._run_cmd(["usage"])
         assert text == "USAGE-VIEW"
         sysrep.assert_not_called()
 
-    def test_period_passed_through(self):
-        _, sysrep, _ = self._run_cmd(["21"])
+    async def test_period_passed_through(self):
+        _, sysrep, _ = await self._run_cmd(["21"])
         assert sysrep.call_args[0][0] == 21
 
-    def test_clamped_flag_passed_through(self):
-        _, sysrep, _ = self._run_cmd(["90"])
+    async def test_clamped_flag_passed_through(self):
+        _, sysrep, _ = await self._run_cmd(["90"])
         assert sysrep.call_args[0][0] == 30
         assert sysrep.call_args[0][1] is True
 
-    def test_non_admin_blocked(self):
+    async def test_non_admin_blocked(self):
         ctx = MagicMock()
         ctx.args = []
         upd = _upd()
         with patch("permissions.is_admin", return_value=False):
-            _run(st.cmd_stats(upd, ctx))
+            await st.cmd_stats(upd, ctx)
         assert "Unknown command" in upd.message.reply_text.call_args[0][0]
 
 
@@ -483,7 +480,7 @@ class TestSystemReportScheduler:
 
 
 class TestCmdStatsPassesJobQueue:
-    def test_job_queue_reaches_the_report(self):
+    async def test_job_queue_reaches_the_report(self):
         ctx = MagicMock()
         ctx.args = []
         sentinel = _Queue([])
@@ -491,5 +488,5 @@ class TestCmdStatsPassesJobQueue:
         upd = _upd()
         with patch("permissions.is_admin", return_value=True), \
              patch.object(st, "build_system_report", return_value="OK") as report:
-            _run(st.cmd_stats(upd, ctx))
+            await st.cmd_stats(upd, ctx)
         assert report.call_args.kwargs.get("job_queue") is sentinel

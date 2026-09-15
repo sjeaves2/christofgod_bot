@@ -12,7 +12,6 @@ rendered message escapes them.
 
 from __future__ import annotations
 
-import asyncio
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -28,8 +27,6 @@ TZ = pytz.timezone("America/New_York")
 NASTY = "John_Doe *VIP* [x] `code`"
 
 
-def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
 
 
 def _balanced(text: str) -> bool:
@@ -64,7 +61,7 @@ class TestMdHelper:
 class TestAppointmentRequestToOfficial:
     """_notify_official_of_request embeds the requester's name and purpose."""
 
-    def _notify(self, display_name, description):
+    async def _notify(self, display_name, description):
         import handlers.appointments as ha
         ctx = MagicMock()
         ctx.bot = MagicMock()
@@ -81,26 +78,26 @@ class TestAppointmentRequestToOfficial:
         }
         with patch("permissions.OFFICIALS",
                    [{"id": "off1", "name": "Pastor_Test", "chat_id": 999}]):
-            _run(ha._notify_official_of_request(ctx, appt, MagicMock()))
+            await ha._notify_official_of_request(ctx, appt, MagicMock())
         return ctx.bot.send_message.await_args[0][1]
 
-    def test_display_name_escaped(self):
-        msg = self._notify(NASTY, "prayer")
+    async def test_display_name_escaped(self):
+        msg = await self._notify(NASTY, "prayer")
         assert "John\\_Doe" in msg
         assert _balanced(msg)
 
-    def test_purpose_escaped(self):
-        msg = self._notify("Jane", "discuss *baptism* and _membership_")
+    async def test_purpose_escaped(self):
+        msg = await self._notify("Jane", "discuss *baptism* and _membership_")
         assert "\\*baptism\\*" in msg
         assert _balanced(msg)
 
-    def test_single_underscore_name_does_not_unbalance(self):
+    async def test_single_underscore_name_does_not_unbalance(self):
         # The exact shape of the /userlist failure: one stray underscore.
-        msg = self._notify("John_Doe", "prayer")
+        msg = await self._notify("John_Doe", "prayer")
         assert _balanced(msg), "unbalanced Markdown would be rejected by Telegram"
 
-    def test_username_escaped(self):
-        msg = self._notify("Jane", "prayer")
+    async def test_username_escaped(self):
+        msg = await self._notify("Jane", "prayer")
         assert "@jd\\_2026" in msg
 
 
@@ -133,7 +130,7 @@ class TestEventNotificationRendering:
 class TestEventsAdminEcho:
     """Admin-typed event names are echoed back in confirmation messages."""
 
-    def _delete_confirm_prompt(self, name):
+    async def _delete_confirm_prompt(self, name):
         import handlers.events_admin as ea
         ctx = MagicMock()
         ctx.user_data = {}
@@ -146,15 +143,15 @@ class TestEventsAdminEcho:
         upd.effective_user.full_name = "Admin"
         upd.message.text = "1"
         upd.message.reply_text = AsyncMock()
-        _run(ea.de_select(upd, ctx))
+        await ea.de_select(upd, ctx)
         return upd.message.reply_text.call_args[0][0]
 
-    def test_event_name_escaped_in_delete_prompt(self):
-        msg = self._delete_confirm_prompt("Youth_Night")
+    async def test_event_name_escaped_in_delete_prompt(self):
+        msg = await self._delete_confirm_prompt("Youth_Night")
         assert "Youth\\_Night" in msg
         assert _balanced(msg)
 
-    def test_event_name_escaped_in_annotation_prompt(self):
+    async def test_event_name_escaped_in_annotation_prompt(self):
         import handlers.events_admin as ea
         ctx = MagicMock()
         ctx.user_data = {}
@@ -167,7 +164,7 @@ class TestEventsAdminEcho:
         upd.effective_user.full_name = "Admin"
         upd.message.text = "1"
         upd.message.reply_text = AsyncMock()
-        _run(ea.de_select(upd, ctx))
+        await ea.de_select(upd, ctx)
         msg = upd.message.reply_text.call_args[0][0]
         assert "Sabbath\\_Eve" in msg and "\\*Holy\\*" in msg
         assert _balanced(msg)
@@ -184,7 +181,7 @@ class TestAnnouncementRendering:
 
 
 class TestUserListEscaping:
-    def test_userlist_still_escapes(self):
+    async def test_userlist_still_escapes(self):
         """The original incident — guarded here alongside the others."""
         upd = MagicMock()
         upd.effective_user.id = 1
@@ -197,7 +194,7 @@ class TestUserListEscaping:
 
         with patch("storage.get_all_users", side_effect=_users), \
              patch("permissions.is_admin", return_value=True):
-            _run(hub.cmd_userlist(upd, MagicMock()))
+            await hub.cmd_userlist(upd, MagicMock())
         msg = upd.message.reply_text.call_args[0][0]
         assert "John\\_Doe" in msg
         assert _balanced(msg)

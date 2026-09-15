@@ -136,8 +136,8 @@ class ActivityLogger:
 _RECORD_START = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
 
 
-def prune_log_file(path: "str | Path", retention_days: int,
-                   tz: pytz.BaseTzInfo, now: "datetime | None" = None) -> int:
+def prune_log_file(path: str | Path, retention_days: int,
+                   tz: pytz.BaseTzInfo, now: datetime | None = None) -> int:
     """Drop log records older than *retention_days* from *path*.
 
     Written for bot.log, which the logging FileHandler keeps open: the file is

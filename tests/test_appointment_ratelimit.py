@@ -9,7 +9,6 @@ both enforced in ap_confirm and both exempting admins.
 
 from __future__ import annotations
 
-import asyncio
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -26,8 +25,6 @@ import telegram.ext as ext
 TZ = pytz.timezone("America/New_York")
 
 
-def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
 
 
 def _make_context() -> MagicMock:
@@ -120,7 +117,7 @@ class TestStamp:
 # ---------------------------------------------------------------------------
 
 class TestConfirmRateLimit:
-    def _run_confirm(self, existing, chat_id=111, is_admin=False):
+    async def _run_confirm(self, existing, chat_id=111, is_admin=False):
         ctx = _make_context()
         future = datetime.now(TZ) + timedelta(days=10)
         ctx.user_data.update({
@@ -147,69 +144,69 @@ class TestConfirmRateLimit:
              patch("permissions.OFFICIALS", _officials()), \
              patch("permissions.is_admin", return_value=is_admin), \
              patch("handlers.appointments._notify_official_of_request", side_effect=_fake_notify):
-            result = _run(ha.ap_confirm(upd, ctx))
+            result = await ha.ap_confirm(upd, ctx)
         return result, upd, saved
 
     # -- cooldown --------------------------------------------------------
 
-    def test_cooldown_blocks_recent_action(self):
+    async def test_cooldown_blocks_recent_action(self):
         recent = (common.now_tz() - timedelta(seconds=30)).isoformat()
-        result, upd, saved = self._run_confirm(
+        result, upd, saved = await self._run_confirm(
             [_appt(appt_id="A1", status="cancelled", last_action_at=recent)])
         assert result == ext.ConversationHandler.END
         assert saved == []  # nothing new submitted
         assert "wait" in upd.message.reply_text.call_args[0][0].lower()
 
-    def test_cooldown_allows_after_window(self):
+    async def test_cooldown_allows_after_window(self):
         old = (common.now_tz() - timedelta(seconds=ha.APPOINTMENT_COOLDOWN_SECONDS + 5)).isoformat()
-        result, upd, saved = self._run_confirm(
+        result, upd, saved = await self._run_confirm(
             [_appt(appt_id="A1", status="cancelled", last_action_at=old)])
         assert result == ext.ConversationHandler.END
         assert any(a["status"] == "pending" for a in saved)
 
-    def test_no_stamp_means_no_cooldown(self):
-        result, upd, saved = self._run_confirm([])
+    async def test_no_stamp_means_no_cooldown(self):
+        result, upd, saved = await self._run_confirm([])
         assert any(a["status"] == "pending" for a in saved)
 
     # -- pending cap -----------------------------------------------------
 
-    def test_pending_cap_blocks_at_five(self):
+    async def test_pending_cap_blocks_at_five(self):
         old = (common.now_tz() - timedelta(hours=1)).isoformat()
         # Placed >15 days out so they count toward the pending cap but not the
         # separate per-official density window (±15 days).
         existing = [_appt(appt_id=f"P{k}", status="pending",
                           last_action_at=old, days=20 + k) for k in range(5)]
-        result, upd, saved = self._run_confirm(existing)
+        result, upd, saved = await self._run_confirm(existing)
         assert result == ext.ConversationHandler.END
         assert saved == []
         assert "pending" in upd.message.reply_text.call_args[0][0].lower()
 
-    def test_pending_cap_allows_under_five(self):
+    async def test_pending_cap_allows_under_five(self):
         old = (common.now_tz() - timedelta(hours=1)).isoformat()
         existing = [_appt(appt_id=f"P{k}", status="pending",
                           last_action_at=old, days=20 + k) for k in range(4)]
-        result, upd, saved = self._run_confirm(existing)
+        result, upd, saved = await self._run_confirm(existing)
         assert any(a["status"] == "pending" for a in saved)
 
     # -- admin exemption -------------------------------------------------
 
-    def test_admin_exempt_from_cooldown(self):
+    async def test_admin_exempt_from_cooldown(self):
         recent = (common.now_tz() - timedelta(seconds=10)).isoformat()
-        result, upd, saved = self._run_confirm(
+        result, upd, saved = await self._run_confirm(
             [_appt(appt_id="A1", status="cancelled", last_action_at=recent)],
             is_admin=True)
         assert any(a["status"] == "pending" for a in saved)
 
-    def test_admin_exempt_from_pending_cap(self):
+    async def test_admin_exempt_from_pending_cap(self):
         old = (common.now_tz() - timedelta(hours=1)).isoformat()
         existing = [_appt(appt_id=f"P{k}", status="pending",
                           last_action_at=old, days=20 + k) for k in range(5)]
-        result, upd, saved = self._run_confirm(existing, is_admin=True)
+        result, upd, saved = await self._run_confirm(existing, is_admin=True)
         assert any(a["status"] == "pending" for a in saved)
 
     # -- new request is stamped -----------------------------------------
 
-    def test_new_request_is_stamped(self):
-        result, upd, saved = self._run_confirm([])
+    async def test_new_request_is_stamped(self):
+        result, upd, saved = await self._run_confirm([])
         new = next(a for a in saved if a["status"] == "pending")
         assert "last_action_at" in new

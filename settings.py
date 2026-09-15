@@ -48,7 +48,7 @@ TOKEN_PLACEHOLDER = "BOT-TOKEN-HERE"
 _TOKEN_RE = re.compile(r"bot\d{6,}:[A-Za-z0-9_-]{20,}")
 
 
-def redact_secrets(text: "str | None") -> str:
+def redact_secrets(text: str | None) -> str:
     """Replace the bot token (and any token-shaped string) with a placeholder.
 
     The URL form is handled first so "…/bot<TOKEN>/getUpdates" and a bare token

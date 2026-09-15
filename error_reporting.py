@@ -155,7 +155,7 @@ def write_error_log(error_id: str, exc: BaseException, note: str = "") -> None:
         logger.error("Could not write %s: %s", ERRORS_LOG, write_exc)
 
 
-def should_alert(exc: BaseException, now: "datetime | None" = None) -> "tuple[bool, int]":
+def should_alert(exc: BaseException, now: datetime | None = None) -> tuple[bool, int]:
     """Decide whether to alert for *exc*; returns (send_alert, suppressed_count).
 
     Records the occurrence either way. *suppressed_count* is how many repeats
@@ -234,7 +234,7 @@ async def ops_chat_ids() -> set:
     return ids
 
 
-async def report_exception(bot, exc: BaseException, note: str = "") -> "str | None":
+async def report_exception(bot, exc: BaseException, note: str = "") -> str | None:
     """Record an exception and alert ops admins when the noise rules allow.
 
     Returns the error id (always assigned, so the activity log and any alert

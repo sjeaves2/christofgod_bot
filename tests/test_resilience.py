@@ -9,7 +9,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import configparser
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -25,15 +24,6 @@ from settings import TZ
 TEMPLATE = Path(__file__).resolve().parents[1] / "deploy" / "christofgod-bot.service.template"
 
 
-def _run(coro):
-    """Drive a coroutine the way the rest of this suite does.
-
-    Deliberately NOT @pytest.mark.asyncio: every other test file uses this
-    helper, and introducing pytest-asyncio's own event-loop management into the
-    same session changes loop lifetime in ways that differ between Python 3.9
-    and 3.12. Matching the existing convention keeps both CI legs identical.
-    """
-    return asyncio.get_event_loop().run_until_complete(coro)
 
 
 
@@ -177,62 +167,62 @@ def _fresh_watchdog():
 
 
 class TestWatchdogJob:
-    def test_successful_probe_keeps_bot_running(self):
+    async def test_successful_probe_keeps_bot_running(self):
         ctx = _context()
-        _run(watchdog_job(ctx))
+        await watchdog_job(ctx)
         ctx.bot.get_me.assert_awaited_once()
         ctx.application.stop_running.assert_not_called()
         assert nw.watchdog.failing is False
 
-    def test_single_failure_does_not_stop_the_bot(self):
+    async def test_single_failure_does_not_stop_the_bot(self):
         ctx = _context(side_effect=NetworkError("dns"))
-        _run(watchdog_job(ctx))
+        await watchdog_job(ctx)
         ctx.application.stop_running.assert_not_called()
         assert nw.watchdog.failing is True
 
-    def test_sustained_outage_stops_the_application(self):
+    async def test_sustained_outage_stops_the_application(self):
         """The 2026-09-04 scenario: reachable never returns."""
         ctx = _context(side_effect=OSError("Temporary failure in name resolution"))
         start = _at(12, 0)
         with patch.object(nw, "now_tz", side_effect=[start, start + timedelta(minutes=11)]):
-            _run(watchdog_job(ctx))
+            await watchdog_job(ctx)
             ctx.application.stop_running.assert_not_called()
-            _run(watchdog_job(ctx))
+            await watchdog_job(ctx)
         ctx.application.stop_running.assert_called_once()
 
-    def test_recovery_before_grace_never_stops_the_bot(self):
+    async def test_recovery_before_grace_never_stops_the_bot(self):
         """Telegram's brief 502s must not trigger a restart."""
         ctx = _context(side_effect=[NetworkError("502"), NetworkError("502"), None])
         for _ in range(3):
-            _run(watchdog_job(ctx))
+            await watchdog_job(ctx)
         ctx.application.stop_running.assert_not_called()
         assert nw.watchdog.failing is False
 
-    def test_non_connectivity_error_does_not_count_as_outage(self):
+    async def test_non_connectivity_error_does_not_count_as_outage(self):
         """InvalidToken survives a restart; looping on it would be pointless."""
         ctx = _context(side_effect=InvalidToken())
         start = _at(12, 0)
         with patch.object(nw, "now_tz", side_effect=[start, start + timedelta(minutes=30)]):
-            _run(watchdog_job(ctx))
-            _run(watchdog_job(ctx))
+            await watchdog_job(ctx)
+            await watchdog_job(ctx)
         ctx.application.stop_running.assert_not_called()
         assert nw.watchdog.failing is False
 
-    def test_job_never_raises_when_application_missing(self):
+    async def test_job_never_raises_when_application_missing(self):
         """A watchdog that crashes the bot it guards is worse than none."""
         ctx = _context(side_effect=NetworkError("dns"))
         ctx.application = None
         start = _at(12, 0)
         with patch.object(nw, "now_tz", side_effect=[start, start + timedelta(minutes=11)]):
-            _run(watchdog_job(ctx))
-            _run(watchdog_job(ctx))  # must not raise
+            await watchdog_job(ctx)
+            await watchdog_job(ctx)  # must not raise
 
-    def test_recovery_is_recorded_in_the_activity_log(self):
+    async def test_recovery_is_recorded_in_the_activity_log(self):
         ctx = _context(side_effect=[NetworkError("dns"), None])
         start = _at(12, 0)
         with patch.object(nw, "now_tz", side_effect=[start, start + timedelta(minutes=3)]):
             with patch.object(nw.activity, "log_error") as log_error:
-                _run(watchdog_job(ctx))
-                _run(watchdog_job(ctx))
+                await watchdog_job(ctx)
+                await watchdog_job(ctx)
         assert log_error.called
         assert "Recovered" in log_error.call_args[0][0]

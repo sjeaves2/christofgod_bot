@@ -1,6 +1,5 @@
 """Tests for cache.py — file-backed in-memory cache."""
 
-import asyncio
 import sys
 from pathlib import Path
 
@@ -104,37 +103,29 @@ class TestFileCacheSync:
 # ---------------------------------------------------------------------------
 
 class TestFileCacheAsync:
-    def test_async_get_returns_empty_for_missing_file(self, tmp_path):
+    async def test_async_get_returns_empty_for_missing_file(self, tmp_path):
         cache = FileCache(tmp_path / "nope.yaml")
-        result = asyncio.get_event_loop().run_until_complete(cache.get())
+        result = await cache.get()
         assert result == {}
 
-    def test_async_get_loads_file(self, tmp_path):
+    async def test_async_get_loads_file(self, tmp_path):
         p = tmp_path / "data.yaml"
         write_yaml(p, {"hello": "world"})
         cache = FileCache(p)
-        result = asyncio.get_event_loop().run_until_complete(cache.get())
+        result = await cache.get()
         assert result == {"hello": "world"}
 
-    def test_async_save_persists(self, tmp_path):
+    async def test_async_save_persists(self, tmp_path):
         p = tmp_path / "data.yaml"
         cache = FileCache(p)
-
-        async def run():
-            await cache.save({"async": True})
-
-        asyncio.get_event_loop().run_until_complete(run())
+        await cache.save({"async": True})
         assert yaml.safe_load(p.read_text()) == {"async": True}
 
-    def test_async_get_after_save_returns_new_data(self, tmp_path):
+    async def test_async_get_after_save_returns_new_data(self, tmp_path):
         p = tmp_path / "data.yaml"
         cache = FileCache(p)
-
-        async def run():
-            await cache.save({"n": 42})
-            return await cache.get()
-
-        result = asyncio.get_event_loop().run_until_complete(run())
+        await cache.save({"n": 42})
+        result = await cache.get()
         assert result["n"] == 42
 
 

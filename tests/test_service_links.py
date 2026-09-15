@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -30,8 +29,6 @@ def _day(days_ahead: int, hour: int, minute: int):
     return base.replace(hour=hour, minute=minute, second=0, microsecond=0)
 
 
-def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
 
 
 def _make_update(text: str = "", chat_id: int = 1) -> MagicMock:
@@ -60,7 +57,7 @@ def _make_context() -> MagicMock:
 # ---------------------------------------------------------------------------
 
 class TestUrlAttachment:
-    def _run_all_upcoming(self, urls_map):
+    async def _run_all_upcoming(self, urls_map):
 
         sabbath_eve = {
             "key": "sabbath_eve_test",
@@ -89,24 +86,24 @@ class TestUrlAttachment:
 
         with patch("storage.get_all_events_data", side_effect=_fake_events_data), \
              patch("events.all_upcoming_events", return_value=[sabbath_eve, sabbath_morning]):
-            evs = _run(events.all_upcoming(days_ahead=30))
+            evs = await events.all_upcoming(days_ahead=30)
         return {e["phase_key"]: e for e in evs}
 
-    def test_distinct_link_per_phase(self):
-        events = self._run_all_upcoming({
+    async def test_distinct_link_per_phase(self):
+        events = await self._run_all_upcoming({
             "sabbath::Eve": "https://zoom.us/eve",
             "sabbath::Morning": "https://zoom.us/morning",
         })
         assert events["sabbath::Eve"]["url"] == "https://zoom.us/eve"
         assert events["sabbath::Morning"]["url"] == "https://zoom.us/morning"
 
-    def test_phase_without_link_has_no_url(self):
-        events = self._run_all_upcoming({"sabbath::Eve": "https://zoom.us/eve"})
+    async def test_phase_without_link_has_no_url(self):
+        events = await self._run_all_upcoming({"sabbath::Eve": "https://zoom.us/eve"})
         assert events["sabbath::Eve"]["url"] == "https://zoom.us/eve"
         assert not events["sabbath::Morning"].get("url")
 
-    def test_no_links_configured(self):
-        events = self._run_all_upcoming({})
+    async def test_no_links_configured(self):
+        events = await self._run_all_upcoming({})
         assert not events["sabbath::Eve"].get("url")
         assert not events["sabbath::Morning"].get("url")
 
@@ -145,7 +142,7 @@ class TestSundayPrayerLink:
         ev = self._sunday_event("")
         assert not ev.get("url")
 
-    def test_sunday_not_duplicated_in_all_upcoming(self):
+    async def test_sunday_not_duplicated_in_all_upcoming(self):
         """Sunday must appear once (via _merge_special_events), not twice."""
 
         async def _fake_events_data():
@@ -162,7 +159,7 @@ class TestSundayPrayerLink:
             }
 
         with patch("storage.get_all_events_data", side_effect=_fake_events_data):
-            evs = _run(events.all_upcoming(days_ahead=14))
+            evs = await events.all_upcoming(days_ahead=14)
         sundays = [e for e in evs if "Sunday Morning Prayer" in e["name"]]
         assert len(sundays) >= 1
         assert all(s["url"] == "https://zoom.us/sunday" for s in sundays)
@@ -203,7 +200,7 @@ class TestNotificationLink:
 # ---------------------------------------------------------------------------
 
 class TestSetServiceLink:
-    def test_lists_phases_and_enters_select(self):
+    async def test_lists_phases_and_enters_select(self):
         from handlers.events_admin import SL_SELECT
 
         ctx = _make_context()
@@ -214,7 +211,7 @@ class TestSetServiceLink:
 
         with patch("permissions.is_admin", return_value=True), \
              patch("storage.get_all_events_data", side_effect=_fake_events_data):
-            result = _run(hea.cmd_setservicelink(upd, ctx))
+            result = await hea.cmd_setservicelink(upd, ctx)
 
         assert result == SL_SELECT
         text = upd.message.reply_text.call_args[0][0]
@@ -222,37 +219,37 @@ class TestSetServiceLink:
         assert "https://old" in text  # shows current link
         assert ctx.user_data["sl_phases"]
 
-    def test_non_admin_blocked(self):
+    async def test_non_admin_blocked(self):
         from telegram.ext import ConversationHandler
 
         ctx = _make_context()
         upd = _make_update()
         with patch("permissions.is_admin", return_value=False):
-            result = _run(hea.cmd_setservicelink(upd, ctx))
+            result = await hea.cmd_setservicelink(upd, ctx)
         assert result == ConversationHandler.END
 
-    def test_select_valid_advances_to_url(self):
+    async def test_select_valid_advances_to_url(self):
         from handlers.events_admin import SL_URL
         from hebrew_calendar import service_phases
 
         ctx = _make_context()
         ctx.user_data["sl_phases"] = service_phases()
         upd = _make_update(text="1")
-        result = _run(hea.sl_select(upd, ctx))
+        result = await hea.sl_select(upd, ctx)
         assert result == SL_URL
         assert ctx.user_data["sl_phase"]["phase_key"] == "sabbath::Eve"
 
-    def test_select_invalid_stays(self):
+    async def test_select_invalid_stays(self):
         from handlers.events_admin import SL_SELECT
         from hebrew_calendar import service_phases
 
         ctx = _make_context()
         ctx.user_data["sl_phases"] = service_phases()
         upd = _make_update(text="999")
-        result = _run(hea.sl_select(upd, ctx))
+        result = await hea.sl_select(upd, ctx)
         assert result == SL_SELECT
 
-    def _run_sl_url(self, text, phase_key="sabbath::Eve", existing=None):
+    async def _run_sl_url(self, text, phase_key="sabbath::Eve", existing=None):
         from hebrew_calendar import service_phases
 
         ctx = _make_context()
@@ -275,26 +272,26 @@ class TestSetServiceLink:
         with patch("storage.get_all_events_data", side_effect=_fake_get), \
              patch("storage.save_events_data", side_effect=_fake_save), \
              patch("handlers.events_admin.schedule_all_upcoming", side_effect=_fake_schedule):
-            result = _run(hea.sl_url(upd, ctx))
+            result = await hea.sl_url(upd, ctx)
         return result, upd, saved
 
-    def test_set_link_saved(self):
+    async def test_set_link_saved(self):
         from telegram.ext import ConversationHandler
-        result, upd, saved = self._run_sl_url("https://zoom.us/new")
+        result, upd, saved = await self._run_sl_url("https://zoom.us/new")
         assert result == ConversationHandler.END
         assert saved["convocation_urls"]["sabbath::Eve"] == "https://zoom.us/new"
 
-    def test_clear_link_removes_entry(self):
-        result, upd, saved = self._run_sl_url("-", existing={"sabbath::Eve": "https://old"})
+    async def test_clear_link_removes_entry(self):
+        result, upd, saved = await self._run_sl_url("-", existing={"sabbath::Eve": "https://old"})
         assert "sabbath::Eve" not in saved["convocation_urls"]
 
-    def test_set_does_not_disturb_other_phase(self):
-        result, upd, saved = self._run_sl_url(
+    async def test_set_does_not_disturb_other_phase(self):
+        result, upd, saved = await self._run_sl_url(
             "https://zoom.us/eve", existing={"sabbath::Morning": "https://morning"})
         assert saved["convocation_urls"]["sabbath::Morning"] == "https://morning"
         assert saved["convocation_urls"]["sabbath::Eve"] == "https://zoom.us/eve"
 
-    def test_set_reschedules_notifications(self):
+    async def test_set_reschedules_notifications(self):
         from hebrew_calendar import service_phases
 
         ctx = _make_context()
@@ -314,6 +311,6 @@ class TestSetServiceLink:
         with patch("storage.get_all_events_data", side_effect=_fake_get), \
              patch("storage.save_events_data", side_effect=_fake_save), \
              patch("handlers.events_admin.schedule_all_upcoming", reschedule):
-            _run(hea.sl_url(upd, ctx))
+            await hea.sl_url(upd, ctx)
 
         reschedule.assert_called_once()

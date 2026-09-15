@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 _GOOGLE_LANG = {"en": "en", "es": "es", "fr": "fr", "zu": "zu"}
 
 
-def translate(text: str, source_lang: str, target_lang: str) -> "str | None":
+def translate(text: str, source_lang: str, target_lang: str) -> str | None:
     """Translate *text*, or return None if translation isn't possible.
 
     Blocking (network call) — invoke via run_in_executor from async code.
