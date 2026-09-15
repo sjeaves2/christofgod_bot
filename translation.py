@@ -23,7 +23,7 @@ _GOOGLE_LANG = {"en": "en", "es": "es", "fr": "fr", "zu": "zu"}
 def translate(text: str, source_lang: str, target_lang: str) -> str | None:
     """Translate *text*, or return None if translation isn't possible.
 
-    Blocking (network call) — invoke via run_in_executor from async code.
+    Blocking (network call) — invoke via asyncio.to_thread from async code.
     """
     src = _GOOGLE_LANG.get(source_lang)
     dst = _GOOGLE_LANG.get(target_lang)
