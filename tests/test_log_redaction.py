@@ -18,7 +18,15 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import settings
 
-FAKE_TOKEN = "8655410838:AAHV4z-O7P2bhUnVUdfLzDt5aJdRGJnxP68"
+# A DESIGNATED SYNTHETIC token. It must still match settings._TOKEN_RE
+# (\d{6,} : 20+ chars of [A-Za-z0-9_-]) so the redaction tests are meaningful,
+# but it is obviously not a credential.
+#
+# This constant once held the REAL production token, committed 2026-08-24 and
+# public for 23 days — the test written to prove the token never leaks was
+# itself the leak. tests/test_no_secrets_committed.py now fails the build if any
+# other token-shaped string appears in a tracked file.
+FAKE_TOKEN = "111111111:AAAA-NOT-A-REAL-TOKEN-FOR-TESTS-ONLY"
 FAKE_URL = f"https://api.telegram.org/bot{FAKE_TOKEN}/getUpdates"
 
 
