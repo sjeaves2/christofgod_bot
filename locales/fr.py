@@ -19,6 +19,7 @@ STRINGS: dict[str, str] = {
         "/settimezone — définir votre fuseau horaire pour les heures affichées\n"
         "/language — choisir votre langue\n"
         "/notifications — choisir les rappels que vous recevez\n"
+        "/privacy — ce que le bot conserve à votre sujet\n"
         "/donate — soutenir la congrégation par un don\n"
         "/announcements — voir les annonces en cours\n"
         "/stop — vous désabonner des notifications"
@@ -230,11 +231,27 @@ STRINGS: dict[str, str] = {
         "(Sabbat et Saintes Convocations, Prière du dimanche matin, Événements spéciaux). "
         "Utile si vous n'êtes pas dans un groupe de discussion de l'église."
     ),
+    "help_privacy": (
+        "*/privacy* — Ce que le bot conserve à votre sujet, qui peut le voir, "
+        "combien de temps c'est gardé, et comment le faire supprimer. Envoyez "
+        "/stop pour supprimer votre inscription à tout moment."
+    ),
     "help_donate": (
         "*/donate* — Soutenez la congrégation par un don. Ouvre une page "
         "de don sécurisée où vous pouvez contribuer."
     ),
 
+    # -- /privacy --
+    "privacy_message": (
+        "🔒 *Confidentialité*\n\n"
+        "Ce bot conserve votre nom Telegram, vos préférences et les rendez-vous "
+        "que vous demandez. Il ne lit pas les conversations ordinaires des "
+        "groupes et ne partage jamais vos informations en dehors des "
+        "responsables du ministère.\n\n"
+        "Envoyez /stop à tout moment pour supprimer votre inscription.\n\n"
+        "Appuyez ci-dessous pour lire la politique complète."
+    ),
+    "privacy_button": "Lire la politique de confidentialité",
     # -- /donate --
     "donate_message": (
         "🙏 *Soutenez Christ of God Ministries*\n\n"
