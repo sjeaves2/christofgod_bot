@@ -269,7 +269,7 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         reply = "✅ Contact received. You have been recognised as an official."
     else:
         reply = "✅ Contact received. Thank you!"
-    cmd_text = _commands_text(lang, is_adm)
+    cmd_text = _commands_text(lang, is_adm, permissions.is_prayer_admin(update))
 
     await update.message.reply_text(reply, reply_markup=ReplyKeyboardRemove())
     await update.message.reply_text(cmd_text, parse_mode=ParseMode.MARKDOWN)

@@ -501,3 +501,71 @@ class TestStatsShowsPendingCount:
              patch("permissions.is_admin", lambda u: True):
             await st.cmd_stats(upd, ctx)
         assert captured["pending"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Discoverability — a command nobody can find is barely shipped
+# ---------------------------------------------------------------------------
+
+class TestPrayerAdminHelp:
+    """The prayer commands must be visible to prayer admins and ONLY to them.
+
+    Listing them for every admin would advertise a queue that prayer_admin_only
+    refuses with "Unknown command", contradicting the promise that requests stay
+    with the designated leadership.
+    """
+
+    async def test_prayer_admin_sees_the_commands_in_adminhelp(self):
+        import handlers.user_basics as UB
+        upd = _update(uid=1, username="sjeaves2")
+        with patch.object(UB.permissions, "is_prayer_admin", lambda u: True), \
+             patch.object(UB.permissions, "is_admin", lambda u: True), \
+             patch.object(UB.activity, "log_command", lambda *a, **k: None):
+            await UB.cmd_adminhelp(upd, _ctx())
+        text = upd.message.reply_text.call_args[0][0]
+        for cmd in ("/prayerrequests", "/respondprayer", "/dismissprayer"):
+            assert cmd in text, f"{cmd} missing from /adminhelp for a prayer admin"
+
+    async def test_plain_admin_does_not_see_them(self):
+        import handlers.user_basics as UB
+        upd = _update(uid=2, username="curtisadairjr")
+        with patch.object(UB.permissions, "is_prayer_admin", lambda u: False), \
+             patch.object(UB.permissions, "is_admin", lambda u: True), \
+             patch.object(UB.activity, "log_command", lambda *a, **k: None):
+            await UB.cmd_adminhelp(upd, _ctx())
+        text = upd.message.reply_text.call_args[0][0]
+        for cmd in ("/prayerrequests", "/respondprayer", "/dismissprayer"):
+            assert cmd not in text, f"{cmd} shown to an admin who cannot use it"
+        assert "/addevent" in text, "ordinary admin commands should still be listed"
+
+    def test_commands_text_gates_the_prayer_block(self):
+        import handlers.user_basics as UB
+        with_prayer = UB._commands_text("en", is_adm=True, is_prayer=True)
+        without = UB._commands_text("en", is_adm=True, is_prayer=False)
+        assert "/prayerrequests" in with_prayer
+        assert "/prayerrequests" not in without
+
+    def test_member_sees_neither_block(self):
+        import handlers.user_basics as UB
+        text = UB._commands_text("en", is_adm=False, is_prayer=False)
+        assert "/prayerrequests" not in text
+        assert "/addevent" not in text
+        assert "/prayer" in text, "the member-facing /prayer must still be listed"
+
+    def test_the_block_explains_the_deletion(self):
+        """An admin should know that answering destroys the member's words."""
+        import handlers.user_basics as UB
+        assert "deletes" in UB.PRAYER_COMMANDS_TEXT.lower()
+
+    async def test_help_shows_them_to_a_prayer_admin(self):
+        """/help, not just /adminhelp — it is where people actually look."""
+        import handlers.user_basics as UB
+        upd = _update(uid=1, username="sjeaves2")
+        ctx = _ctx()
+        ctx.args = []
+        with patch.object(UB.permissions, "is_prayer_admin", lambda u: True), \
+             patch.object(UB.permissions, "is_admin", lambda u: True), \
+             patch.object(UB, "get_user_prefs", AsyncMock(return_value=(None, "en"))), \
+             patch.object(UB.activity, "log_command", lambda *a, **k: None):
+            await UB.cmd_help(upd, ctx)
+        assert "/prayerrequests" in upd.message.reply_text.call_args[0][0]
