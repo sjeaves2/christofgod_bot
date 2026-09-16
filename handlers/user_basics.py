@@ -29,7 +29,7 @@ from ics_generator import events_to_ics
 from localization import AVAILABLE_LANGUAGES, DEFAULT_LANG, t
 from pdf_generator import generate_user_list_pdf
 from permissions import admin_only, user_info
-from settings import BOT_DISPLAY_NAME, DONATION_URL, activity
+from settings import BOT_DISPLAY_NAME, DONATION_URL, PRIVACY_URL, activity
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -181,6 +181,7 @@ HELP_TOPICS = {
     "notifications": "help_notifications",
     "donate": "help_donate",
     "announcements": "help_announcements",
+    "privacy": "help_privacy",
 }
 
 
@@ -236,6 +237,27 @@ async def cmd_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     # and an unbalanced _ or * would make Telegram reject the whole message —
     # turning "unknown command" back into the silence this fixes.
     await update.message.reply_text(t("unknown_command", lang, command=command))
+
+
+async def cmd_privacy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show what the bot stores and link to the full policy.
+
+    Exists as a command rather than relying on BotFather's privacy-policy field:
+    this is discoverable in /help and the command menu, works on every client,
+    and is under our control. PRIVACY_URL is configurable so the policy can move
+    without a code change.
+    """
+    uid, uname, dname = user_info(update)
+    activity.log_command("privacy", uid, uname, dname)
+    _, lang = await get_user_prefs(uid)
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton(t("privacy_button", lang), url=PRIVACY_URL)
+    ]])
+    await update.message.reply_text(
+        t("privacy_message", lang),
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=kb,
+    )
 
 
 async def cmd_donate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
