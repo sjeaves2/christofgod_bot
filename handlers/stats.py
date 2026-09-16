@@ -25,6 +25,7 @@ import storage
 from common import md, now_tz
 from handlers.announcements import active_announcements
 from permissions import admin_only, user_info
+from handlers.prayer import pending_requests
 from settings import LOGS_DIR, STARTED_AT, TZ, activity
 from telegram import Update
 from telegram.constants import ParseMode
@@ -180,8 +181,12 @@ def _notification_recipients(detail: str) -> int:
 
 
 def build_system_report(days: int, clamped: bool, now: datetime | None = None,
-                        job_queue=None) -> str:
-    """Health view: uptime, scheduler state, error volume, recent errors."""
+                        job_queue=None, pending_prayers: int | None = None) -> str:
+    """Health view: uptime, scheduler state, error volume, recent errors.
+
+    pending_prayers is passed in rather than read here: this function is sync
+    and storage is async. None means "not available" and the line is omitted.
+    """
     now = now or now_tz()
     entries = read_activity(days, now)
     errors = [e for e in entries if e["kind"] == "ERROR"]
@@ -191,6 +196,15 @@ def build_system_report(days: int, clamped: bool, now: datetime | None = None,
     lines.append(f"*Uptime:* {_fmt_duration(now - STARTED_AT)} "
                  f"(since {STARTED_AT.strftime('%Y-%m-%d %H:%M %Z')})")
     lines.append(f"*Activity entries in period:* {len(entries)}")
+    if pending_prayers is not None:
+        # Prayer requests are the one queue where a delay has a person waiting
+        # on the other end, so it sits with the health figures rather than the
+        # usage ones.
+        if pending_prayers:
+            lines.append(f"*Prayer requests waiting:* {pending_prayers} "
+                         f"— answer with /prayerrequests")
+        else:
+            lines.append("*Prayer requests waiting:* none")
 
     # --- scheduler / notification engine ---
     lines.append("")
@@ -343,5 +357,11 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         text = await build_usage_report(days, clamped)
     else:
         job_queue = getattr(getattr(context, "application", None), "job_queue", None)
-        text = build_system_report(days, clamped, job_queue=job_queue)
+        pending_prayers = None
+        try:
+            pending_prayers = len(pending_requests(await storage.get_prayer_requests()))
+        except Exception:  # noqa: BLE001 - one line must never break /stats
+            logger.warning("Could not count pending prayer requests", exc_info=True)
+        text = build_system_report(days, clamped, job_queue=job_queue,
+                                   pending_prayers=pending_prayers)
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)

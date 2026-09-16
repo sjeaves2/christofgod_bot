@@ -213,6 +213,20 @@ from handlers.backup import (  # noqa: F401
     cmd_backup,
     nightly_backup_job,
 )
+from handlers.prayer import (  # noqa: F401
+    PR_CONFIRM,
+    PR_TEXT,
+    RESP_TEXT,
+    cmd_dismissprayer,
+    cmd_prayer,
+    cmd_prayerrequests,
+    cmd_respondprayer,
+    pending_requests,
+    pr_confirm,
+    pr_text,
+    purge_old_stubs,
+    resp_text,
+)
 from handlers.stats import cmd_stats  # noqa: F401
 
 logger = logging.getLogger(__name__)
@@ -273,6 +287,7 @@ async def daily_maintenance_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     await archive_old_appointments()
     await purge_archived_appointments()
     await purge_old_announcements()
+    await purge_old_stubs()
     removed = prune_log_file(LOGS_DIR / "bot.log", RUNTIME_LOG_RETENTION, TZ)
     if removed:
         logger.info("Daily maintenance pruned %d old log line(s).", removed)
@@ -485,6 +500,7 @@ async def post_init(app: Application) -> None:
         BotCommand("settimezone", "Set your time zone for displayed times"),
         BotCommand("language", "Choose your language"),
         BotCommand("notifications", "Choose which reminders you receive"),
+        BotCommand("prayer", "Send a prayer request"),
         BotCommand("privacy", "What the bot stores about you"),
         BotCommand("donate", "Support the congregation with a gift"),
         BotCommand("announcements", "View current announcements"),
@@ -742,6 +758,27 @@ def main() -> None:
             handle_counter_propose_message,
         )
     )
+
+    prayer_conv = ConversationHandler(
+        entry_points=[CommandHandler("prayer", cmd_prayer)],
+        states={
+            PR_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, pr_text)],
+            PR_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, pr_confirm)],
+        },
+        fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
+    )
+    app.add_handler(prayer_conv)
+
+    respond_prayer_conv = ConversationHandler(
+        entry_points=[CommandHandler("respondprayer", cmd_respondprayer)],
+        states={
+            RESP_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, resp_text)],
+        },
+        fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
+    )
+    app.add_handler(respond_prayer_conv)
+    app.add_handler(CommandHandler("prayerrequests", cmd_prayerrequests))
+    app.add_handler(CommandHandler("dismissprayer", cmd_dismissprayer))
 
     # LAST in group 0, deliberately: PTB runs only the first matching handler
     # per group, so this catches commands nothing above recognised. In a later

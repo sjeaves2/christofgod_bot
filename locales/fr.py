@@ -19,6 +19,7 @@ STRINGS: dict[str, str] = {
         "/settimezone — définir votre fuseau horaire pour les heures affichées\n"
         "/language — choisir votre langue\n"
         "/notifications — choisir les rappels que vous recevez\n"
+        "/prayer — envoyer une demande de prière\n"
         "/privacy — ce que le bot conserve à votre sujet\n"
         "/donate — soutenir la congrégation par un don\n"
         "/announcements — voir les annonces en cours\n"
@@ -231,6 +232,12 @@ STRINGS: dict[str, str] = {
         "(Sabbat et Saintes Convocations, Prière du dimanche matin, Événements spéciaux). "
         "Utile si vous n'êtes pas dans un groupe de discussion de l'église."
     ),
+    "help_prayer": (
+        "*/prayer* — Envoyez une demande de prière aux responsables du ministère. "
+        "Précisez le type de prière, pour qui elle est, et toute date importante. "
+        "Votre demande n'est partagée qu'avec les responsables, et son texte est "
+        "supprimé une fois qu'elle a reçu une réponse."
+    ),
     "help_privacy": (
         "*/privacy* — Ce que le bot conserve à votre sujet, qui peut le voir, "
         "combien de temps c'est gardé, et comment le faire supprimer. Envoyez "
@@ -241,6 +248,54 @@ STRINGS: dict[str, str] = {
         "de don sécurisée où vous pouvez contribuer."
     ),
 
+    # -- /prayer --
+    "prayer_prompt": (
+        "🙏 *Demande de Prière*\n\n"
+        "Partagez ce pour quoi vous souhaitez la prière. Il est utile "
+        "d'indiquer :\n\n"
+        "• *Le type de prière* — santé, finances, consolation, espérance, "
+        "sagesse, direction, bien-être général\n"
+        "• *Pour qui* — vous-même, un proche, un ami\n"
+        "• *Une date importante* — une opération, une audience, un entretien\n\n"
+        "Partagez les détails que vous souhaitez, jusqu'à {limit} caractères. "
+        "Votre demande est privée : elle n'est partagée qu'avec les "
+        "responsables du ministère, et avec personne d'autre.\n\n"
+        "Envoyez /cancel à tout moment pour arrêter."
+    ),
+    "prayer_empty": "Envoyez le texte de votre demande de prière, ou /cancel.",
+    "prayer_too_long": (
+        "Cela fait {actual} caractères ; la limite est de {limit}. "
+        "Raccourcissez-la un peu et renvoyez-la."
+    ),
+    "prayer_confirm": (
+        "Veuillez vérifier votre demande :\n\n"
+        "{request}\n\n"
+        "Envoyez *oui* pour la soumettre, *modify* pour la modifier, ou "
+        "*cancel* pour l'annuler."
+    ),
+    "prayer_confirm_unclear": (
+        "Envoyez *oui* pour soumettre, *modify* pour modifier, ou *cancel*."
+    ),
+    "prayer_modify": (
+        "Voici ce que vous avez écrit. Copiez-le, modifiez-le et renvoyez-le :\n\n"
+        "```\n{request}\n```"
+    ),
+    "prayer_cancelled": "Votre demande de prière a été annulée. Rien n'a été envoyé.",
+    "prayer_received": (
+        "🙏 *Votre demande a été reçue.*\n\n"
+        "Elle a été présentée aux responsables du ministère, et elle est "
+        "portée dans la prière.\n\n"
+        "_Dieu est pour nous un refuge et un appui, un secours qui ne manque "
+        "jamais dans la détresse._ Votre secours vient de l'Éternel, et la "
+        "prière fervente du juste a une grande efficacité.\n\n"
+        "Soyez assuré d'avoir été entendu — par nous, et par Lui.\n\n"
+        "Votre référence est `{request_id}`."
+    ),
+    "prayer_response_intro": (
+        "🙏 *Une réponse à votre demande de prière*\n\n"
+        "En réponse à la demande de prière que vous avez envoyée le {date} "
+        "(`{request_id}`), les responsables du ministère vous adressent ceci :"
+    ),
     # -- /privacy --
     "privacy_message": (
         "🔒 *Confidentialité*\n\n"

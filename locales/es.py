@@ -19,6 +19,7 @@ STRINGS: dict[str, str] = {
         "/settimezone — establecer tu zona horaria para las horas mostradas\n"
         "/language — elegir tu idioma\n"
         "/notifications — elegir qué recordatorios recibes\n"
+        "/prayer — enviar una petición de oración\n"
         "/privacy — qué guarda el bot sobre ti\n"
         "/donate — apoyar a la congregación con una ofrenda\n"
         "/announcements — ver los anuncios actuales\n"
@@ -221,6 +222,12 @@ STRINGS: dict[str, str] = {
         "(Sábado y Santas Convocaciones, Oración del domingo por la mañana, Eventos especiales). "
         "Útil si no estás en un chat de grupo de la iglesia."
     ),
+    "help_prayer": (
+        "*/prayer* — Envía una petición de oración al liderazgo del ministerio. "
+        "Indica qué tipo de oración necesitas, por quién es y cualquier fecha "
+        "importante. Tu petición se comparte solo con el liderazgo, y su texto se "
+        "elimina una vez respondida."
+    ),
     "help_privacy": (
         "*/privacy* — Qué guarda el bot sobre ti, quién puede verlo, cuánto "
         "tiempo se conserva y cómo eliminarlo. Envía /stop para borrar tu "
@@ -231,6 +238,53 @@ STRINGS: dict[str, str] = {
         "segura de donaciones donde puedes contribuir."
     ),
 
+    # -- /prayer --
+    "prayer_prompt": (
+        "🙏 *Petición de Oración*\n\n"
+        "Comparte aquello por lo que deseas oración. Ayuda incluir:\n\n"
+        "• *Qué tipo de oración* — salud, finanzas, consuelo, esperanza, "
+        "sabiduría, dirección, bienestar general\n"
+        "• *Por quién es* — por ti, un familiar, un amigo\n"
+        "• *Alguna fecha importante* — una cirugía, una cita en el tribunal, "
+        "una entrevista\n\n"
+        "Comparte los detalles que desees, hasta {limit} caracteres. Tu "
+        "petición es privada: se comparte únicamente con el liderazgo del "
+        "ministerio, y con nadie más.\n\n"
+        "Envía /cancel en cualquier momento para detenerte."
+    ),
+    "prayer_empty": "Envía el texto de tu petición de oración, o /cancel.",
+    "prayer_too_long": (
+        "Son {actual} caracteres; el límite es {limit}. "
+        "Acórtala un poco y envíala de nuevo."
+    ),
+    "prayer_confirm": (
+        "Revisa tu petición:\n\n"
+        "{request}\n\n"
+        "Envía *sí* para enviarla, *modify* para cambiarla, o *cancel* para descartarla."
+    ),
+    "prayer_confirm_unclear": (
+        "Envía *sí* para enviarla, *modify* para cambiarla, o *cancel*."
+    ),
+    "prayer_modify": (
+        "Esto es lo que escribiste. Cópialo, haz tus cambios y envíalo de nuevo:\n\n"
+        "```\n{request}\n```"
+    ),
+    "prayer_cancelled": "Tu petición de oración fue descartada. No se envió nada.",
+    "prayer_received": (
+        "🙏 *Tu petición ha sido recibida.*\n\n"
+        "Ha sido presentada ante el liderazgo del ministerio, y está siendo "
+        "llevada en oración.\n\n"
+        "_Dios es nuestro amparo y fortaleza, nuestro pronto auxilio en las "
+        "tribulaciones._ Tu socorro viene del SEÑOR, y la oración eficaz del "
+        "justo puede mucho.\n\n"
+        "Ten la seguridad de que has sido escuchado — por nosotros, y por Él.\n\n"
+        "Tu referencia es `{request_id}`."
+    ),
+    "prayer_response_intro": (
+        "🙏 *Una respuesta a tu petición de oración*\n\n"
+        "En respuesta a la petición de oración que enviaste el {date} "
+        "(`{request_id}`), el liderazgo del ministerio te envía lo siguiente:"
+    ),
     # -- /privacy --
     "privacy_message": (
         "🔒 *Privacidad*\n\n"

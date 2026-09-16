@@ -49,6 +49,22 @@ to the official you are meeting and to administrators. Share only what you are
 comfortable recording. For anything you would rather not have written down,
 speak to an official directly.
 
+### When you send a prayer request (`/prayer`)
+
+What you write, your name, and the date you sent it.
+
+A prayer request is shared **only with the members of the ministry's leadership
+designated to receive them** — not with all administrators, and with nobody
+outside the leadership.
+
+**What you wrote is deleted as soon as your request has been answered or
+closed.** Only a short record remains — the reference number, the date, your
+name and the fact that it was answered — and that record is deleted after 30
+days. The ministry does not keep a lasting copy of what you shared.
+
+Please share what you are comfortable sharing. For anything you would rather
+not have written down at all, speak to an official directly.
+
 ### Activity records
 
 The bot keeps a log of which commands were used, by whom and when, to
@@ -77,6 +93,7 @@ name. **It does not record the content of your messages.**
 |---|---|
 | Church administrators | The list of registered members, and all appointments |
 | Church officials | Appointments that involve them, including the reason you gave |
+| Designated prayer leaders | Prayer requests sent with /prayer |
 | Designated operations administrators | A nightly backup copy of the bot's data files, sent to them by direct message |
 | Nobody else | — |
 
@@ -93,6 +110,7 @@ grants no access to anyone outside it.
 | Appointments | Moved to an archive 90 days after the meeting |
 | Archived appointments | Deleted after 2 years |
 | Announcements | Deleted 30 days after they expire |
+| Prayer requests | The text is deleted as soon as the request is answered or closed; the short record 30 days later |
 | Activity records | 90 days, then automatically deleted |
 | Technical logs | 45 days, then automatically deleted |
 
