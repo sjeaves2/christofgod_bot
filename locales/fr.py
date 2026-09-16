@@ -45,6 +45,7 @@ STRINGS: dict[str, str] = {
     "section_past": "\n*Passés :*",
     "appt_line": "• Avec : {counterparty}\n   {when} — *{status}*\n   _ID : {id}_",
 
+    "action_cancelled": "✖️ Annulé. Rien n'a été enregistré ni envoyé.",
     # -- cancel appointment --
     "cancel_none": "Vous n'avez aucun rendez-vous actif à annuler.",
     "cancel_list_header": "*Vos rendez-vous actifs :*\nChoisissez-en un à annuler :",
