@@ -22,6 +22,7 @@ STRINGS: dict[str, str] = {
         "/settimezone — setha izoni yesikhathi sakho yezikhathi eziboniswayo\n"
         "/language — khetha ulimi lwakho\n"
         "/notifications — khetha ukuthi yiziphi izikhumbuzo ozitholayo\n"
+        "/prayer — thumela isicelo somthandazo\n"
         "/privacy — okugcinwa yibhothi ngawe\n"
         "/donate — sekela ibandla ngomnikelo\n"
         "/announcements — buka izimemezelo zamanje\n"
@@ -229,6 +230,12 @@ STRINGS: dict[str, str] = {
         "(iSabatha neMihlangano eNgcwele, uMthandazo waNgeSonto Ekuseni, Imicimbi ekhethekile). "
         "Kuwusizo uma ungekho eqenjini lengxoxo lebandla."
     ),
+    "help_prayer": (
+        "*/prayer* — Thumela isicelo somthandazo kubaholi benkonzo. Sho uhlobo "
+        "lomthandazo oludingayo, ukuthi ungowabani, nanoma yiluphi usuku "
+        "olubalulekile. Isicelo sakho sabelwana nabaholi kuphela, futhi umbhalo "
+        "waso uyasuswa uma sesiphenduliwe."
+    ),
     "help_privacy": (
         "*/privacy* — Okugcinwa yibhothi ngawe, ubani ongakubona, kugcinwa "
         "isikhathi esingakanani, nokuthi ungakususa kanjani. Thumela u-/stop "
@@ -239,6 +246,53 @@ STRINGS: dict[str, str] = {
         "eliphephile lapho ungakhona ukunikela."
     ),
 
+    # -- /prayer --
+    "prayer_prompt": (
+        "🙏 *Isicelo Somthandazo*\n\n"
+        "Sicela wabelane ngalokho ofuna ukuthandazelwa ngakho. Kusiza "
+        "ukufaka:\n\n"
+        "• *Uhlobo lomthandazo* — impilo, ezezimali, induduzo, ithemba, "
+        "ukuhlakanipha, ukuholwa, inhlalakahle\n"
+        "• *Ukuthi ungowabani* — wena, ilungu lomndeni, umngane\n"
+        "• *Usuku olubalulekile* — ukuhlinzwa, usuku lwenkantolo, inhlolokhono\n\n"
+        "Yabelana ngemininingwane okhululekile ngayo, kufika kumagama "
+        "angu-{limit}. Isicelo sakho siyimfihlo: sabelwana nabaholi benkonzo "
+        "kuphela, hhayi omunye umuntu.\n\n"
+        "Thumela u-/cancel noma nini ukuze uyeke."
+    ),
+    "prayer_empty": "Sicela uthumele umbhalo wesicelo sakho somthandazo, noma u-/cancel.",
+    "prayer_too_long": (
+        "Lokho kungamagama angu-{actual}; umkhawulo ungu-{limit}. "
+        "Sicela usifushanise kancane bese usithumela futhi."
+    ),
+    "prayer_confirm": (
+        "Sicela uhlole isicelo sakho:\n\n"
+        "{request}\n\n"
+        "Thumela u-*yebo* ukuze usithumele, u-*modify* ukuze usishintshe, noma "
+        "u-*cancel* ukuze usilahle."
+    ),
+    "prayer_confirm_unclear": (
+        "Thumela u-*yebo* ukuze uthumele, u-*modify* ukuze ushintshe, noma u-*cancel*."
+    ),
+    "prayer_modify": (
+        "Nakhu okubhalile. Kukopishe, ukushintshe, bese ukuthumela futhi:\n\n"
+        "```\n{request}\n```"
+    ),
+    "prayer_cancelled": "Isicelo sakho somthandazo silahliwe. Akukho okuthunyelwe.",
+    "prayer_received": (
+        "🙏 *Isicelo sakho sitholakele.*\n\n"
+        "Sibekwe phambi kwabaholi benkonzo, futhi sithwelwe ngomthandazo.\n\n"
+        "_UNkulunkulu uyisiphephelo nesivikelo sethu, usizo olukhona ngempela "
+        "ezinsizini._ Usizo lwakho luvela eNKOSINI, futhi umthandazo onamandla "
+        "wolungileyo usebenza kakhulu.\n\n"
+        "Yiba nesiqiniseko sokuthi uzwakele — kithi, nakuYe.\n\n"
+        "Inkomba yakho ngu-`{request_id}`."
+    ),
+    "prayer_response_intro": (
+        "🙏 *Impendulo esicelweni sakho somthandazo*\n\n"
+        "Ngokuphendula isicelo somthandazo osithumele ngomhla ka-{date} "
+        "(`{request_id}`), abaholi benkonzo bakuthumelela lokhu:"
+    ),
     # -- /privacy --
     "privacy_message": (
         "🔒 *Ubumfihlo*\n\n"
