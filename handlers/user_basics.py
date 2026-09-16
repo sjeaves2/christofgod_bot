@@ -62,12 +62,31 @@ ADMIN_COMMANDS_TEXT = """\
 /backup — send a data backup now (also runs nightly at 3am)
 /adminhelp — show this list"""
 
+# Shown ONLY to admins with `prayer: true`. Listing these for every admin would
+# advertise a queue that prayer_admin_only then refuses with "Unknown command" —
+# members are told their request stays with the designated leadership, and that
+# is only true if the commands are invisible to everyone else.
+PRAYER_COMMANDS_TEXT = """\
+*Prayer requests:*
+/prayerrequests — list the prayer requests waiting for a response
+/respondprayer — reply to a request: /respondprayer PR-4A7C2E
+/dismissprayer — close a request without replying: /dismissprayer PR-4A7C2E
 
-def _commands_text(lang: str, is_adm: bool) -> str:
-    """Localized user command list, with admin commands appended if applicable."""
+_Answering or dismissing a request deletes what the member wrote._"""
+
+
+def _commands_text(lang: str, is_adm: bool, is_prayer: bool = False) -> str:
+    """Localized user command list, with admin sections appended as applicable.
+
+    The prayer block is gated separately: `prayer: true` is a narrower group
+    than "administrator", and the commands should be invisible to admins who
+    cannot use them.
+    """
     text = t("user_commands", lang)
     if is_adm:
         text += "\n\n" + ADMIN_COMMANDS_TEXT
+    if is_prayer:
+        text += "\n\n" + PRAYER_COMMANDS_TEXT
     return text
 
 
@@ -107,7 +126,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
 
     is_adm = permissions.is_admin(update)
-    cmd_text = _commands_text(lang, is_adm)
+    cmd_text = _commands_text(lang, is_adm, permissions.is_prayer_admin(update))
 
     await update.message.reply_text(
         t("welcome", lang, bot_name=BOT_DISPLAY_NAME, commands=cmd_text),
@@ -204,7 +223,8 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     activity.log_command("help", uid, uname, dname)
-    text = _commands_text(lang, permissions.is_admin(update))
+    text = _commands_text(lang, permissions.is_admin(update),
+                          permissions.is_prayer_admin(update))
     # Hint that per-command help is available.
     text += "\n\n" + t("help_topic_hint", lang)
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
@@ -327,7 +347,10 @@ async def cmd_export_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def cmd_adminhelp(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     uid, uname, dname = user_info(update)
     activity.log_command("adminhelp", uid, uname, dname)
-    await update.message.reply_text(ADMIN_COMMANDS_TEXT, parse_mode=ParseMode.MARKDOWN)
+    text = ADMIN_COMMANDS_TEXT
+    if permissions.is_prayer_admin(update):
+        text += "\n\n" + PRAYER_COMMANDS_TEXT
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
 
 
 @admin_only
