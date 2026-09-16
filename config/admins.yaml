@@ -6,13 +6,21 @@
 # ops:  optional. Admins with `ops: true` receive direct-message alerts when the
 #       bot hits an unhandled exception (see logs/errors.log for full traces).
 #       They must have run /start at least once so the bot knows their chat_id.
+#
+# prayer: optional. Admins with `prayer: true` receive prayer requests sent with
+#       /prayer, and are the ONLY people who can read, answer or dismiss them.
+#       Members are told their request is shared with the ministry's leadership,
+#       so add someone here only if that is true of them. They must have run
+#       /start at least once.
 admins:
   - username: "OneMorah"
     display_name: "Pastor Christel Williams Crowdy"
+    prayer: true
 
   - username: "sjeaves2"
     display_name: "Bishop Samuel Eaves, II"
     ops: true
+    prayer: true
 
   - username: "curtisadairjr"
     display_name: "Evangelist-at-Large Curtis Adair, Jr"

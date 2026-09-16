@@ -19,6 +19,7 @@ STRINGS: dict[str, str] = {
         "/settimezone — set your time zone for displayed times\n"
         "/language — choose your language\n"
         "/notifications — choose which reminders you receive\n"
+        "/prayer — submit a prayer request\n"
         "/privacy — what the bot stores about you\n"
         "/donate — support the congregation with a gift\n"
         "/announcements — view current announcements\n"
@@ -222,6 +223,12 @@ STRINGS: dict[str, str] = {
         "(Sabbath and Holy Convocations, Sunday Morning Prayer, Special events). Useful "
         "if you're not in a church group chat."
     ),
+    "help_prayer": (
+        "*/prayer* — Send a prayer request to the ministry's leadership. Say what "
+        "kind of prayer you need, who it is for, and any date that matters. Your "
+        "request is shared only with the leadership, and its text is deleted once "
+        "it has been answered."
+    ),
     "help_privacy": (
         "*/privacy* — What the bot stores about you, who can see it, how long "
         "it is kept, and how to have it removed. Send /stop to delete your "
@@ -232,6 +239,52 @@ STRINGS: dict[str, str] = {
         "page where you can contribute."
     ),
 
+    # -- /prayer --
+    "prayer_prompt": (
+        "🙏 *Prayer Request*\n\n"
+        "Please share what you would like prayer for. It helps to include:\n\n"
+        "• *What kind of prayer* — health, finances, comfort, hope, wisdom, "
+        "guidance, general well-being\n"
+        "• *Who it is for* — yourself, a family member, a friend\n"
+        "• *Any date that matters* — a surgery, a court date, an interview\n\n"
+        "Share whatever details you are comfortable sharing, up to {limit} "
+        "characters. Your request is private: it is shared only with the "
+        "ministry's leadership, and with no one else.\n\n"
+        "Send /cancel at any time to stop."
+    ),
+    "prayer_empty": "Please send the text of your prayer request, or /cancel.",
+    "prayer_too_long": (
+        "That is {actual} characters; the limit is {limit}. "
+        "Please shorten it a little and send it again."
+    ),
+    "prayer_confirm": (
+        "Please check your request:\n\n"
+        "{request}\n\n"
+        "Send *yes* to submit it, *modify* to change it, or *cancel* to discard it."
+    ),
+    "prayer_confirm_unclear": (
+        "Please send *yes* to submit, *modify* to change it, or *cancel*."
+    ),
+    "prayer_modify": (
+        "Here is what you wrote. Copy it, make your changes, and send it back:\n\n"
+        "```\n{request}\n```"
+    ),
+    "prayer_cancelled": "Your prayer request has been discarded. Nothing was sent.",
+    "prayer_received": (
+        "🙏 *Your request has been received.*\n\n"
+        "It has been placed before the ministry's leadership, and it is being "
+        "carried in prayer.\n\n"
+        "_God is our refuge and strength, a very present help in trouble._ "
+        "Your help cometh from the LORD, and the effectual fervent prayer of a "
+        "righteous man availeth much.\n\n"
+        "Be assured that you have been heard — by us, and by Him.\n\n"
+        "Your reference is `{request_id}`."
+    ),
+    "prayer_response_intro": (
+        "🙏 *A response to your prayer request*\n\n"
+        "In response to the prayer request you submitted on {date} "
+        "(`{request_id}`), the ministry's leadership sends you the following:"
+    ),
     # -- /privacy --
     "privacy_message": (
         "🔒 *Privacy*\n\n"

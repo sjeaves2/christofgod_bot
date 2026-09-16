@@ -47,6 +47,20 @@ OPS_PHONES: set[str] = {
 # Ops admins recognised so far by chat_id (populated the same way as admins).
 _ops_chat_ids: set[int] = set()
 
+# "Prayer" admins receive prayer requests submitted with /prayer and are the
+# only people who can read, answer or dismiss them.
+PRAYER_USERNAMES: set[str] = {
+    a["username"].lstrip("@").lower()
+    for a in _admins_raw.get("admins", [])
+    if a.get("username") and a.get("prayer")
+}
+PRAYER_PHONES: set[str] = {
+    re.sub(r"\D", "", a["phone"])
+    for a in _admins_raw.get("admins", [])
+    if a.get("phone") and a.get("prayer")
+}
+_prayer_chat_ids: set[int] = set()
+
 # Officials. Loaded in ruamel round-trip mode because the bot rewrites this
 # file (auto-filled chat_ids, /enable_appt_proxies) and admins hand-edit it —
 # round-trip keeps their comments and formatting intact. OFFICIALS is the live
@@ -76,6 +90,14 @@ def is_admin(update: Update) -> bool:
     return False
 
 
+def is_prayer_admin(update: Update) -> bool:
+    """Whether this user may read, answer or dismiss prayer requests."""
+    u = update.effective_user
+    if (u.username or "").lower() in PRAYER_USERNAMES:
+        return True
+    return u.id in _prayer_chat_ids
+
+
 async def _register_admin_by_phone(user_id: int, phone: str | None) -> None:
     """Cache chat_id when a phone-number-only admin shares their contact."""
     if not phone:
@@ -85,6 +107,8 @@ async def _register_admin_by_phone(user_id: int, phone: str | None) -> None:
         _admin_chat_ids.add(user_id)
     if normalized in OPS_PHONES:
         _ops_chat_ids.add(user_id)
+    if normalized in PRAYER_PHONES:
+        _prayer_chat_ids.add(user_id)
 
 
 async def _register_admin_by_username(user_id: int, username: str | None) -> None:
@@ -93,6 +117,8 @@ async def _register_admin_by_username(user_id: int, username: str | None) -> Non
         _admin_chat_ids.add(user_id)
     if (username or "").lower() in OPS_USERNAMES:
         _ops_chat_ids.add(user_id)
+    if (username or "").lower() in PRAYER_USERNAMES:
+        _prayer_chat_ids.add(user_id)
 
 
 def _is_known_official(user_id: int, username: str | None) -> bool:
@@ -182,6 +208,23 @@ def _official_side_recipients(off: dict) -> list[dict]:
 def admin_only(handler):
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not is_admin(update):
+            await update.message.reply_text("⛔ Unknown command.")
+            return ConversationHandler.END
+        return await handler(update, context)
+    wrapper.__name__ = handler.__name__
+    return wrapper
+
+
+def prayer_admin_only(handler):
+    """Stricter than admin_only: only `prayer: true` admins, never all admins.
+
+    Members are told their request is seen by the ministry's leadership, and
+    that promise is only kept if the gate is the prayer flag rather than plain
+    administrator rights. Replies "Unknown command" so the existence of the
+    prayer queue is not advertised to admins who cannot see it.
+    """
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not is_prayer_admin(update):
             await update.message.reply_text("⛔ Unknown command.")
             return ConversationHandler.END
         return await handler(update, context)
