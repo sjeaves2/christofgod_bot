@@ -22,6 +22,7 @@ STRINGS: dict[str, str] = {
         "/settimezone — setha izoni yesikhathi sakho yezikhathi eziboniswayo\n"
         "/language — khetha ulimi lwakho\n"
         "/notifications — khetha ukuthi yiziphi izikhumbuzo ozitholayo\n"
+        "/privacy — okugcinwa yibhothi ngawe\n"
         "/donate — sekela ibandla ngomnikelo\n"
         "/announcements — buka izimemezelo zamanje\n"
         "/stop — yekisa ukubhalisa ezaziswayweni"
@@ -228,11 +229,27 @@ STRINGS: dict[str, str] = {
         "(iSabatha neMihlangano eNgcwele, uMthandazo waNgeSonto Ekuseni, Imicimbi ekhethekile). "
         "Kuwusizo uma ungekho eqenjini lengxoxo lebandla."
     ),
+    "help_privacy": (
+        "*/privacy* — Okugcinwa yibhothi ngawe, ubani ongakubona, kugcinwa "
+        "isikhathi esingakanani, nokuthi ungakususa kanjani. Thumela u-/stop "
+        "ukuze ususe ukubhalisa kwakho noma nini."
+    ),
     "help_donate": (
         "*/donate* — Sekela ibandla ngomnikelo. Kuvula ikhasi lokupha "
         "eliphephile lapho ungakhona ukunikela."
     ),
 
+    # -- /privacy --
+    "privacy_message": (
+        "🔒 *Ubumfihlo*\n\n"
+        "Le bhothi igcina igama lakho le-Telegram, izilungiselelo zakho, "
+        "nezicelo zokuhlangana ozenzayo. Ayifundi izingxoxo ezijwayelekile "
+        "zamaqembu, futhi ayikaze yabelane ngemininingwane yakho ngaphandle "
+        "kobuholi benkonzo.\n\n"
+        "Thumela u-/stop noma nini ukuze ususe ukubhalisa kwakho.\n\n"
+        "Thepha ngezansi ukuze ufunde inqubomgomo egcwele."
+    ),
+    "privacy_button": "Funda inqubomgomo yobumfihlo",
     # -- /donate --
     "donate_message": (
         "🙏 *Sekela i-Christ of God Ministries*\n\n"

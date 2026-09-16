@@ -63,6 +63,12 @@ def redact_secrets(text: str | None) -> str:
 # Optional donation link surfaced by /donate (e.g. a PayPal or giving-page URL).
 DONATION_URL: str = ((_CFG.get("donations") or {}).get("url") or "").strip()
 
+# Where /privacy sends people. Configurable so the policy can move (a website,
+# GitHub Pages) without a code change; defaults to the copy in this repository.
+DEFAULT_PRIVACY_URL = "https://github.com/sjeaves2/christofgod_bot/blob/main/PRIVACY.md"
+PRIVACY_URL: str = (
+    ((_CFG.get("privacy") or {}).get("url") or "").strip() or DEFAULT_PRIVACY_URL)
+
 for _d in (DATA_DIR, LOGS_DIR, GEN_DIR):
     _d.mkdir(parents=True, exist_ok=True)
 

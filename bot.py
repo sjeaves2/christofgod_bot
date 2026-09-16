@@ -187,6 +187,7 @@ from handlers.user_basics import (  # noqa: F401
     cmd_language,
     cmd_listevents,
     cmd_notifications,
+    cmd_privacy,
     cmd_settimezone,
     cmd_start,
     cmd_stop,
@@ -484,6 +485,7 @@ async def post_init(app: Application) -> None:
         BotCommand("settimezone", "Set your time zone for displayed times"),
         BotCommand("language", "Choose your language"),
         BotCommand("notifications", "Choose which reminders you receive"),
+        BotCommand("privacy", "What the bot stores about you"),
         BotCommand("donate", "Support the congregation with a gift"),
         BotCommand("announcements", "View current announcements"),
         BotCommand("stop", "Unsubscribe from notifications"),
@@ -695,6 +697,7 @@ def main() -> None:
     app.add_handler(settimezone_conv)
     app.add_handler(language_conv)
     app.add_handler(CommandHandler("notifications", cmd_notifications))
+    app.add_handler(CommandHandler("privacy", cmd_privacy))
     app.add_handler(CommandHandler("donate", cmd_donate))
     app.add_handler(CommandHandler("announcements", cmd_announcements))
     app.add_handler(CommandHandler("listannouncements", cmd_listannouncements))

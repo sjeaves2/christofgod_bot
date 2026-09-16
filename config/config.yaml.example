@@ -22,6 +22,11 @@ bot:
 notifications:
   default_minutes_before: 90
 
+privacy:
+  # Where /privacy points. Defaults to PRIVACY.md in the project repository;
+  # set this if the policy is published somewhere else.
+  url: ""
+
 donations:
   # Optional link surfaced by /donate (e.g. a PayPal.me or giving-page URL).
   # Leave blank to have /donate reply that online giving isn't set up yet.
