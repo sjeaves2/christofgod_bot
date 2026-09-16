@@ -179,6 +179,7 @@ from handlers.user_basics import (  # noqa: F401
     TZ_SELECT,
     _commands_text,
     _register_official_if_known,
+    cancel_conversation,
     cmd_adminhelp,
     cmd_donate,
     cmd_events,
@@ -590,7 +591,7 @@ def main() -> None:
             AE_NOTIF: [MessageHandler(filters.TEXT & ~filters.COMMAND, ae_notif)],
             AE_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, ae_confirm)],
         },
-        fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
+        fallbacks=[CommandHandler("cancel", cancel_conversation)],
     )
 
     modify_event_conv = ConversationHandler(
@@ -600,7 +601,7 @@ def main() -> None:
             ME_FIELD: [MessageHandler(filters.TEXT & ~filters.COMMAND, me_field)],
             ME_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, me_value)],
         },
-        fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
+        fallbacks=[CommandHandler("cancel", cancel_conversation)],
     )
 
     delete_event_conv = ConversationHandler(
@@ -610,7 +611,7 @@ def main() -> None:
             DE_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, de_confirm)],
             DE_ANNOT: [MessageHandler(filters.TEXT & ~filters.COMMAND, de_annot)],
         },
-        fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
+        fallbacks=[CommandHandler("cancel", cancel_conversation)],
     )
 
     set_service_link_conv = ConversationHandler(
@@ -619,7 +620,7 @@ def main() -> None:
             SL_SELECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, sl_select)],
             SL_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, sl_url)],
         },
-        fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
+        fallbacks=[CommandHandler("cancel", cancel_conversation)],
     )
 
     appointment_conv = ConversationHandler(
@@ -632,7 +633,7 @@ def main() -> None:
             AP_DESC: [MessageHandler(filters.TEXT & ~filters.COMMAND, ap_desc)],
             AP_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, ap_confirm)],
         },
-        fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
+        fallbacks=[CommandHandler("cancel", cancel_conversation)],
     )
 
     cancel_appt_conv = ConversationHandler(
@@ -642,7 +643,7 @@ def main() -> None:
             CA_CONFIRM: [CallbackQueryHandler(
                 ca_confirm, pattern=f"^{re.escape(CB_CANCEL_PREFIX)}")],
         },
-        fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
+        fallbacks=[CommandHandler("cancel", cancel_conversation)],
     )
 
     reschedule_conv = ConversationHandler(
@@ -652,7 +653,7 @@ def main() -> None:
                 rs_select, pattern=f"^{re.escape(CB_RESCHED_PREFIX)}")],
             RS_NEWTIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, rs_newtime)],
         },
-        fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
+        fallbacks=[CommandHandler("cancel", cancel_conversation)],
     )
 
     settimezone_conv = ConversationHandler(
@@ -661,14 +662,14 @@ def main() -> None:
             CallbackQueryHandler(tz_button, pattern=f"^{re.escape(CB_TZ_PREFIX)}"),
             MessageHandler(filters.TEXT & ~filters.COMMAND, tz_typed),
         ]},
-        fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
+        fallbacks=[CommandHandler("cancel", cancel_conversation)],
     )
 
     language_conv = ConversationHandler(
         entry_points=[CommandHandler("language", cmd_language)],
         states={LANG_SELECT: [CallbackQueryHandler(
             lang_select, pattern=f"^{re.escape(CB_LANG_PREFIX)}")]},
-        fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
+        fallbacks=[CommandHandler("cancel", cancel_conversation)],
     )
 
     # --- Register handlers ---
@@ -734,7 +735,7 @@ def main() -> None:
             BC_SELECT: [CallbackQueryHandler(bc_select, pattern=f"^{re.escape(CB_BC_PREFIX)}")],
             BC_RETRY: [CallbackQueryHandler(bc_retry, pattern=f"^{re.escape(CB_BC_PREFIX)}retry:")],
         },
-        fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
+        fallbacks=[CommandHandler("cancel", cancel_conversation)],
     )
     app.add_handler(add_announcement_conv)
 
@@ -743,7 +744,7 @@ def main() -> None:
         states={
             DA_SELECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, da_select)],
         },
-        fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
+        fallbacks=[CommandHandler("cancel", cancel_conversation)],
     )
     app.add_handler(del_announcement_conv)
     app.add_handler(CallbackQueryHandler(
@@ -751,21 +752,13 @@ def main() -> None:
 
     app.add_handler(CallbackQueryHandler(appt_callback, pattern=f"^{re.escape(CB_APPT_PREFIX)}"))
 
-    # Free-text handler for counter-propose date/time responses
-    app.add_handler(
-        MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
-            handle_counter_propose_message,
-        )
-    )
-
     prayer_conv = ConversationHandler(
         entry_points=[CommandHandler("prayer", cmd_prayer)],
         states={
             PR_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, pr_text)],
             PR_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, pr_confirm)],
         },
-        fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
+        fallbacks=[CommandHandler("cancel", cancel_conversation)],
     )
     app.add_handler(prayer_conv)
 
@@ -774,11 +767,27 @@ def main() -> None:
         states={
             RESP_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, resp_text)],
         },
-        fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
+        fallbacks=[CommandHandler("cancel", cancel_conversation)],
     )
     app.add_handler(respond_prayer_conv)
     app.add_handler(CommandHandler("prayerrequests", cmd_prayerrequests))
     app.add_handler(CommandHandler("dismissprayer", cmd_dismissprayer))
+
+    # Catch-all free-text handler. MUST come after every ConversationHandler:
+    # PTB runs only the first matching handler per group, and this one matches
+    # ANY text, so a conversation registered below it would never receive its
+    # own replies. (/prayer was briefly broken exactly this way — the member's
+    # request was swallowed here and silently discarded, with no error to show
+    # for it, because this handler returns quietly when no counter-propose is
+    # pending.)
+    # Free-text handler for counter-propose date/time responses
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            handle_counter_propose_message,
+        )
+    )
+
 
     # LAST in group 0, deliberately: PTB runs only the first matching handler
     # per group, so this catches commands nothing above recognised. In a later
