@@ -1,5 +1,10 @@
 # Deploying to a 24/7 server (AWS Lightsail)
 
+> The bot's public identity — name, avatar, description, and the BotFather
+> safety settings — is recorded in [BOTFATHER.md](BOTFATHER.md). None of it
+> lives in code, and BotFather keeps no history, so that file is the only
+> copy. Check it after any suspected account compromise.
+
 The bot is a long-running process that polls Telegram and keeps its state in
 YAML files on local disk. That shapes every choice below:
 
