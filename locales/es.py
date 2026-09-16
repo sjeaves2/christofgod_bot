@@ -44,6 +44,7 @@ STRINGS: dict[str, str] = {
     "section_past": "\n*Pasadas:*",
     "appt_line": "• Con: {counterparty}\n   {when} — *{status}*\n   _ID: {id}_",
 
+    "action_cancelled": "✖️ Cancelado. No se guardó ni se envió nada.",
     # -- cancel appointment --
     "cancel_none": "No tienes citas activas para cancelar.",
     "cancel_list_header": "*Tus citas activas:*\nElige una para cancelar:",

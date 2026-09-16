@@ -47,6 +47,7 @@ STRINGS: dict[str, str] = {
     "section_past": "\n*Ezedlule:*",
     "appt_line": "• No: {counterparty}\n   {when} — *{status}*\n   _I-ID: {id}_",
 
+    "action_cancelled": "✖️ Kukhanseliwe. Akukho okulondoloziwe noma okuthunyelwe.",
     # -- cancel appointment --
     "cancel_none": "Awunawo ama-aphoyintimenti asebenzayo ongawakhansela.",
     "cancel_list_header": "*Ama-aphoyintimenti akho asebenzayo:*\nKhetha elilodwa ukulikhansela:",
