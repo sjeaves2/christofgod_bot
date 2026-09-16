@@ -172,6 +172,27 @@ async def _register_official_if_known(
         permissions._save_officials()
 
 
+async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Shared /cancel fallback for every ConversationHandler.
+
+    Replaces `lambda u, c: ConversationHandler.END`, which looked harmless but
+    never worked: PTB awaits every callback, and awaiting the integer END raises
+    TypeError. So /cancel errored in all 13 conversations and — because the
+    exception meant the state was never returned — left the user stuck in the
+    conversation they were trying to leave. Several prompts tell people to use
+    it, so this was a promise the bot could not keep.
+
+    Clearing user_data matters too: it holds only conversation scratch here, and
+    leaving a half-finished draft behind would leak it into the next one.
+    """
+    uid, uname, dname = user_info(update)
+    _, lang = await get_user_prefs(uid)
+    context.user_data.clear()
+    activity.log_command("cancel", uid, uname, dname)
+    await update.message.reply_text(t("action_cancelled", lang))
+    return ConversationHandler.END
+
+
 async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     uid, uname, dname = user_info(update)
     _, lang = await get_user_prefs(uid)
