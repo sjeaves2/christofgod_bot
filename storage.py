@@ -30,6 +30,10 @@ notif_state_cache = FileCache(DATA_DIR / "notification_state.yaml")
 # Groups/channels the bot has been added to (discovered via membership events),
 # used to populate the /broadcast target list.
 groups_cache = FileCache(DATA_DIR / "known_groups.yaml")
+# Prayer requests. The most sensitive file the bot holds: health, finances and
+# family crises in members' own words. The request TEXT is deleted the moment a
+# request is answered or dismissed, leaving only a stub; see handlers/prayer.py.
+prayer_cache = FileCache(DATA_DIR / "prayer_requests.yaml")
 
 # ---------------------------------------------------------------------------
 # Accessors
@@ -65,6 +69,17 @@ async def save_appointments(appts: list[dict[str, Any]]) -> None:
     data = appts_cache._data or {}
     data["appointments"] = appts
     await appts_cache.save(data)
+
+
+async def get_prayer_requests() -> list[dict[str, Any]]:
+    data = await prayer_cache.get()
+    return data.get("requests") or [] if data else []
+
+
+async def save_prayer_requests(requests: list[dict[str, Any]]) -> None:
+    data = prayer_cache._data or {}
+    data["requests"] = requests
+    await prayer_cache.save(data)
 
 
 async def get_announcements() -> list[dict[str, Any]]:
