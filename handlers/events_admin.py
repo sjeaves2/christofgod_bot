@@ -12,7 +12,7 @@ import re
 import uuid
 
 import storage
-from common import format_dt, md
+from common import format_dt, md, reply_markdown
 from events import _merge_special_events, all_upcoming
 from handlers.notifications import schedule_all_upcoming, schedule_event_notification
 from hebrew_calendar import service_phases
@@ -101,11 +101,11 @@ async def ae_notif(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     d = context.user_data
     summary = (
         f"*New event summary:*\n"
-        f"Name: {d['ae_name']}\n"
+        f"Name: {md(d['ae_name'])}\n"
         f"Schedule: {d['ae_date']} at {d['ae_time']}\n"
         f"Duration: {d['ae_duration']} min\n"
-        f"Description: {d.get('ae_desc') or '—'}\n"
-        f"URL: {d.get('ae_url') or '—'}\n"
+        f"Description: {md(d.get('ae_desc') or '—')}\n"
+        f"URL: {md(d.get('ae_url') or '—')}\n"
         f"Notify: {notif} min before\n\n"
         f"Confirm? (yes/no)"
     )
@@ -193,7 +193,7 @@ async def cmd_modifyevent(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return ConversationHandler.END
     lines = ["*Special Events:*\n"]
     for i, ev in enumerate(specials):
-        lines.append(f"{i+1}. [{ev['id']}] {ev['name']}")
+        lines.append(f"{i+1}. [{md(ev['id'])}] {md(ev['name'])}")
     lines.append("\nEnter the event number or ID to modify:")
     context.user_data["me_specials"] = specials
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
@@ -297,7 +297,7 @@ async def cmd_deleteevent(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     lines = ["*Events in next 30 days:*\n"]
     context.user_data["de_events"] = events
     for i, ev in enumerate(events):
-        lines.append(f"{i+1}. [{ev['type'][0].upper()}] {ev['name']}  "
+        lines.append(f"{i+1}. [{ev['type'][0].upper()}] {md(ev['name'])}  "
                      f"({format_dt(ev['service_time'])})")
     lines.append(
         "\nEnter number to select.\n"
@@ -386,10 +386,14 @@ async def cmd_setservicelink(update: Update, context: ContextTypes.DEFAULT_TYPE)
     lines = ["*Set a Service Join Link*\n", "Each service (phase) can have its own link.\n"]
     for i, ph in enumerate(phases, 1):
         current = urls_map.get(ph["phase_key"])
-        suffix = f"  🔗 {current}" if current else ""
-        lines.append(f"{i}. {ph['display']}{suffix}")
+        # The stored link is escaped: a Zoom password may contain an
+        # underscore, and a re-seeded config contains placeholders. Nine
+        # unescaped "REPLACE_ME" links made THIS menu unsendable on
+        # 2026-09-17 — the command that fixes bad links, broken by them.
+        suffix = f"  🔗 {md(current)}" if current else ""
+        lines.append(f"{i}. {md(ph['display'])}{suffix}")
     lines.append("\nEnter the number of the service to set (or /cancel):")
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+    await reply_markdown(update.message, "\n".join(lines))
     return SL_SELECT
 
 
@@ -402,7 +406,7 @@ async def sl_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     ph = phases[int(text) - 1]
     context.user_data["sl_phase"] = ph
     await update.message.reply_text(
-        f"Enter the join link (URL) for *{ph['display']}*,\n"
+        f"Enter the join link (URL) for *{md(ph['display'])}*,\n"
         "or '-' to clear the existing link:",
         parse_mode=ParseMode.MARKDOWN,
     )
