@@ -183,6 +183,9 @@ STRINGS: dict[str, str] = {
         "Para más detalles de un comando, envía `/help <comando>` (p. ej. `/help appointment`)."
     ),
     "help_unknown_topic": "No tengo ayuda para eso. Prueba con: {topics}",
+    "edited_message_ignored": (
+        "No respondo a mensajes editados. Envíelo de nuevo como un mensaje nuevo."
+    ),
     "unknown_command": (
         "{command} no es un comando válido. "
         "Escriba /help para ver los comandos disponibles."
