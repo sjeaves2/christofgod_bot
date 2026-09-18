@@ -165,21 +165,14 @@ of `data/`; on a server with no copy at all, `setup.sh` seeds one from
 `data/events.yaml.example`. Set the real links from Telegram with
 `/setservicelink`.
 
-> **One-time step when deploying the change that untracked `data/events.yaml`.**
-> That commit removes the file from git, and a checkout deletes the working
-> copy along with it — taking the live join links with it. Back it up first and
-> put it back afterwards:
->
-> ```bash
-> cp data/events.yaml /tmp/events.yaml.bak
-> git checkout -- data/events.yaml 2>/dev/null || true   # clean the tree
-> ./deploy/update.sh v0.14.0
-> cp /tmp/events.yaml.bak data/events.yaml
-> sudo systemctl restart christofgod-bot
-> ```
->
-> Only needed for that one release. Afterwards the file is untracked, so no
-> checkout touches it and `update.sh` no longer trips over admin edits.
+> **`data/events.yaml` is the one piece of live configuration with no copy in
+> git.** Nothing in a deploy touches it — it is untracked, so no checkout can
+> delete it — but nothing can restore it either. Back it up by running
+> `/backup` from Telegram after any change to the links, and keep that zip off
+> the server. The nightly backup only fires when something changed, so a manual
+> `/backup` is the way to capture a known-good copy at a moment of your
+> choosing. On 2026-09-16 this file went missing for reasons still unexplained,
+> and the links had to be typed in again from scratch.
 
 ```
 
