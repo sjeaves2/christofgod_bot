@@ -640,6 +640,7 @@ def main() -> None:
             AE_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, ae_confirm)],
         },
         fallbacks=[CommandHandler("cancel", cancel_conversation)],
+        allow_reentry=True,
     )
 
     modify_event_conv = ConversationHandler(
@@ -650,6 +651,7 @@ def main() -> None:
             ME_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, me_value)],
         },
         fallbacks=[CommandHandler("cancel", cancel_conversation)],
+        allow_reentry=True,
     )
 
     delete_event_conv = ConversationHandler(
@@ -660,8 +662,17 @@ def main() -> None:
             DE_ANNOT: [MessageHandler(filters.TEXT & ~filters.COMMAND, de_annot)],
         },
         fallbacks=[CommandHandler("cancel", cancel_conversation)],
+        allow_reentry=True,
     )
 
+    # allow_reentry=True on every conversation below.
+    #
+    # Without it, retyping the entry command while the conversation is already
+    # running is answered with "⛔ Unknown command." and the user stays stuck:
+    # PTB will not re-fire an entry point for an active conversation, the state
+    # handlers are TEXT & ~COMMAND so they ignore it, and it falls through to
+    # the unknown-command catch-all. /cancel was the only way out, and nothing
+    # said so. Observed 2026-09-17 while re-entering service links.
     set_service_link_conv = ConversationHandler(
         entry_points=[CommandHandler("setservicelink", cmd_setservicelink)],
         states={
@@ -669,6 +680,7 @@ def main() -> None:
             SL_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, sl_url)],
         },
         fallbacks=[CommandHandler("cancel", cancel_conversation)],
+        allow_reentry=True,
     )
 
     appointment_conv = ConversationHandler(
@@ -682,6 +694,7 @@ def main() -> None:
             AP_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, ap_confirm)],
         },
         fallbacks=[CommandHandler("cancel", cancel_conversation)],
+        allow_reentry=True,
     )
 
     cancel_appt_conv = ConversationHandler(
@@ -692,6 +705,7 @@ def main() -> None:
                 ca_confirm, pattern=f"^{re.escape(CB_CANCEL_PREFIX)}")],
         },
         fallbacks=[CommandHandler("cancel", cancel_conversation)],
+        allow_reentry=True,
     )
 
     reschedule_conv = ConversationHandler(
@@ -702,6 +716,7 @@ def main() -> None:
             RS_NEWTIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, rs_newtime)],
         },
         fallbacks=[CommandHandler("cancel", cancel_conversation)],
+        allow_reentry=True,
     )
 
     settimezone_conv = ConversationHandler(
@@ -711,6 +726,7 @@ def main() -> None:
             MessageHandler(filters.TEXT & ~filters.COMMAND, tz_typed),
         ]},
         fallbacks=[CommandHandler("cancel", cancel_conversation)],
+        allow_reentry=True,
     )
 
     language_conv = ConversationHandler(
@@ -718,6 +734,7 @@ def main() -> None:
         states={LANG_SELECT: [CallbackQueryHandler(
             lang_select, pattern=f"^{re.escape(CB_LANG_PREFIX)}")]},
         fallbacks=[CommandHandler("cancel", cancel_conversation)],
+        allow_reentry=True,
     )
 
     # --- Register handlers ---
@@ -784,6 +801,7 @@ def main() -> None:
             BC_RETRY: [CallbackQueryHandler(bc_retry, pattern=f"^{re.escape(CB_BC_PREFIX)}retry:")],
         },
         fallbacks=[CommandHandler("cancel", cancel_conversation)],
+        allow_reentry=True,
     )
     app.add_handler(add_announcement_conv)
 
@@ -793,6 +811,7 @@ def main() -> None:
             DA_SELECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, da_select)],
         },
         fallbacks=[CommandHandler("cancel", cancel_conversation)],
+        allow_reentry=True,
     )
     app.add_handler(del_announcement_conv)
     app.add_handler(CallbackQueryHandler(
@@ -807,6 +826,7 @@ def main() -> None:
             PR_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, pr_confirm)],
         },
         fallbacks=[CommandHandler("cancel", cancel_conversation)],
+        allow_reentry=True,
     )
     app.add_handler(prayer_conv)
 
@@ -816,6 +836,7 @@ def main() -> None:
             RESP_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, resp_text)],
         },
         fallbacks=[CommandHandler("cancel", cancel_conversation)],
+        allow_reentry=True,
     )
     app.add_handler(respond_prayer_conv)
     app.add_handler(CommandHandler("prayerrequests", cmd_prayerrequests))
