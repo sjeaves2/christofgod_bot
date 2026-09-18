@@ -35,7 +35,7 @@ ALLOWED_TOKENS = {"111111111:AAAA-NOT-A-REAL-TOKEN-FOR-TESTS-ONLY"}
 
 # Zoom links embed the passcode in the URL, so a link IS a credential.
 ZOOM_PWD_RE = re.compile(r"zoom\.us/j/(\d+)[^\s\"']*?pwd=([A-Za-z0-9_.-]+)")
-ALLOWED_ZOOM = {("0000000000", "REPLACE_ME")}
+ALLOWED_ZOOM = {("0000000000", "SETMEWITHSETSERVICELINK")}
 
 # Files that legitimately describe the patterns without containing a secret.
 EXEMPT = {"tests/test_no_secrets_committed.py"}
