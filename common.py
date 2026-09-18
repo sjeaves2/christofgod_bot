@@ -145,6 +145,17 @@ async def validate_markdown(message, text: str) -> bool:
         return False
 
 
+#: Telegram's wording for a Markdown parse failure. Everything else a
+#: BadRequest can mean — chat not found, message too long, bot blocked — is not
+#: something a plain-text retry can fix.
+_PARSE_ERROR_MARKERS = ("can't parse entities", "can't find end of the entity",
+                        "unsupported start tag", "reserved and must be escaped")
+
+
+def _is_parse_error(exc: BadRequest) -> bool:
+    return any(m in str(exc).lower() for m in _PARSE_ERROR_MARKERS)
+
+
 async def _markdown_or_plain(send, text: str, kwargs: dict, where: str):
     """Send *text* as Markdown; on rejection, send it again as plain text.
 
@@ -162,6 +173,13 @@ async def _markdown_or_plain(send, text: str, kwargs: dict, where: str):
     try:
         return await send(text, parse_mode=ParseMode.MARKDOWN, **kwargs)
     except BadRequest as exc:
+        if not _is_parse_error(exc):
+            # Not a formatting problem, so plain text will not help and the
+            # retry is a second doomed API call. Worse, it used to be logged as
+            # "a value was interpolated unescaped", which sent the reader
+            # looking for an escaping bug: on 2026-09-18 the real fault was a
+            # placeholder chat id, and the log said nothing about it.
+            raise
         logger.warning("Markdown rejected (%s): %s — resending as plain text. "
                        "A value was interpolated unescaped.", where, exc.message)
         return await send(text, **kwargs)
@@ -191,6 +209,12 @@ async def edit_markdown(query, text: str, **kwargs):
         return await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, **kwargs)
     except BadRequest as exc:
         if "not modified" in str(exc).lower():
+            return None
+        if not _is_parse_error(exc):
+            # An edit can fail for reasons no retry fixes — the message is too
+            # old, or was deleted. Losing one edit must not take down the
+            # handler around it, but it is not an escaping fault either.
+            logger.warning("Edit failed (%s); not a formatting problem.", exc.message)
             return None
         logger.warning("Markdown rejected (edit): %s — resending as plain text. "
                        "A value was interpolated unescaped.", exc.message)

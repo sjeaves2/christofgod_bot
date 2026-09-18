@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import logging
 import sys
+
+import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -120,3 +122,64 @@ class TestEditMarkdown:
         q = MagicMock()
         q.edit_message_text = AsyncMock(side_effect=BadRequest("can't parse entities"))
         assert await edit_markdown(q, "x") is None
+
+
+class TestOnlyParseFailuresAreRetried:
+    """A plain-text retry fixes formatting. It fixes nothing else.
+
+    On 2026-09-18 a reminder failed with "Chat not found" — the group's chat id
+    had been replaced by the template placeholder. The fallback retried anyway,
+    a second doomed API call, and logged "A value was interpolated unescaped".
+    Anyone reading that went looking for an escaping bug. The log described the
+    mechanism that had been added, not the fault that had occurred.
+    """
+
+    @staticmethod
+    def _bot(exc):
+        calls = []
+
+        async def send(*args, **kwargs):
+            calls.append(kwargs.get("parse_mode"))
+            raise exc
+
+        bot = MagicMock()
+        bot.send_message = AsyncMock(side_effect=send)
+        return bot, calls
+
+    async def test_chat_not_found_is_not_retried(self):
+        bot, calls = self._bot(BadRequest("Chat not found"))
+        try:
+            await send_markdown(bot, -1001234567890, "hi")
+        except BadRequest:
+            pass
+        else:
+            raise AssertionError("a non-formatting failure must surface")
+        assert len(calls) == 1, "retrying a doomed send wastes a second call"
+
+    async def test_chat_not_found_is_not_blamed_on_escaping(self, caplog):
+        bot, _ = self._bot(BadRequest("Chat not found"))
+        with caplog.at_level(logging.WARNING, logger="common"):
+            try:
+                await send_markdown(bot, -1, "hi")
+            except BadRequest:
+                pass
+        assert "unescaped" not in caplog.text.lower()
+
+    @pytest.mark.parametrize("message", [
+        "Can't parse entities: can't find end of the entity starting at byte offset 2551",
+        "can't parse entities",
+    ])
+    async def test_real_parse_failures_still_fall_back(self, message):
+        bot, calls = self._bot(BadRequest(message))
+        try:
+            await send_markdown(bot, 1, "a_b")
+        except BadRequest:
+            pass
+        assert len(calls) == 2, "a formatting failure must still be retried plain"
+
+    async def test_an_edit_failure_that_is_not_formatting_is_swallowed_quietly(self, caplog):
+        q = MagicMock()
+        q.edit_message_text = AsyncMock(side_effect=BadRequest("message to edit not found"))
+        with caplog.at_level(logging.WARNING, logger="common"):
+            assert await edit_markdown(q, "x") is None
+        assert "unescaped" not in caplog.text.lower()
