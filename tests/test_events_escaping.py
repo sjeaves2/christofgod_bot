@@ -32,8 +32,14 @@ import handlers.user_basics as UB  # noqa: E402
 
 TZ = pytz.timezone("America/New_York")
 
+# Fixtures use example.test, never a zoom.us URL. A Zoom link embeds its
+# passcode, so a realistic-looking one IS a credential — the first draft of this
+# file used real meeting ids copied from the old events.yaml and was caught by
+# tests/test_no_secrets_committed.py on commit. Nothing here needs a real host:
+# what these tests exercise is the underscore, not the domain.
+
 # The exact string that broke production.
-PLACEHOLDER_URL = "https://us06web.zoom.us/j/0000000000?pwd=REPLACE_ME"
+PLACEHOLDER_URL = "https://example.test/j/1234567890?pwd=REPLACE_ME"
 
 
 def _event(name="God's Holy Convocation—Sabbath Eve", url="", announcements=()):
@@ -82,7 +88,7 @@ class TestEventsEscaping:
 
     async def test_a_real_password_with_an_underscore_is_escaped(self):
         """Not just the placeholder — Zoom passwords may contain underscores."""
-        url = "https://us06web.zoom.us/j/81594253541?pwd=aB_cD3fG_hJ"
+        url = "https://example.test/j/1234567890?pwd=aB_cD3fG_hJ"
         sent = (await _events([_event(url=url)])).message.reply_text.call_args[0][0]
         assert "aB\\_cD3fG\\_hJ" in sent
 
@@ -98,7 +104,7 @@ class TestEventsEscaping:
 
     async def test_ordinary_links_are_still_readable(self):
         """Escaping must not mangle a link with nothing special in it."""
-        url = "https://us06web.zoom.us/j/81977710637"
+        url = "https://example.test/j/1234567890"
         sent = (await _events([_event(url=url)])).message.reply_text.call_args[0][0]
         assert url in sent
 
@@ -164,10 +170,10 @@ class TestReminderEscaping:
 
     def test_a_real_password_with_an_underscore_is_escaped(self):
         assert "aB\\_cD3fG\\_hJ" in self._render(
-            "https://us06web.zoom.us/j/81594253541?pwd=aB_cD3fG_hJ")
+            "https://example.test/j/1234567890?pwd=aB_cD3fG_hJ")
 
     def test_ordinary_links_are_still_readable(self):
-        url = "https://us06web.zoom.us/j/81977710637"
+        url = "https://example.test/j/1234567890"
         assert url in self._render(url)
 
 
@@ -214,7 +220,7 @@ class TestServiceLinkCheck:
             return await E.check_service_links()
 
     async def test_placeholder_link_is_reported(self):
-        ev = _event(url="https://us06web.zoom.us/j/0/?pwd=SETMEWITHSETSERVICELINK")
+        ev = _event(url="https://example.test/j/1234567890?pwd=SETMEWITHSETSERVICELINK")
         problems = await self._check([ev])
         assert len(problems) == 1
         assert "placeholder" in problems[0][1]
@@ -231,12 +237,12 @@ class TestServiceLinkCheck:
         assert await self._check([ev]) == []
 
     async def test_a_placeholder_is_reported_even_on_a_special_event(self):
-        ev = _event(url="https://z/?pwd=SETMEWITHSETSERVICELINK")
+        ev = _event(url="https://example.test/j/9?pwd=SETMEWITHSETSERVICELINK")
         ev["type"] = "special"
         assert len(await self._check([ev])) == 1
 
     async def test_good_links_produce_no_report(self):
-        assert await self._check([_event(url="https://us06web.zoom.us/j/8197771")]) == []
+        assert await self._check([_event(url="https://example.test/j/1234567890")]) == []
 
     async def test_the_label_names_the_date(self):
         """'Sabbath Eve' recurs weekly — an alert must say which one."""
