@@ -188,6 +188,13 @@ LINK_PLACEHOLDERS = ("SETMEWITHSETSERVICELINK", "REPLACE_ME")
 #: replaced but whose meeting was not.
 PLACEHOLDER_MEETING = "/j/0000000000"
 
+#: The template's dummy group chat id. The 2026-09-16 re-seed replaced the real
+#: one with this, and because check_service_links() only looked at URLs it
+#: reported all-clear against a config that could reach NOBODY. The Sabbath Eve
+#: reminder on 2026-09-18 failed with "Chat not found" and was noticed by the
+#: admin, not by the bot.
+PLACEHOLDER_CHAT_IDS = (-1001234567890,)
+
 
 def _is_placeholder_link(url: str) -> bool:
     return any(m in url for m in LINK_PLACEHOLDERS) or PLACEHOLDER_MEETING in url
@@ -211,13 +218,31 @@ async def check_service_links(days_ahead: int = 30) -> list[tuple[str, str]]:
     services and always have one. A special event may legitimately be in person.
     A placeholder is reported wherever it appears — it can only have come from
     the template.
+
+    Targets are checked as well as links. The first version of this looked only
+    at URLs, because a broken link was the symptom that had been reported; the
+    same re-seed had also replaced the group chat id, and this returned
+    all-clear right up until a reminder failed to reach the congregation. Check
+    what the fault could have damaged, not the part of it that was noticed.
     """
     problems: list[tuple[str, str]] = []
     for ev in await all_upcoming(days_ahead):
         url = (ev.get("url") or "").strip()
         label = f"{ev['name']} ({ev['service_time']:%a %d %b})"
         if _is_placeholder_link(url):
-            problems.append((label, "still set to the template placeholder"))
+            problems.append((label, "join link is still the template placeholder"))
         elif not url and ev.get("type") == "convocation":
             problems.append((label, "has no join link"))
+
+        # A reminder needs somewhere to GO as much as it needs a link. Checking
+        # only the link is what let a config that could reach nobody pass as
+        # healthy for two days.
+        targets = ev.get("target_chat_ids") or []
+        placeholders = [t for t in targets if t in PLACEHOLDER_CHAT_IDS]
+        if placeholders:
+            problems.append((label, "notification target is the template "
+                                    f"placeholder chat id {placeholders[0]}"))
+        elif not targets:
+            problems.append((label, "has no notification target, so the reminder "
+                                    "would reach nobody"))
     return problems
