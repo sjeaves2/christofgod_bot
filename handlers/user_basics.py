@@ -42,7 +42,7 @@ from telegram import (
     Update,
 )
 from telegram.error import BadRequest
-from telegram.ext import ContextTypes, ConversationHandler
+from telegram.ext import ApplicationHandlerStop, ContextTypes, ConversationHandler
 from telegram.helpers import escape_markdown
 
 logger = logging.getLogger(__name__)
@@ -245,6 +245,33 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Hint that per-command help is available.
     text += "\n\n" + t("help_topic_hint", lang)
     await reply_markdown(update.message, text)
+
+
+async def ignore_edited_messages(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Drop edited messages, telling the sender why if they edited a command.
+
+    PTB fires CommandHandler on an edit as well as on a new message, and an
+    edit arrives as update.edited_message — so update.message is None and every
+    handler that touches it raises AttributeError. That is what /privacy did on
+    2026-09-18, after an admin typed /private, saw "not a valid command", and
+    corrected the typo by EDITING it, which is the natural thing to do. All 180
+    uses of update.message had the same exposure.
+
+    Acting on the edit instead was considered and rejected: it would also
+    re-deliver edited text into an open conversation, so a member editing an
+    old message could silently resubmit a prayer request. Declining is the
+    honest behaviour — but declining SILENTLY is not, because the sender has
+    just typed something and would otherwise see nothing at all.
+
+    Registered in group -1 so it runs before every real handler, and raises
+    ApplicationHandlerStop so none of them see the update.
+    """
+    msg = update.edited_message
+    if msg is not None and (msg.text or "").startswith("/"):
+        uid, _, _ = user_info(update)
+        _, lang = await get_user_prefs(uid)
+        await reply_markdown(msg, t("edited_message_ignored", lang))
+    raise ApplicationHandlerStop
 
 
 async def cmd_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
