@@ -64,13 +64,52 @@ if ! "$VENV/bin/python" -c "import bot" > /dev/null; then
 fi
 
 echo "==> Restarting $SERVICE_NAME"
+# Bound the log search to this restart, so an earlier run's success cannot be
+# mistaken for this one's.
+restart_at="$(date '+%Y-%m-%d %H:%M:%S')"
 sudo systemctl restart "$SERVICE_NAME"
-sleep 3
 
-if systemctl is-active --quiet "$SERVICE_NAME"; then
-    echo "Bot is running at $current."
-else
+if ! systemctl is-active --quiet "$SERVICE_NAME"; then
     echo "Bot did NOT come back up. Recent log:"
     journalctl -u "$SERVICE_NAME" --no-pager --lines=30
     exit 1
+fi
+
+# `systemctl is-active` is NOT evidence that the bot works. During the
+# 2026-09-04 outage it reported "active" for 87 minutes while DNS was dead and
+# the bot sat retrying an unresolvable hostname, reaching nobody. The process
+# was alive and useless. Wait for proof it is actually talking to Telegram.
+echo "==> Waiting for Telegram polling to start"
+polling=""
+for _ in $(seq 1 20); do
+    if journalctl -u "$SERVICE_NAME" --since "$restart_at" --no-pager 2>/dev/null \
+         | grep -q "Long polling started"; then
+        polling=yes
+        break
+    fi
+    sleep 1
+done
+
+if [ -z "$polling" ]; then
+    echo
+    echo "The service is running but never reported 'Long polling started'."
+    echo "It may be unable to reach api.telegram.org — check DNS and the token."
+    echo "The bot has NOT been rolled back; it is up but possibly not receiving."
+    echo
+    echo "One false alarm to rule out: that line is logged at INFO, so a"
+    echo "config/config.yaml with log.level above INFO hides it and this check"
+    echo "fails on a perfectly healthy bot."
+    journalctl -u "$SERVICE_NAME" --since "$restart_at" --no-pager --lines=30
+    exit 1
+fi
+
+echo "Bot is running at $current and polling Telegram."
+
+# Surface a config problem the bot reports at startup. Not a deploy failure —
+# the bot runs fine — but it means some upcoming service has a placeholder or
+# missing join link, and the admin DM is easy to miss.
+if journalctl -u "$SERVICE_NAME" --since "$restart_at" --no-pager 2>/dev/null \
+     | grep -i "unusable join link"; then
+    echo
+    echo "^ Fix these with /setservicelink, then run /backup."
 fi
