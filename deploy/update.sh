@@ -9,8 +9,18 @@
 # Safe by design: it refuses to deploy a working tree with local edits, and
 # verifies the new code imports before restarting, so a broken pull leaves the
 # running bot alone rather than taking it down.
+#
+# Everything lives inside main(), called on the last line. That is not style.
+# This script CHECKS OUT NEW CODE OVER ITSELF partway through, and bash reads a
+# script incrementally, by byte offset — so a release that changes this file
+# can make the running shell resume at the wrong offset and execute nonsense,
+# mid-deploy, as root-ish. Wrapping the body in a function forces bash to parse
+# the whole thing before any of it runs, so the version that started is the
+# version that finishes. Do not unwrap this.
 
 set -euo pipefail
+
+main() {
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV="$REPO_DIR/.venv"
@@ -113,3 +123,7 @@ if journalctl -u "$SERVICE_NAME" --since "$restart_at" --no-pager 2>/dev/null \
     echo
     echo "^ Fix these with /setservicelink, then run /backup."
 fi
+}
+
+# Parsed in full before this line runs — see the note at the top.
+main "$@"
