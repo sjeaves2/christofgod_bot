@@ -50,6 +50,9 @@ def _event(name="God's Holy Convocation—Sabbath Eve", url="", announcements=()
         "url": url,
         "announcements": list(announcements),
         "type": "convocation",
+        # A real event always has somewhere to go; check_service_links reports
+        # one that does not, so the fixture must carry it.
+        "target_chat_ids": [-1001178984510],
     }
 
 
@@ -399,3 +402,57 @@ class TestAnnouncementEntryValidation:
         told = upd.message.reply_text.call_args[0][0]
         assert "matching pair" in told
         assert "backslash" in told.lower(), "a literal _ in a link needs escaping"
+
+
+class TestNotificationTargetCheck:
+    """A reminder needs somewhere to GO as much as it needs a link.
+
+    check_service_links() originally looked only at URLs, because a broken link
+    was the symptom that had been reported. The same 2026-09-16 re-seed had
+    also replaced the group chat id with the template's -1001234567890, and the
+    check returned all-clear for two days — right up until the Sabbath Eve
+    reminder on 2026-09-18 failed with "Chat not found" and reached nobody.
+
+    The lesson is in the shape of the bug, not the bug: check what the fault
+    could have damaged, not the part of it somebody happened to notice.
+    """
+
+    @staticmethod
+    async def _check(evs):
+        import events as E
+        with patch.object(E, "all_upcoming", AsyncMock(return_value=evs)):
+            return await E.check_service_links()
+
+    async def test_the_template_chat_id_is_reported(self):
+        """The exact production failure."""
+        ev = _event(url="https://example.test/j/1?pwd=real")
+        ev["target_chat_ids"] = [-1001234567890]
+        problems = await self._check([ev])
+        assert len(problems) == 1
+        assert "placeholder chat id" in problems[0][1]
+
+    async def test_an_event_with_no_target_is_reported(self):
+        ev = _event(url="https://example.test/j/1?pwd=real")
+        ev["target_chat_ids"] = []
+        problems = await self._check([ev])
+        assert len(problems) == 1
+        assert "reach nobody" in problems[0][1]
+
+    async def test_a_real_target_produces_no_report(self):
+        ev = _event(url="https://example.test/j/1?pwd=real")
+        ev["target_chat_ids"] = [-1001178984510]
+        assert await self._check([ev]) == []
+
+    async def test_a_bad_link_and_a_bad_target_are_reported_separately(self):
+        """Fixing one must not hide the other — that is how this was missed."""
+        ev = _event(url="https://example.test/j/1?pwd=REPLACE_ME")
+        ev["target_chat_ids"] = [-1001234567890]
+        problems = await self._check([ev])
+        assert len(problems) == 2
+        reasons = " ".join(r for _, r in problems)
+        assert "join link" in reasons and "chat id" in reasons
+
+    async def test_a_placeholder_target_among_real_ones_is_still_reported(self):
+        ev = _event(url="https://example.test/j/1?pwd=real")
+        ev["target_chat_ids"] = [-1001178984510, -1001234567890]
+        assert len(await self._check([ev])) == 1
