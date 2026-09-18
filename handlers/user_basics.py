@@ -40,6 +40,7 @@ from telegram import (
     Update,
 )
 from telegram.constants import ParseMode
+from telegram.error import BadRequest
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram.helpers import escape_markdown
 
@@ -329,14 +330,26 @@ async def cmd_events(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     lines = [t("events_header", lang)]
     for ev in events:
         dt_str = format_dt(ev["service_time"], tz, lang)
-        lines.append(f"📅 *{ev['name']}*\n   {dt_str}")
+        # Escape everything that did not come from us. Event names and
+        # announcements are admin-typed, and a join link's password may contain
+        # an underscore — any of which Telegram reads as a formatting marker and
+        # then rejects the WHOLE message over. That is how /events broke on
+        # 2026-09-17: a seeded placeholder link containing "REPLACE_ME".
+        lines.append(f"📅 *{escape_markdown(str(ev['name']), version=1)}*\n   {dt_str}")
         if ev.get("url"):
-            lines.append(f"   🔗 {ev['url']}")
+            lines.append(f"   🔗 {escape_markdown(str(ev['url']), version=1)}")
         if ev.get("announcements"):
             for a in ev["announcements"]:
-                lines.append(f"   ⚠️ {a}")
+                lines.append(f"   ⚠️ {escape_markdown(str(a), version=1)}")
         lines.append("")
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+    text = "\n".join(lines)
+    try:
+        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+    except BadRequest:
+        # Belt and braces: /events must never be unusable because one event's
+        # text will not parse. Fall back to plain text rather than nothing.
+        logger.warning("/events failed to render as Markdown; sending plain.")
+        await update.message.reply_text(text)
 
 
 async def cmd_export_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -420,14 +433,14 @@ async def cmd_listevents(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         notif_str = format_dt(ev["notification_time"])
         etype = ev.get("type", "?")
         lines.append(
-            f"📅 *{ev['name']}*\n"
+            f"📅 *{escape_markdown(str(ev['name']), version=1)}*\n"
             f"   Service: {dt_str}\n"
             f"   Notify: {notif_str}\n"
             f"   Type: {etype}"
         )
         if ev.get("announcements"):
             for a in ev["announcements"]:
-                lines.append(f"   ⚠️ {a}")
+                lines.append(f"   ⚠️ {escape_markdown(str(a), version=1)}")
         lines.append("")
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
 

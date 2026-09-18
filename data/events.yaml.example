@@ -42,7 +42,7 @@ special_events:
   duration_minutes: 20
   notification_minutes: 720
   description: Weekly Sunday Morning Prayer service — all are welcome.
-  url: https://us06web.zoom.us/j/0000000000?pwd=REPLACE_ME
+  url: https://us06web.zoom.us/j/0000000000?pwd=SETMEWITHSETSERVICELINK
   # Group(s)/channel(s) to post this reminder to (registry names or chat_ids).
   targets:
     - cogm_members
@@ -56,16 +56,16 @@ special_events:
 
 convocation_announcements: {}
 convocation_urls:
-  sabbath::Eve: https://us06web.zoom.us/j/0000000000?pwd=REPLACE_ME
-  sabbath::Morning: https://us06web.zoom.us/j/0000000000?pwd=REPLACE_ME
-  rosh_hashanah::Eve: https://us06web.zoom.us/j/0000000000?pwd=REPLACE_ME
-  rosh_hashanah::Morning: https://us06web.zoom.us/j/0000000000?pwd=REPLACE_ME
-  yom_kippur::Eve: https://us06web.zoom.us/j/0000000000?pwd=REPLACE_ME
-  yom_kippur::Morning: https://us06web.zoom.us/j/0000000000?pwd=REPLACE_ME
-  succoth_opening::Eve: https://us06web.zoom.us/j/0000000000?pwd=REPLACE_ME
-  succoth_closing::Eve: https://us06web.zoom.us/j/0000000000?pwd=REPLACE_ME
-  succoth_opening::Day: https://us06web.zoom.us/j/0000000000?pwd=REPLACE_ME
-  succoth_closing::Day: https://us06web.zoom.us/j/0000000000?pwd=REPLACE_ME
+  sabbath::Eve: https://us06web.zoom.us/j/0000000000?pwd=SETMEWITHSETSERVICELINK
+  sabbath::Morning: https://us06web.zoom.us/j/0000000000?pwd=SETMEWITHSETSERVICELINK
+  rosh_hashanah::Eve: https://us06web.zoom.us/j/0000000000?pwd=SETMEWITHSETSERVICELINK
+  rosh_hashanah::Morning: https://us06web.zoom.us/j/0000000000?pwd=SETMEWITHSETSERVICELINK
+  yom_kippur::Eve: https://us06web.zoom.us/j/0000000000?pwd=SETMEWITHSETSERVICELINK
+  yom_kippur::Morning: https://us06web.zoom.us/j/0000000000?pwd=SETMEWITHSETSERVICELINK
+  succoth_opening::Eve: https://us06web.zoom.us/j/0000000000?pwd=SETMEWITHSETSERVICELINK
+  succoth_closing::Eve: https://us06web.zoom.us/j/0000000000?pwd=SETMEWITHSETSERVICELINK
+  succoth_opening::Day: https://us06web.zoom.us/j/0000000000?pwd=SETMEWITHSETSERVICELINK
+  succoth_closing::Day: https://us06web.zoom.us/j/0000000000?pwd=SETMEWITHSETSERVICELINK
 
 # Optional per-service media, keyed by phase_key (like convocation_urls). Each
 # value is a public https URL or a local file path (media/...). Example:
