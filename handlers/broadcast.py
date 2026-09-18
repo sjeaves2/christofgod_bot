@@ -12,12 +12,12 @@ from typing import Any
 
 from permissions import user_info
 import storage
-from common import _answer_cb
+from common import _answer_cb, send_markdown
 from handlers.notifications import _send_media
 from localization import DEFAULT_LANG, t
 from settings import activity
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.constants import ChatType, ParseMode
+from telegram.constants import ChatType
 from telegram.error import TelegramError
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram.helpers import escape_markdown
@@ -198,7 +198,7 @@ async def _bc_send_pending(bot, context) -> list[dict]:
                 await _send_media(bot, r["chat_id"], media["kind"], media["file_id"],
                                   caption=media["caption"] or None)
             else:
-                await bot.send_message(r["chat_id"], message, parse_mode=ParseMode.MARKDOWN)
+                await send_markdown(bot, r["chat_id"], message)
             done.add(r["chat_id"])
         except TelegramError as exc:
             failures.append(r)

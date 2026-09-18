@@ -23,7 +23,7 @@ from telegram import (
     ReplyKeyboardRemove,
     Update,
 )
-from telegram.constants import ChatType, ParseMode
+from telegram.constants import ChatType
 from telegram.error import TelegramError
 from telegram.ext import (
     Application,
@@ -200,9 +200,12 @@ from handlers.user_basics import (  # noqa: F401
     tz_button,
     tz_typed,
 )
-from common import (  # noqa: F401
-    md,
+from common import (
+    # noqa: F401,
     get_user_prefs,
+    md,
+    reply_markdown,
+    send_markdown,
 )
 from events import (  # noqa: F401
     _merge_special_events,
@@ -278,7 +281,7 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     cmd_text = _commands_text(lang, is_adm, permissions.is_prayer_admin(update))
 
     await update.message.reply_text(reply, reply_markup=ReplyKeyboardRemove())
-    await update.message.reply_text(cmd_text, parse_mode=ParseMode.MARKDOWN)
+    await reply_markdown(update.message, cmd_text)
     phone_digits = re.sub(r"\D", "", phone)
     activity.log_command("contact_share", uid, uname, dname, details=f"phone={phone_digits}")
 
@@ -387,7 +390,7 @@ async def _warn_official_username_drift(context: ContextTypes.DEFAULT_TYPE,
         if chat_id == uid:
             continue  # tell the other admins, not the person who changed it
         try:
-            await context.bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN)
+            await send_markdown(context.bot, chat_id, text)
         except TelegramError as exc:
             logger.warning("Could not alert admin %s about username drift: %s", chat_id, exc)
 
@@ -525,7 +528,7 @@ async def _alert_on_bad_service_links(app: Application) -> None:
 
     for chat_id in await error_reporting.ops_chat_ids():
         try:
-            await app.bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN)
+            await send_markdown(app.bot, chat_id, text)
         except TelegramError:
             logger.warning("Could not alert %s about service links.", chat_id, exc_info=True)
 

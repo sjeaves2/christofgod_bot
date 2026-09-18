@@ -31,12 +31,11 @@ from typing import Any
 
 import permissions
 import storage
-from common import _is_affirmative, get_user_prefs, now_tz
+from common import _is_affirmative, get_user_prefs, now_tz, reply_markdown, send_markdown
 from localization import t
 from permissions import user_info
 from settings import activity
 from telegram import Update
-from telegram.constants import ParseMode
 from telegram.error import TelegramError
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram.helpers import escape_markdown
@@ -176,8 +175,7 @@ async def cmd_prayer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     activity.log_command("prayer", uid, uname, dname)
     _, lang = await get_user_prefs(uid)
     context.user_data.pop("pr_text", None)
-    await update.message.reply_text(t("prayer_prompt", lang, limit=PRAYER_MAX),
-                                    parse_mode=ParseMode.MARKDOWN)
+    await reply_markdown(update.message, t("prayer_prompt", lang, limit=PRAYER_MAX))
     return PR_TEXT
 
 
@@ -194,9 +192,8 @@ async def pr_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return PR_TEXT
 
     context.user_data["pr_text"] = text
-    await update.message.reply_text(
-        t("prayer_confirm", lang, request=escape_markdown(text, version=1)),
-        parse_mode=ParseMode.MARKDOWN)
+    await reply_markdown(update.message, t("prayer_confirm", lang, request=escape_markdown(text,
+        version=1)))
     return PR_CONFIRM
 
 
@@ -215,8 +212,7 @@ async def pr_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         # A bot cannot pre-fill the compose box, so the next best thing is to
         # hand the text back in a monospace block — tap-to-copy on mobile —
         # and let them paste, edit and resend.
-        await update.message.reply_text(
-            t("prayer_modify", lang, request=text), parse_mode=ParseMode.MARKDOWN)
+        await reply_markdown(update.message, t("prayer_modify", lang, request=text))
         return PR_TEXT
 
     if not _is_affirmative(answer):
@@ -248,9 +244,7 @@ async def pr_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         activity.log_error(
             f"Prayer request {req['id']} stored but no prayer admin was reachable")
 
-    await update.message.reply_text(
-        t("prayer_received", lang, request_id=req["id"]),
-        parse_mode=ParseMode.MARKDOWN)
+    await reply_markdown(update.message, t("prayer_received", lang, request_id=req["id"]))
     return ConversationHandler.END
 
 
@@ -260,7 +254,7 @@ async def _deliver_to_prayer_admins(bot, req: dict[str, Any]) -> int:
     sent = 0
     for chat_id in await prayer_admin_chat_ids():
         try:
-            await bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN)
+            await send_markdown(bot, chat_id, text)
             sent += 1
         except TelegramError as exc:
             logger.warning("Could not send prayer request %s to %s: %s",
@@ -294,7 +288,7 @@ async def cmd_prayerrequests(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"`{r.get('id')}` · {when} · {who}\n{escape_markdown(preview, version=1)}")
     parts.append("_Answer with_ `/respondprayer <id>` _· dismiss with_ "
                  "`/dismissprayer <id>`")
-    await update.message.reply_text("\n\n".join(parts), parse_mode=ParseMode.MARKDOWN)
+    await reply_markdown(update.message, "\n\n".join(parts))
 
 
 @permissions.prayer_admin_only
@@ -313,31 +307,26 @@ async def cmd_respondprayer(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         ids = "\n".join(f"  `{r.get('id')}` — "
                         f"{escape_markdown(str(r.get('requester_name', '?')), version=1)}"
                         for r in pending)
-        await update.message.reply_text(
-            f"Which request? Send `/respondprayer <id>`\n\n{ids}",
-            parse_mode=ParseMode.MARKDOWN)
+        await reply_markdown(update.message, f"Which request? Send `/respondprayer <id>`\n\n{ids}")
         return ConversationHandler.END
 
     req = find_request(requests, arg)
     if req is None:
-        await update.message.reply_text(
-            f"No prayer request with id `{escape_markdown(arg, version=1)}`. "
-            "Use /prayerrequests to see what is waiting.",
-            parse_mode=ParseMode.MARKDOWN)
+        await reply_markdown(update.message, f"No prayer request with id `{escape_markdown(arg,
+            version=1)}`. "
+            "Use /prayerrequests to see what is waiting.")
         return ConversationHandler.END
     if req.get("status") != STATUS_PENDING:
         closed_by = escape_markdown(str(req.get("closed_by", "someone")), version=1)
-        await update.message.reply_text(
-            f"`{req['id']}` was already {req.get('status')} by {closed_by}.",
-            parse_mode=ParseMode.MARKDOWN)
+        await reply_markdown(update.message,
+            f"`{req['id']}` was already {req.get('status')} by {closed_by}.")
         return ConversationHandler.END
 
     context.user_data["pr_respond_id"] = req["id"]
-    await update.message.reply_text(
+    await reply_markdown(update.message,
         f"Replying to `{req['id']}`. Send your response — it will be "
         "delivered to the member, and the request text will then be deleted.\n\n"
-        "Send /cancel to stop.",
-        parse_mode=ParseMode.MARKDOWN)
+        "Send /cancel to stop.")
     return RESP_TEXT
 
 
@@ -366,18 +355,16 @@ async def resp_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     delivered = False
     try:
-        await context.bot.send_message(req["requester_chat_id"], body,
-                                       parse_mode=ParseMode.MARKDOWN)
+        await send_markdown(context.bot, req["requester_chat_id"], body)
         delivered = True
     except TelegramError as exc:
         logger.warning("Could not deliver prayer response %s: %s", req["id"], exc)
 
     if not delivered:
         # Leave it pending: an undelivered response is not an answered request.
-        await update.message.reply_text(
+        await reply_markdown(update.message,
             f"⚠️ Could not deliver the response to `{req['id']}` — the member may "
-            "have blocked the bot. The request is still waiting.",
-            parse_mode=ParseMode.MARKDOWN)
+            "have blocked the bot. The request is still waiting.")
         context.user_data.pop("pr_respond_id", None)
         return ConversationHandler.END
 
@@ -385,9 +372,8 @@ async def resp_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await storage.save_prayer_requests(requests)
     activity.log_command("respondprayer", uid, uname, dname,
                          details=f"answered {req['id']}")
-    await update.message.reply_text(
-        f"✅ Response sent for `{req['id']}`. The request text has been deleted.",
-        parse_mode=ParseMode.MARKDOWN)
+    await reply_markdown(update.message,
+        f"✅ Response sent for `{req['id']}`. The request text has been deleted.")
     await _notify_other_prayer_admins(
         context.bot, req, uid,
         f"🙏 `{req['id']}` has been answered by "
@@ -407,31 +393,27 @@ async def cmd_dismissprayer(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     activity.log_command("dismissprayer", uid, uname, dname)
     arg = (context.args[0] if context.args else "").strip()
     if not arg:
-        await update.message.reply_text(
-            "Send `/dismissprayer <id>` — see /prayerrequests for the ids.",
-            parse_mode=ParseMode.MARKDOWN)
+        await reply_markdown(update.message,
+            "Send `/dismissprayer <id>` — see /prayerrequests for the ids.")
         return
 
     requests = await storage.get_prayer_requests()
     req = find_request(requests, arg)
     if req is None:
-        await update.message.reply_text(
-            f"No prayer request with id `{escape_markdown(arg, version=1)}`.",
-            parse_mode=ParseMode.MARKDOWN)
+        await reply_markdown(update.message, f"No prayer request with id `{escape_markdown(arg,
+            version=1)}`.")
         return
     if req.get("status") != STATUS_PENDING:
-        await update.message.reply_text(
-            f"`{req['id']}` was already {req.get('status')}.",
-            parse_mode=ParseMode.MARKDOWN)
+        await reply_markdown(update.message, f"`{req['id']}` was already {req.get('status')}.")
         return
 
     redact(req, STATUS_DISMISSED, dname)
     await storage.save_prayer_requests(requests)
     activity.log_command("dismissprayer", uid, uname, dname,
                          details=f"dismissed {req['id']}")
-    await update.message.reply_text(
+    await reply_markdown(update.message,
         f"`{req['id']}` dismissed and its text deleted. The member was not "
-        "notified.", parse_mode=ParseMode.MARKDOWN)
+        "notified.")
     await _notify_other_prayer_admins(
         context.bot, req, uid,
         f"🙏 `{req['id']}` was dismissed by {escape_markdown(dname, version=1)}.")
@@ -445,7 +427,7 @@ async def _notify_other_prayer_admins(bot, req: dict[str, Any], actor_id: int,
         if chat_id == actor_id:
             continue
         try:
-            await bot.send_message(chat_id, message, parse_mode=ParseMode.MARKDOWN)
+            await send_markdown(bot, chat_id, message)
             sent += 1
         except TelegramError as exc:
             logger.warning("Could not notify prayer admin %s: %s", chat_id, exc)
