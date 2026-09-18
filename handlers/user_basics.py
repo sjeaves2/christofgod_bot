@@ -17,12 +17,14 @@ import pytz
 import storage
 from common import (
     NOTIF_CATEGORIES,
-    _NOTIF_CATEGORY_KEYS,
-    _answer_cb,
+    edit_markdown,
     format_dt,
     get_user_prefs,
     now_tz,
+    reply_markdown,
     user_notif_prefs,
+    _NOTIF_CATEGORY_KEYS,
+    _answer_cb,
 )
 from events import all_upcoming
 from ics_generator import events_to_ics
@@ -39,7 +41,6 @@ from telegram import (
     ReplyKeyboardRemove,
     Update,
 )
-from telegram.constants import ParseMode
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram.helpers import escape_markdown
@@ -129,11 +130,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     is_adm = permissions.is_admin(update)
     cmd_text = _commands_text(lang, is_adm, permissions.is_prayer_admin(update))
 
-    await update.message.reply_text(
-        t("welcome", lang, bot_name=BOT_DISPLAY_NAME, commands=cmd_text),
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=ReplyKeyboardRemove() if already_known else None,
-    )
+    await reply_markdown(update.message, t("welcome", lang, bot_name=BOT_DISPLAY_NAME,
+        commands=cmd_text),
+        reply_markup=ReplyKeyboardRemove() if already_known else None)
     activity.log_command("start", uid, uname, dname)
 
 
@@ -234,14 +233,10 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if topic:
         activity.log_command("help", uid, uname, dname, details=f"topic={topic}")
         if topic in HELP_TOPICS:
-            await update.message.reply_text(t(HELP_TOPICS[topic], lang),
-                                            parse_mode=ParseMode.MARKDOWN)
+            await reply_markdown(update.message, t(HELP_TOPICS[topic], lang))
         else:
             topics = ", ".join(f"`{x}`" for x in HELP_TOPICS)
-            await update.message.reply_text(
-                t("help_unknown_topic", lang, topics=topics),
-                parse_mode=ParseMode.MARKDOWN,
-            )
+            await reply_markdown(update.message, t("help_unknown_topic", lang, topics=topics))
         return
 
     activity.log_command("help", uid, uname, dname)
@@ -249,7 +244,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                           permissions.is_prayer_admin(update))
     # Hint that per-command help is available.
     text += "\n\n" + t("help_topic_hint", lang)
-    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+    await reply_markdown(update.message, text)
 
 
 async def cmd_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -295,11 +290,8 @@ async def cmd_privacy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton(t("privacy_button", lang), url=PRIVACY_URL)
     ]])
-    await update.message.reply_text(
-        t("privacy_message", lang),
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=kb,
-    )
+    await reply_markdown(update.message, t("privacy_message", lang),
+        reply_markup=kb)
 
 
 async def cmd_donate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -312,11 +304,8 @@ async def cmd_donate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton(t("donate_button", lang), url=DONATION_URL)
     ]])
-    await update.message.reply_text(
-        t("donate_message", lang),
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=kb,
-    )
+    await reply_markdown(update.message, t("donate_message", lang),
+        reply_markup=kb)
 
 
 async def cmd_events(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -347,7 +336,7 @@ async def cmd_events(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         lines.append("")
     text = "\n".join(lines)
     try:
-        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+        await reply_markdown(update.message, text)
     except BadRequest:
         # Belt and braces: /events must never be unusable because one event's
         # text will not parse. Fall back to plain text rather than nothing.
@@ -387,7 +376,7 @@ async def cmd_adminhelp(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     text = ADMIN_COMMANDS_TEXT
     if permissions.is_prayer_admin(update):
         text += "\n\n" + PRAYER_COMMANDS_TEXT
-    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+    await reply_markdown(update.message, text)
 
 
 @admin_only
@@ -395,8 +384,7 @@ async def cmd_usercount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     uid, uname, dname = user_info(update)
     activity.log_command("usercount", uid, uname, dname)
     users = await storage.get_all_users()
-    await update.message.reply_text(f"👥 Total registered users: *{len(users)}*",
-                                    parse_mode=ParseMode.MARKDOWN)
+    await reply_markdown(update.message, f"👥 Total registered users: *{len(users)}*")
 
 
 @admin_only
@@ -419,7 +407,7 @@ async def cmd_userlist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         dn = escape_markdown(u.get("display_name") or "—", version=1)
         un = ("@" + escape_markdown(u["username"], version=1)) if u.get("username") else "—"
         lines.append(f"{i}. {dn} ({un})")
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+    await reply_markdown(update.message, "\n".join(lines))
 
 
 @admin_only
@@ -448,7 +436,7 @@ async def cmd_listevents(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 # stay escaped — nobody authors those as Markdown.
                 lines.append(f"   ⚠️ {a}")
         lines.append("")
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+    await reply_markdown(update.message, "\n".join(lines))
 
 
 # ---------------------------------------------------------------------------
@@ -511,11 +499,8 @@ async def cmd_settimezone(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         [InlineKeyboardButton(name, callback_data=f"{CB_TZ_PREFIX}{i}")]
         for i, name in enumerate(COMMON_TIMEZONES)
     ]
-    await update.message.reply_text(
-        t("tz_prompt", lang),
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=InlineKeyboardMarkup(rows),
-    )
+    await reply_markdown(update.message, t("tz_prompt", lang),
+        reply_markup=InlineKeyboardMarkup(rows))
     return TZ_SELECT
 
 
@@ -532,7 +517,7 @@ async def tz_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     tz_name = COMMON_TIMEZONES[int(idx)]
     msg = await _apply_timezone(uid, lang, tz_name)
     activity.log_command("settimezone", uid, uname, dname, details=f"tz={tz_name}")
-    await query.edit_message_text(msg, parse_mode=ParseMode.MARKDOWN)
+    await edit_markdown(query, msg)
     return ConversationHandler.END
 
 
@@ -550,7 +535,7 @@ async def tz_typed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text(t("tz_invalid", lang))
         return TZ_SELECT
     activity.log_command("settimezone", uid, uname, dname, details=f"tz={tz_name}")
-    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+    await reply_markdown(update.message, msg)
     return ConversationHandler.END
 
 
@@ -571,11 +556,8 @@ async def cmd_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         [InlineKeyboardButton(name, callback_data=f"{CB_LANG_PREFIX}{code}")]
         for code, name in AVAILABLE_LANGUAGES.items()
     ]
-    await update.message.reply_text(
-        t("lang_prompt", lang),
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=InlineKeyboardMarkup(rows),
-    )
+    await reply_markdown(update.message, t("lang_prompt", lang),
+        reply_markup=InlineKeyboardMarkup(rows))
     return LANG_SELECT
 
 
@@ -590,10 +572,7 @@ async def lang_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         return ConversationHandler.END
     await _set_user_field(uid, "language", code)
     activity.log_command("language", uid, uname, dname, details=f"lang={code}")
-    await query.edit_message_text(
-        t("lang_set", code, language=AVAILABLE_LANGUAGES[code]),
-        parse_mode=ParseMode.MARKDOWN,
-    )
+    await edit_markdown(query, t("lang_set", code, language=AVAILABLE_LANGUAGES[code]))
     return ConversationHandler.END
 
 
@@ -649,11 +628,8 @@ async def cmd_notifications(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     activity.log_command("notifications", uid, uname, dname)
     _, lang = await get_user_prefs(uid)
     prefs = await _get_user_notif_prefs(uid)
-    await update.message.reply_text(
-        t("notif_prefs_prompt", lang),
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=_notif_prefs_keyboard(prefs, lang),
-    )
+    await reply_markdown(update.message, t("notif_prefs_prompt", lang),
+        reply_markup=_notif_prefs_keyboard(prefs, lang))
 
 
 async def notif_prefs_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -665,8 +641,7 @@ async def notif_prefs_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if action == "done":
         prefs = await _get_user_notif_prefs(uid)
-        await query.edit_message_text(_notif_prefs_summary(prefs, lang),
-                                      parse_mode=ParseMode.MARKDOWN)
+        await edit_markdown(query, _notif_prefs_summary(prefs, lang))
         return
 
     if action.startswith("toggle:"):

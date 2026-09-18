@@ -19,7 +19,6 @@ from hebrew_calendar import service_phases
 from permissions import admin_only, user_info
 from settings import DEFAULT_NOTIF_MIN, activity
 from telegram import Update
-from telegram.constants import ParseMode
 from telegram.ext import Application, ContextTypes, ConversationHandler
 
 logger = logging.getLogger(__name__)
@@ -41,8 +40,7 @@ async def cmd_addevent(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     uid, uname, dname = user_info(update)
     activity.log_command("addevent", uid, uname, dname)
     context.user_data.clear()
-    await update.message.reply_text("➕ *Add Special Event*\n\nEvent name:",
-                                    parse_mode=ParseMode.MARKDOWN)
+    await reply_markdown(update.message, "➕ *Add Special Event*\n\nEvent name:")
     return AE_NAME
 
 
@@ -109,7 +107,7 @@ async def ae_notif(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         f"Notify: {notif} min before\n\n"
         f"Confirm? (yes/no)"
     )
-    await update.message.reply_text(summary, parse_mode=ParseMode.MARKDOWN)
+    await reply_markdown(update.message, summary)
     return AE_CONFIRM
 
 
@@ -165,8 +163,7 @@ async def ae_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     uid, uname, dname = user_info(update)
     activity.log_command("addevent", uid, uname, dname,
                          details=f"Added '{d['ae_name']}' (id:{new_id})")
-    await update.message.reply_text(f"✅ Event added (ID: `{new_id}`)",
-                                    parse_mode=ParseMode.MARKDOWN)
+    await reply_markdown(update.message, f"✅ Event added (ID: `{new_id}`)")
     return ConversationHandler.END
 
 
@@ -196,7 +193,7 @@ async def cmd_modifyevent(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         lines.append(f"{i+1}. [{md(ev['id'])}] {md(ev['name'])}")
     lines.append("\nEnter the event number or ID to modify:")
     context.user_data["me_specials"] = specials
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+    await reply_markdown(update.message, "\n".join(lines))
     return ME_SELECT
 
 
@@ -214,12 +211,9 @@ async def me_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text("Event not found. Please try again:")
         return ME_SELECT
     context.user_data["me_event"] = ev
-    await update.message.reply_text(
-        f"Modifying: *{md(ev['name'])}*\n\n"
+    await reply_markdown(update.message, f"Modifying: *{md(ev['name'])}*\n\n"
         "Which field to change?\n"
-        "date | time | duration | description | url | notification | name | active",
-        parse_mode=ParseMode.MARKDOWN,
-    )
+        "date | time | duration | description | url | notification | name | active")
     return ME_FIELD
 
 
@@ -230,7 +224,7 @@ async def me_field(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text(f"Invalid field. Choose from: {', '.join(sorted(valid))}:")
         return ME_FIELD
     context.user_data["me_field"] = field
-    await update.message.reply_text(f"New value for *{field}*:", parse_mode=ParseMode.MARKDOWN)
+    await reply_markdown(update.message, f"New value for *{field}*:")
     return ME_VALUE
 
 
@@ -277,8 +271,7 @@ async def me_value(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     uid, uname, dname = user_info(update)
     activity.log_command("modifyevent", uid, uname, dname,
                          details=f"Modified '{ev['name']}' field={field}")
-    await update.message.reply_text(f"✅ Updated *{md(field)}* for *{md(ev['name'])}*.",
-                                    parse_mode=ParseMode.MARKDOWN)
+    await reply_markdown(update.message, f"✅ Updated *{md(field)}* for *{md(ev['name'])}*.")
     return ConversationHandler.END
 
 
@@ -303,7 +296,7 @@ async def cmd_deleteevent(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         "\nEnter number to select.\n"
         "_Special events can be deleted; convocations get an urgent announcement added._"
     )
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+    await reply_markdown(update.message, "\n".join(lines))
     return DE_SELECT
 
 
@@ -316,16 +309,12 @@ async def de_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     ev = events[int(text) - 1]
     context.user_data["de_ev"] = ev
     if ev["type"] == "special":
-        await update.message.reply_text(
-            f"Delete *{md(ev['name'])}*? (yes/no)", parse_mode=ParseMode.MARKDOWN
-        )
+        await reply_markdown(update.message, f"Delete *{md(ev['name'])}*? (yes/no)")
         return DE_CONFIRM
     else:
-        await update.message.reply_text(
+        await reply_markdown(update.message,
             f"*{md(ev['name'])}* is a convocation (cannot be deleted).\n"
-            "Enter an urgent announcement to add (or '-' to cancel):",
-            parse_mode=ParseMode.MARKDOWN,
-        )
+            "Enter an urgent announcement to add (or '-' to cancel):")
         return DE_ANNOT
 
 
@@ -340,8 +329,7 @@ async def de_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await storage.save_events_data(evdata)
     uid, uname, dname = user_info(update)
     activity.log_command("deleteevent", uid, uname, dname, details=f"Deleted '{ev['name']}'")
-    await update.message.reply_text(f"✅ *{md(ev['name'])}* deleted.",
-                                    parse_mode=ParseMode.MARKDOWN)
+    await reply_markdown(update.message, f"✅ *{md(ev['name'])}* deleted.")
     return ConversationHandler.END
 
 
@@ -366,8 +354,7 @@ async def de_annot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "deleteevent", uid, uname, dname,
         details=f"Added announcement to '{ev['name']}': {text}"
     )
-    await update.message.reply_text("⚠️ Announcement added to the convocation notification.",
-                                    parse_mode=ParseMode.MARKDOWN)
+    await reply_markdown(update.message, "⚠️ Announcement added to the convocation notification.")
     return ConversationHandler.END
 
 
@@ -411,11 +398,8 @@ async def sl_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return SL_SELECT
     ph = phases[int(text) - 1]
     context.user_data["sl_phase"] = ph
-    await update.message.reply_text(
-        f"Enter the join link (URL) for *{md(ph['display'])}*,\n"
-        "or '-' to clear the existing link:",
-        parse_mode=ParseMode.MARKDOWN,
-    )
+    await reply_markdown(update.message, f"Enter the join link (URL) for *{md(ph['display'])}*,\n"
+        "or '-' to clear the existing link:")
     return SL_URL
 
 
@@ -440,5 +424,5 @@ async def sl_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await schedule_all_upcoming(context.application)
 
     activity.log_command("setservicelink", uid, uname, dname, details=detail)
-    await update.message.reply_text(action_msg, parse_mode=ParseMode.MARKDOWN)
+    await reply_markdown(update.message, action_msg)
     return ConversationHandler.END
