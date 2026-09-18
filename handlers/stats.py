@@ -22,13 +22,12 @@ import re
 from datetime import datetime, timedelta
 
 import storage
-from common import md, now_tz
+from common import md, now_tz, reply_markdown
 from handlers.announcements import active_announcements
 from permissions import admin_only, user_info
 from handlers.prayer import pending_requests
 from settings import LOGS_DIR, STARTED_AT, TZ, activity
 from telegram import Update
-from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
 logger = logging.getLogger(__name__)
@@ -364,4 +363,4 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             logger.warning("Could not count pending prayer requests", exc_info=True)
         text = build_system_report(days, clamped, job_queue=job_queue,
                                    pending_prayers=pending_prayers)
-    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+    await reply_markdown(update.message, text)

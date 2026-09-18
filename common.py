@@ -145,19 +145,56 @@ async def validate_markdown(message, text: str) -> bool:
         return False
 
 
-async def reply_markdown(message, text: str, **kwargs):
-    """reply_text in Markdown, retrying as plain text if Telegram rejects it.
+async def _markdown_or_plain(send, text: str, kwargs: dict, where: str):
+    """Send *text* as Markdown; on rejection, send it again as plain text.
 
-    md() above is the fix; this is the seatbelt. Escaping is easy to forget at
-    one call site out of dozens, and the failure is total — the message simply
-    never arrives. On 2026-09-17 that silently disabled /events and then
-    /setservicelink, the command needed to repair the data that broke them.
+    The seatbelt beside md(). Escaping is the fix — this exists because
+    escaping is per-call-site and easy to forget, and the failure mode when it
+    IS forgotten is total: Telegram rejects the whole message over one unpaired
+    marker and it never arrives, usually with nobody to see an error.
 
-    Losing the bold is a blemish. Losing the message is an outage.
+    Between a message that loses its bold and a message that is never
+    delivered, the second is far worse. But the first is still a defect, which
+    is why every fallback logs. A quiet fallback would hide the escaping bug it
+    compensates for — if this warning appears, fix the escaping; do not treat
+    the fallback as the answer.
     """
     try:
-        return await message.reply_text(text, parse_mode=ParseMode.MARKDOWN, **kwargs)
-    except BadRequest:
-        logger.warning("Message failed to render as Markdown; sending plain text.")
-        kwargs.pop("parse_mode", None)
-        return await message.reply_text(text, **kwargs)
+        return await send(text, parse_mode=ParseMode.MARKDOWN, **kwargs)
+    except BadRequest as exc:
+        logger.warning("Markdown rejected (%s): %s — resending as plain text. "
+                       "A value was interpolated unescaped.", where, exc.message)
+        return await send(text, **kwargs)
+
+
+async def reply_markdown(message, text: str, **kwargs):
+    """message.reply_text in Markdown, falling back to plain text."""
+    return await _markdown_or_plain(
+        lambda t, **kw: message.reply_text(t, **kw), text, kwargs, "reply")
+
+
+async def send_markdown(bot, chat_id, text: str, **kwargs):
+    """bot.send_message in Markdown, falling back to plain text."""
+    return await _markdown_or_plain(
+        lambda t, **kw: bot.send_message(chat_id, t, **kw), text, kwargs,
+        f"send to {chat_id}")
+
+
+async def edit_markdown(query, text: str, **kwargs):
+    """query.edit_message_text in Markdown, falling back to plain text.
+
+    Telegram also rejects an edit whose result is identical to the current
+    text. That is not an escaping fault and there is nothing to retry, so it is
+    swallowed rather than reported as one.
+    """
+    try:
+        return await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, **kwargs)
+    except BadRequest as exc:
+        if "not modified" in str(exc).lower():
+            return None
+        logger.warning("Markdown rejected (edit): %s — resending as plain text. "
+                       "A value was interpolated unescaped.", exc.message)
+        try:
+            return await query.edit_message_text(text, **kwargs)
+        except BadRequest:
+            return None
