@@ -969,7 +969,7 @@ async def _finalize_appointment(
             f"With: {user_display}"
             + (f" (@{md(appt['user_username'])})" if appt.get("user_username") else "") + "\n"
             f"When: {off_dt_str}\n"
-            f"Purpose: {appt.get('description', '')}\n\n"
+            f"Purpose: {md(appt.get('description', ''))}\n\n"
             "An ICS calendar file is attached.",
             parse_mode=ParseMode.MARKDOWN,
         )
@@ -1484,7 +1484,7 @@ async def rs_newtime(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             f"📅 *Reschedule requested for appointment `{appt_id}`*\n"
             f"With: {md(appt['official_name'])}\n"
             f"New time: {new_dt_str}\n"
-            f"Purpose: {appt.get('description', '')}"
+            f"Purpose: {md(appt.get('description', ''))}"
             + _requester_proxy_note(appt),
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=kb,
@@ -1500,7 +1500,7 @@ async def rs_newtime(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                     f"📅 *Reschedule requested for appointment `{appt_id}`*\n"
                     f"From: {requester}\n"
                     f"New time: {new_dt_str}\n"
-                    f"Purpose: {appt.get('description', '')}",
+                    f"Purpose: {md(appt.get('description', ''))}",
                     parse_mode=ParseMode.MARKDOWN,
                     reply_markup=kb,
                 )

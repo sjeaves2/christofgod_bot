@@ -219,6 +219,24 @@ class TestServiceLinkCheck:
         with patch.object(E, "all_upcoming", AsyncMock(return_value=evs)):
             return await E.check_service_links()
 
+    async def test_the_old_placeholder_is_reported(self):
+        """The live config on the server says REPLACE_ME, not the new spelling.
+
+        The first version of this check knew only SETMEWITHSETSERVICELINK, so it
+        ran clean at startup against a file with ten dead links. A check that
+        only recognises placeholders it invented is worse than none: it reports
+        all-clear on the exact fault it exists to find.
+        """
+        ev = _event(url="https://example.test/j/0000000000?pwd=REPLACE_ME")
+        problems = await self._check([ev])
+        assert len(problems) == 1
+        assert "placeholder" in problems[0][1]
+
+    async def test_the_template_meeting_id_is_reported(self):
+        """A link whose passcode was replaced but whose meeting id was not."""
+        ev = _event(url="https://example.test/j/0000000000?pwd=realLookingPass")
+        assert len(await self._check([ev])) == 1
+
     async def test_placeholder_link_is_reported(self):
         ev = _event(url="https://example.test/j/1234567890?pwd=SETMEWITHSETSERVICELINK")
         problems = await self._check([ev])
