@@ -340,7 +340,10 @@ async def cmd_events(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             lines.append(f"   🔗 {escape_markdown(str(ev['url']), version=1)}")
         if ev.get("announcements"):
             for a in ev["announcements"]:
-                lines.append(f"   ⚠️ {escape_markdown(str(a), version=1)}")
+                # Announcements keep their formatting: they are validated when
+                # the admin writes them (see de_annot). The name and url above
+                # stay escaped — nobody authors those as Markdown.
+                lines.append(f"   ⚠️ {a}")
         lines.append("")
     text = "\n".join(lines)
     try:
@@ -440,7 +443,10 @@ async def cmd_listevents(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         if ev.get("announcements"):
             for a in ev["announcements"]:
-                lines.append(f"   ⚠️ {escape_markdown(str(a), version=1)}")
+                # Announcements keep their formatting: they are validated when
+                # the admin writes them (see de_annot). The name and url above
+                # stay escaped — nobody authors those as Markdown.
+                lines.append(f"   ⚠️ {a}")
         lines.append("")
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
 

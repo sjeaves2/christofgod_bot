@@ -121,10 +121,22 @@ class TestEventNotificationRendering:
         assert "friend\\_or\\_two" in msg
         assert _balanced(msg)
 
-    def test_announcements_escaped(self):
-        msg = self._render("Service", announcements=["Roof *fund* update_1"])
-        assert "\\*fund\\*" in msg
+    def test_announcements_render_as_typed(self):
+        """Deliberately NOT escaped, unlike the name and url beside them.
+
+        An event announcement is a cancellation notice an admin writes for the
+        congregation, and it is validated at entry (events_admin.de_annot) by
+        rendering it back to them. Escaping it would strip the emphasis from
+        the one message where emphasis matters most.
+        """
+        msg = self._render("Service", announcements=["Roof *fund* update"])
+        assert "*fund*" in msg and "\\*fund\\*" not in msg
         assert _balanced(msg)
+
+    def test_the_name_beside_it_is_still_escaped(self):
+        """Pass-through is scoped to announcements, not the whole message."""
+        msg = self._render("Men's *Special* Service", announcements=["ok"])
+        assert "\\*Special\\*" in msg
 
 
 class TestEventsAdminEcho:

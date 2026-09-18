@@ -119,6 +119,32 @@ def md(value: Any) -> str:
     return escape_markdown("" if value is None else str(value), version=1)
 
 
+async def validate_markdown(message, text: str) -> bool:
+    """Render *text* back to its author to prove Telegram accepts the markup.
+
+    The counterpart to md(). Where escaping guarantees delivery at the cost of
+    formatting, this keeps the formatting and moves the risk to a moment where
+    a human can fix it: the author sees the result immediately and is asked to
+    edit if a marker is unpaired. Telegram rejects an entire message over one
+    stray marker, so learning that mid-broadcast is far worse than learning it
+    at the prompt.
+
+    Use it only for text the AUTHOR can re-send. Returns True when the markup
+    is valid; on False the caller re-prompts.
+    """
+    try:
+        await message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+        return True
+    except BadRequest as exc:
+        await message.reply_text(
+            f"⚠️ I couldn't render that as Markdown ({exc.message}).\n\n"
+            "Use *bold*, _italic_, `code` — each marker needs a matching pair. "
+            "A literal _ or * in a link needs a backslash: pwd=aB\\_cD.\n\n"
+            "Please edit and re-send:"
+        )
+        return False
+
+
 async def reply_markdown(message, text: str, **kwargs):
     """reply_text in Markdown, retrying as plain text if Telegram rejects it.
 
