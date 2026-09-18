@@ -97,10 +97,22 @@ class TestEventsEscaping:
             .message.reply_text.call_args[0][0]
         assert "\\*Special\\*" in sent
 
-    async def test_markdown_in_an_announcement_is_escaped(self):
+    async def test_an_announcement_keeps_its_formatting(self):
+        """Announcements are the ONE field here that renders as typed.
+
+        They are validated when the admin writes them (events_admin.de_annot),
+        so they carry emphasis to the congregation. The name and url beside
+        them are escaped — nobody authors those as Markdown.
+        """
         sent = (await _events([_event(announcements=["Bring _your_ Bible"])])) \
             .message.reply_text.call_args[0][0]
-        assert "\\_your\\_" in sent
+        assert "_your_" in sent and "\\_your\\_" not in sent
+
+    async def test_an_unvalidated_announcement_cannot_hide_the_events(self):
+        """Old records predate the entry check, so the fallback still matters."""
+        upd = await _events([_event(announcements=["half _open"])], markdown_ok=False)
+        calls = upd.message.reply_text.call_args_list
+        assert len(calls) == 2 and calls[1].kwargs.get("parse_mode") is None
 
     async def test_ordinary_links_are_still_readable(self):
         """Escaping must not mangle a link with nothing special in it."""
@@ -334,3 +346,56 @@ class TestStartupAlert:
             except Exception:
                 pass  # later startup steps are out of scope
         called.assert_awaited_once()
+
+
+class TestAnnouncementEntryValidation:
+    """The gate that makes pass-through safe.
+
+    Formatting is only safe because the admin proves it renders before it is
+    stored. Without this check, pass-through is just the 2026-09-17 bug again
+    with a nicer name.
+    """
+
+    @staticmethod
+    async def _annot(text, markdown_ok=True):
+        import handlers.events_admin as EA
+
+        async def reply(t, **kw):
+            if kw.get("parse_mode") is not None and not markdown_ok:
+                raise BadRequest("can't parse entities")
+
+        upd = MagicMock()
+        upd.effective_user.id = 1
+        upd.effective_user.username = "adm"
+        upd.effective_user.full_name = "An Admin"
+        upd.message.text = text
+        upd.message.reply_text = AsyncMock(side_effect=reply)
+        ctx = MagicMock()
+        ctx.user_data = {"de_ev": {"key": "sab_x", "name": "Sabbath Eve"}}
+        saved = {}
+
+        async def save(data):
+            saved.update(data)
+
+        with patch.object(EA.storage, "get_all_events_data", AsyncMock(return_value={})), \
+             patch.object(EA.storage, "save_events_data", AsyncMock(side_effect=save)), \
+             patch.object(EA.activity, "log_command", lambda *a, **k: None):
+            state = await EA.de_annot(upd, ctx)
+        return state, saved, upd
+
+    async def test_valid_markdown_is_stored_as_typed(self):
+        _, saved, _ = await self._annot("Service *cancelled* — see you next week")
+        stored = saved["convocation_announcements"]["sab_x"]
+        assert stored == ["Service *cancelled* — see you next week"]
+
+    async def test_unbalanced_markdown_is_rejected_and_not_stored(self):
+        import handlers.events_admin as EA
+        state, saved, upd = await self._annot("Service *cancelled", markdown_ok=False)
+        assert saved == {}, "a notice Telegram would reject must not be stored"
+        assert state == EA.DE_ANNOT, "the admin should be asked to re-send"
+
+    async def test_the_rejection_explains_how_to_fix_it(self):
+        _, _, upd = await self._annot("Service *cancelled", markdown_ok=False)
+        told = upd.message.reply_text.call_args[0][0]
+        assert "matching pair" in told
+        assert "backslash" in told.lower(), "a literal _ in a link needs escaping"
