@@ -55,7 +55,7 @@ class TestTemplateCarriesNoSecrets:
     def test_no_real_zoom_passcodes(self):
         """Every link in the template must be a placeholder."""
         text = TEMPLATE.read_text(encoding="utf-8")
-        real = [m for m in re.findall(r"pwd=([^\s&\"']+)", text) if m != "REPLACE_ME"]
+        real = [m for m in re.findall(r"pwd=([^\s&\"']+)", text) if m != "SETMEWITHSETSERVICELINK"]
         assert not real, f"template contains real Zoom passcodes: {real}"
 
     def test_no_real_meeting_ids(self):

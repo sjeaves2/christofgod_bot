@@ -170,3 +170,42 @@ async def all_upcoming(days_ahead: int = 90) -> list[dict[str, Any]]:
     merged = convocations + specials
     merged.sort(key=lambda e: e["service_time"])
     return merged
+
+
+# ---------------------------------------------------------------------------
+# Service-link health check
+# ---------------------------------------------------------------------------
+
+#: Marker written into data/events.yaml.example. A live config containing it
+#: was seeded from the template and never filled in.
+LINK_PLACEHOLDER = "SETMEWITHSETSERVICELINK"
+
+
+async def check_service_links(days_ahead: int = 30) -> list[tuple[str, str]]:
+    """Report upcoming services whose join link is unusable.
+
+    Returns (label, reason) pairs, soonest first; empty when all is well. The
+    label carries the date because the same service name recurs weekly, and an
+    alert naming only "Sabbath Eve" would not say which one to fix.
+
+    Why this exists: nothing in the bot reads data/events.yaml until someone
+    asks it to, so on 2026-09-17 the file was found re-seeded from the template
+    with ten placeholder links — and the bot had been running normally for a day
+    with no reminder due. The next reminder would have carried a dead link to
+    the congregation. This looks at the links the way a reminder will, so a
+    silent re-seed is noticed at startup rather than by a member.
+
+    Only convocations are reported as *missing* a link: they are the Zoom
+    services and always have one. A special event may legitimately be in person.
+    A placeholder is reported wherever it appears — it can only have come from
+    the template.
+    """
+    problems: list[tuple[str, str]] = []
+    for ev in await all_upcoming(days_ahead):
+        url = (ev.get("url") or "").strip()
+        label = f"{ev['name']} ({ev['service_time']:%a %d %b})"
+        if LINK_PLACEHOLDER in url:
+            problems.append((label, "still set to the template placeholder"))
+        elif not url and ev.get("type") == "convocation":
+            problems.append((label, "has no join link"))
+    return problems

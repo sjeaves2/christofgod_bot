@@ -14,7 +14,7 @@ from typing import Any
 import pytz
 from telegram import InputFile
 from telegram.constants import ParseMode
-from telegram.error import TelegramError
+from telegram.error import BadRequest, TelegramError
 from telegram.ext import Application, ContextTypes
 
 from common import (
@@ -57,7 +57,12 @@ def _render_notification(event: dict[str, Any], tz: pytz.BaseTzInfo, lang: str) 
     if event.get("description"):
         lines.append(f"\n_{md(event['description'])}_")
     if event.get("url"):
-        lines.append("\n" + t("notif_join", lang, url=event["url"]))
+        # The url is escaped like every other field. A Zoom password may contain
+        # an underscore, and a freshly seeded config contains a placeholder — and
+        # ONE unbalanced marker makes Telegram reject the whole message, so an
+        # unescaped link here silently cancels the reminder for the congregation.
+        # This is the same defect that broke /events on 2026-09-17.
+        lines.append("\n" + t("notif_join", lang, url=md(event["url"])))
     if event.get("announcements"):
         lines.append("\n" + t("notif_announcements_header", lang))
         lines.extend(f"• {md(a)}" for a in event["announcements"])
@@ -128,13 +133,28 @@ async def _send_media(bot, chat_id, kind: str, source: str,
     return fid
 
 
+async def _send_markdown(bot, chat_id, text: str) -> None:
+    """Send *text* as Markdown, falling back to plain text if Telegram rejects it.
+
+    Escaping above should make this unreachable. It is here because the cost of
+    the two failures is wildly asymmetric: a reminder that renders without bold
+    is a cosmetic blemish, a reminder that never arrives means someone misses a
+    service. Never let formatting be the reason a notification goes undelivered.
+    """
+    try:
+        await bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN)
+    except BadRequest:
+        logger.warning("Notification to %s failed to render as Markdown; sending plain.", chat_id)
+        await bot.send_message(chat_id, text)
+
+
 async def _send_notification_payload(bot, chat_id, media: dict, text: str, caches: dict) -> None:
     """Deliver a notification to one chat: image/document with the reminder text as
     a caption, plus the text as its own message if it exceeds the caption limit."""
     image = media.get("image")
     document = media.get("document")
     if not image and not document:
-        await bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN)
+        await _send_markdown(bot, chat_id, text)
         return
     caption = text if len(text) <= CAPTION_LIMIT else None
     caption_used = False
@@ -146,7 +166,7 @@ async def _send_notification_payload(bot, chat_id, media: dict, text: str, cache
         await _send_media(bot, chat_id, "document", document, caption=cap, cache=caches["document"])
         caption_used = caption_used or (cap is not None)
     if caption is None:  # text too long to be a caption — send separately
-        await bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN)
+        await _send_markdown(bot, chat_id, text)
 
 
 async def _notification_recipients(event: dict[str, Any]) -> dict:

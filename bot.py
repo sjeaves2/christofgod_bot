@@ -204,7 +204,12 @@ from common import (  # noqa: F401
     md,
     get_user_prefs,
 )
-from events import _merge_special_events, _resolve_targets, all_upcoming  # noqa: F401
+from events import (  # noqa: F401
+    _merge_special_events,
+    _resolve_targets,
+    all_upcoming,
+    check_service_links,
+)
 from handlers.notifications import (  # noqa: F401
     notification_catchup_job,
     schedule_all_upcoming,
@@ -483,10 +488,53 @@ def _error_context_note(update: object) -> str:
 # Post-init: schedule all notifications
 # ---------------------------------------------------------------------------
 
+#: How many bad links to name in the startup alert before summarising the rest.
+LINK_ALERT_LIMIT = 6
+
+
+async def alert_on_bad_service_links(app: Application) -> None:
+    """Warn ops at startup when upcoming services have unusable join links.
+
+    A restart is exactly when a re-seeded config appears, and nothing else in
+    the bot reads those links until a reminder fires — by which point the
+    congregation has already received the bad one. See check_service_links().
+
+    Never allowed to prevent startup: a bot that runs with bad links is far
+    better than a bot that does not run.
+    """
+    try:
+        await _alert_on_bad_service_links(app)
+    except Exception:
+        # Deliberately broad. This is a convenience warning; startup is not.
+        logger.exception("Service-link check failed; continuing startup.")
+
+
+async def _alert_on_bad_service_links(app: Application) -> None:
+    problems = await check_service_links()
+    if not problems:
+        return
+
+    logger.warning("%d upcoming service(s) have an unusable join link.", len(problems))
+    shown = problems[:LINK_ALERT_LIMIT]
+    lines = [f"⚠️ *{len(problems)} upcoming service(s)* have an unusable join link:", ""]
+    lines += [f"• {md(label)} — {reason}" for label, reason in shown]
+    if len(problems) > len(shown):
+        lines.append(f"• …and {len(problems) - len(shown)} more")
+    lines += ["", "Fix each one with /setservicelink, then run /backup."]
+    text = "\n".join(lines)
+
+    for chat_id in await error_reporting.ops_chat_ids():
+        try:
+            await app.bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN)
+        except TelegramError:
+            logger.warning("Could not alert %s about service links.", chat_id, exc_info=True)
+
+
 async def post_init(app: Application) -> None:
     # A restart usually means new code, so last run's traces are stale.
     error_reporting.reset_error_log()
     await schedule_all_upcoming(app)
+    await alert_on_bad_service_links(app)
 
     # Set bot commands
     await app.bot.set_my_commands([
