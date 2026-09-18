@@ -12,7 +12,7 @@ import re
 import uuid
 
 import storage
-from common import format_dt, md, reply_markdown
+from common import format_dt, md, reply_markdown, validate_markdown
 from events import _merge_special_events, all_upcoming
 from handlers.notifications import schedule_all_upcoming, schedule_event_notification
 from hebrew_calendar import service_phases
@@ -350,6 +350,12 @@ async def de_annot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if text == "-":
         await update.message.reply_text("Cancelled.")
         return ConversationHandler.END
+    # This notice reaches the congregation with its Markdown intact, so it is
+    # validated here, by rendering it back, rather than escaped. The admin sees
+    # exactly what members will see and can fix an unpaired marker now — which
+    # beats Telegram rejecting the cancellation notice at send time.
+    if not await validate_markdown(update.message, text):
+        return DE_ANNOT
     ev: dict = context.user_data["de_ev"]
     evdata = await storage.get_all_events_data()
     ann_map: dict = evdata.setdefault("convocation_announcements", {})

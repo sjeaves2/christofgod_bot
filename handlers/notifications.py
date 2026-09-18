@@ -65,7 +65,9 @@ def _render_notification(event: dict[str, Any], tz: pytz.BaseTzInfo, lang: str) 
         lines.append("\n" + t("notif_join", lang, url=md(event["url"])))
     if event.get("announcements"):
         lines.append("\n" + t("notif_announcements_header", lang))
-        lines.extend(f"• {md(a)}" for a in event["announcements"])
+        # As typed: validated at entry, and a rejected message falls back to
+        # plain text below rather than going undelivered.
+        lines.extend(f"• {a}" for a in event["announcements"])
     return "\n".join(lines)
 
 
