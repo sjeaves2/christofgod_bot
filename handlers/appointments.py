@@ -19,12 +19,15 @@ import permissions
 import pytz
 import storage
 from common import (
-    _answer_cb,
-    md,
-    _is_affirmative,
+    edit_markdown,
     format_dt,
     get_user_prefs,
+    md,
     now_tz,
+    reply_markdown,
+    send_markdown,
+    _answer_cb,
+    _is_affirmative,
 )
 from ics_generator import appointment_cancellation_to_ics, appointment_to_ics
 from localization import status_label, t
@@ -174,12 +177,9 @@ async def appointment_reminder_job(context: ContextTypes.DEFAULT_TYPE) -> None:
                                 else appt.get("user_display_name")
                                 or appt.get("user_username") or "the requester")
                 try:
-                    await context.bot.send_message(
-                        chat_id,
+                    await send_markdown(context.bot, chat_id,
                         t(key, u_lang, id=appt["id"], counterparty=counterparty,
-                          when=format_dt(dt, u_tz, u_lang)),
-                        parse_mode=ParseMode.MARKDOWN,
-                    )
+                          when=format_dt(dt, u_tz, u_lang)))
                     done.add(chat_id)
                     changed = True
                 except TelegramError as exc:
@@ -261,13 +261,10 @@ async def cmd_enable_appt_proxies(update: Update, context: ContextTypes.DEFAULT_
     proxies = off.get("proxies") or []
     if enabled:
         names = ", ".join(p.get("name", "?") for p in proxies) or "none configured yet"
-        await update.message.reply_text(
-            f"✅ Appointment proxies *enabled*.\nYour proxies: {md(names)}",
-            parse_mode=ParseMode.MARKDOWN,
-        )
+        await reply_markdown(update.message,
+            f"✅ Appointment proxies *enabled*.\nYour proxies: {md(names)}")
     else:
-        await update.message.reply_text("✅ Appointment proxies *disabled*.",
-                                        parse_mode=ParseMode.MARKDOWN)
+        await reply_markdown(update.message, "✅ Appointment proxies *disabled*.")
 
 
 # Affirmative replies accepted for typed yes/no prompts, across supported languages.
@@ -450,11 +447,8 @@ async def cmd_appointment(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         "✖️ " + t("appt_request_cancelled", lang).rstrip("."),
         callback_data=f"{CB_APSEL_PREFIX}cancel",
     )])
-    await update.message.reply_text(
-        t("appt_choose_official", lang),
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=InlineKeyboardMarkup(rows),
-    )
+    await reply_markdown(update.message, t("appt_choose_official", lang),
+        reply_markup=InlineKeyboardMarkup(rows))
     return AP_OFFICIAL
 
 
@@ -478,18 +472,12 @@ async def ap_official(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     appts = await storage.get_appointments()
     if (_count_active_appts_with_official(appts, uid, off["id"], now_tz())
             >= APPOINTMENT_MAX_PER_WINDOW):
-        await query.edit_message_text(
-            t("appt_limit_reached", lang, official=md(off["name"]),
-              max=APPOINTMENT_MAX_PER_WINDOW, days=APPOINTMENT_WINDOW_HALF_DAYS * 2),
-            parse_mode=ParseMode.MARKDOWN,
-        )
+        await edit_markdown(query, t("appt_limit_reached", lang, official=md(off["name"]),
+              max=APPOINTMENT_MAX_PER_WINDOW, days=APPOINTMENT_WINDOW_HALF_DAYS * 2))
         return ConversationHandler.END
 
     context.user_data["ap_official"] = off
-    await query.edit_message_text(
-        f"*{md(off['name'])}*\n\n" + t("appt_ask_date", lang),
-        parse_mode=ParseMode.MARKDOWN,
-    )
+    await edit_markdown(query, f"*{md(off['name'])}*\n\n" + t("appt_ask_date", lang))
     return AP_DATE
 
 
@@ -539,11 +527,9 @@ async def ap_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     appts = await storage.get_appointments()
     clash = _overlapping_appt(appts, uid, req_dt, DEFAULT_APPT_DURATION_MIN)
     if clash:
-        await update.message.reply_text(
-            t("appt_overlap", lang, official=md(clash["official_name"]),
-              when=_appt_dt_label(clash, tz, lang), id=clash["id"]),
-            parse_mode=ParseMode.MARKDOWN,
-        )
+        await reply_markdown(update.message, t("appt_overlap", lang,
+            official=md(clash["official_name"]),
+              when=_appt_dt_label(clash, tz, lang), id=clash["id"]))
         return AP_DATE
 
     context.user_data["ap_time"] = text
@@ -563,7 +549,7 @@ async def ap_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     req_dt = TZ.localize(datetime(parts_d[0], parts_d[1], parts_d[2], parts_t[0], parts_t[1]))
     summary = t("appt_summary", lang, official=md(off["name"]),
                 when=format_dt(req_dt, tz, lang), desc=text)
-    await update.message.reply_text(summary, parse_mode=ParseMode.MARKDOWN)
+    await reply_markdown(update.message, summary)
     return AP_CONFIRM
 
 
@@ -593,36 +579,26 @@ async def ap_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             elapsed = (now_tz() - last_action).total_seconds()
             if elapsed < APPOINTMENT_COOLDOWN_SECONDS:
                 wait = int(APPOINTMENT_COOLDOWN_SECONDS - elapsed) or 1
-                await update.message.reply_text(
-                    t("appt_cooldown", lang, seconds=wait),
-                    parse_mode=ParseMode.MARKDOWN,
-                )
+                await reply_markdown(update.message, t("appt_cooldown", lang, seconds=wait))
                 return ConversationHandler.END
         if _count_pending_appts(appts, uid) >= APPOINTMENT_MAX_PENDING:
-            await update.message.reply_text(
-                t("appt_too_many_pending", lang, max=APPOINTMENT_MAX_PENDING),
-                parse_mode=ParseMode.MARKDOWN,
-            )
+            await reply_markdown(update.message, t("appt_too_many_pending", lang,
+                max=APPOINTMENT_MAX_PENDING))
             return ConversationHandler.END
 
     # Final guard: per-official frequency limit within ±15 days of now.
     if (_count_active_appts_with_official(appts, uid, off["id"], now_tz())
             >= APPOINTMENT_MAX_PER_WINDOW):
-        await update.message.reply_text(
-            t("appt_limit_not_submitted", lang, official=md(off["name"]),
-              max=APPOINTMENT_MAX_PER_WINDOW, days=APPOINTMENT_WINDOW_HALF_DAYS * 2),
-            parse_mode=ParseMode.MARKDOWN,
-        )
+        await reply_markdown(update.message, t("appt_limit_not_submitted", lang,
+            official=md(off["name"]),
+              max=APPOINTMENT_MAX_PER_WINDOW, days=APPOINTMENT_WINDOW_HALF_DAYS * 2))
         return ConversationHandler.END
 
     # Final guard: ensure the requested time doesn't overlap another appointment.
     clash = _overlapping_appt(appts, uid, req_dt, DEFAULT_APPT_DURATION_MIN)
     if clash:
-        await update.message.reply_text(
-            t("appt_overlap_not_submitted", lang,
-              official=md(clash["official_name"]), id=clash["id"]),
-            parse_mode=ParseMode.MARKDOWN,
-        )
+        await reply_markdown(update.message, t("appt_overlap_not_submitted", lang,
+              official=md(clash["official_name"]), id=clash["id"]))
         return ConversationHandler.END
 
     appt = {
@@ -642,10 +618,7 @@ async def ap_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     appts.append(appt)
     await storage.save_appointments(appts)
 
-    await update.message.reply_text(
-        t("appt_submitted", lang, id=appt_id),
-        parse_mode=ParseMode.MARKDOWN,
-    )
+    await reply_markdown(update.message, t("appt_submitted", lang, id=appt_id))
 
     # Notify the official
     await _notify_official_of_request(context, appt, update)
@@ -703,8 +676,7 @@ async def _notify_official_of_request(
                 await context.bot.send_photo(r["chat_id"], photo_id, caption=caption,
                                              parse_mode=ParseMode.MARKDOWN, reply_markup=kb)
             else:
-                await context.bot.send_message(r["chat_id"], caption,
-                                               parse_mode=ParseMode.MARKDOWN, reply_markup=kb)
+                await send_markdown(context.bot, r["chat_id"], caption,  reply_markup=kb)
         except TelegramError as exc:
             logger.warning("Couldn't send appointment request to %s: %s", r["chat_id"], exc)
 
@@ -747,7 +719,7 @@ async def _notify_negotiation_started(
             msg = (f"🔔 {claimant} has started handling the appointment request from "
                    f"{requester} (ID: `{appt['id']}`).")
         try:
-            await context.bot.send_message(r["chat_id"], msg, parse_mode=ParseMode.MARKDOWN)
+            await send_markdown(context.bot, r["chat_id"], msg)
         except TelegramError:
             pass
 
@@ -839,10 +811,9 @@ async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 appts[i] = appt
         await storage.save_appointments(appts)
         await query.edit_message_text(f"❌ You declined the appointment (ID: {appt_id}).")
-        await context.bot.send_message(user_chat_id,
+        await send_markdown(context.bot, user_chat_id,
             f"❌ Your appointment request (ID: `{appt_id}`) has been declined."
-            + _requester_proxy_note(appt),
-            parse_mode=ParseMode.MARKDOWN)
+            + _requester_proxy_note(appt))
 
     elif action == "counter":
         # Official wants to suggest a different time
@@ -916,9 +887,8 @@ async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 appts[i] = appt
         await storage.save_appointments(appts)
         await query.edit_message_text("❌ Request cancelled.")
-        await context.bot.send_message(user_chat_id,
-            f"Your appointment request (ID: `{appt_id}`) has been cancelled.",
-            parse_mode=ParseMode.MARKDOWN)
+        await send_markdown(context.bot, user_chat_id,
+            f"Your appointment request (ID: `{appt_id}`) has been cancelled.")
 
 
 async def _finalize_appointment(
@@ -942,12 +912,9 @@ async def _finalize_appointment(
     user_tz, user_lang = await get_user_prefs(appt["user_chat_id"])
     ics_bytes = appointment_to_ics(appt_with_dt, TZ)
     user_bio = io.BytesIO(ics_bytes)
-    await context.bot.send_message(
-        appt["user_chat_id"],
+    await send_markdown(context.bot, appt["user_chat_id"],
         t("appt_confirmed_user", user_lang, id=appt["id"],
-          official=md(appt["official_name"]), when=format_dt(confirmed_dt, user_tz, user_lang)),
-        parse_mode=ParseMode.MARKDOWN,
-    )
+          official=md(appt["official_name"]), when=format_dt(confirmed_dt, user_tz, user_lang)))
     await context.bot.send_document(
         appt["user_chat_id"],
         document=InputFile(user_bio, filename="appointment.ics"),
@@ -963,16 +930,13 @@ async def _finalize_appointment(
         off_dt_str = format_dt(confirmed_dt, off_tz)
         ics_bytes_off = appointment_to_ics(appt_with_dt, TZ)
         off_bio = io.BytesIO(ics_bytes_off)
-        await context.bot.send_message(
-            off["chat_id"],
+        await send_markdown(context.bot, off["chat_id"],
             f"✅ *Appointment confirmed (ID: `{appt['id']}`)*\n"
             f"With: {user_display}"
             + (f" (@{md(appt['user_username'])})" if appt.get("user_username") else "") + "\n"
             f"When: {off_dt_str}\n"
             f"Purpose: {md(appt.get('description', ''))}\n\n"
-            "An ICS calendar file is attached.",
-            parse_mode=ParseMode.MARKDOWN,
-        )
+            "An ICS calendar file is attached.")
         await context.bot.send_document(
             off["chat_id"],
             document=InputFile(off_bio, filename="appointment.ics"),
@@ -981,12 +945,9 @@ async def _finalize_appointment(
 
     # --- Note to the negotiating proxy (if a proxy arranged this) ---
     if appt.get("negotiator_is_proxy") and appt.get("negotiator_chat_id"):
-        await context.bot.send_message(
-            appt["negotiator_chat_id"],
+        await send_markdown(context.bot, appt["negotiator_chat_id"],
             f"✅ Appointment confirmed: *{md(appt['official_name'])}* is scheduled with "
-            f"{user_display} on {format_dt(confirmed_dt)} (ID: `{appt['id']}`).",
-            parse_mode=ParseMode.MARKDOWN,
-        )
+            f"{user_display} on {format_dt(confirmed_dt)} (ID: `{appt['id']}`).")
 
 
 async def handle_counter_propose_message(
@@ -1068,16 +1029,13 @@ async def handle_counter_propose_message(
                     callback_data=f"{CB_APPT_PREFIX}decline_counter:{appt_id}"),
             ]
         ])
-        await context.bot.send_message(
-            appt["user_chat_id"],
+        await send_markdown(context.bot, appt["user_chat_id"],
             f"📅 *New time suggested for appointment `{appt_id}`*\n"
             f"With: {md(appt['official_name'])}\n"
             f"Suggested: {new_dt_str}\n"
             f"Purpose: {md(appt['description'])}"
             + _requester_proxy_note(appt),
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=kb,
-        )
+            reply_markup=kb)
     else:
         # User suggests alternative → notify the negotiator (official or their proxy)
         appt["user_counter_datetime"] = new_dt.isoformat()
@@ -1099,12 +1057,9 @@ async def handle_counter_propose_message(
                         callback_data=f"{CB_APPT_PREFIX}decline_user_counter:{appt_id}"),
                 ]
             ])
-            await context.bot.send_message(
-                target_chat,
+            await send_markdown(context.bot, target_chat,
                 f"The user has suggested a new time for appointment `{appt_id}`:\n{new_dt_str}",
-                parse_mode=ParseMode.MARKDOWN,
-                reply_markup=kb,
-            )
+                reply_markup=kb)
 
 
 # ---------------------------------------------------------------------------
@@ -1162,7 +1117,7 @@ async def cmd_myappointments(update: Update, context: ContextTypes.DEFAULT_TYPE)
         lines.append(t("section_past", lang))
         lines.extend(_render(a, is_off) for a, is_off in past)
 
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+    await reply_markdown(update.message, "\n".join(lines))
 
 
 # ---------------------------------------------------------------------------
@@ -1210,11 +1165,8 @@ async def cmd_cancelappointment(update: Update, context: ContextTypes.DEFAULT_TY
         "✖️ " + t("cancel_aborted", lang).rstrip("."),
         callback_data=f"{CB_CANCEL_PREFIX}abort",
     )])
-    await update.message.reply_text(
-        t("cancel_list_header", lang),
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=InlineKeyboardMarkup(rows),
-    )
+    await reply_markdown(update.message, t("cancel_list_header", lang),
+        reply_markup=InlineKeyboardMarkup(rows))
     return CA_SELECT
 
 
@@ -1241,12 +1193,9 @@ async def ca_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         InlineKeyboardButton("✅ Yes", callback_data=f"{CB_CANCEL_PREFIX}yes"),
         InlineKeyboardButton("✖️ No", callback_data=f"{CB_CANCEL_PREFIX}no"),
     ]])
-    await query.edit_message_text(
-        t("cancel_confirm_prompt", lang, official=md(appt["official_name"]),
+    await edit_markdown(query, t("cancel_confirm_prompt", lang, official=md(appt["official_name"]),
           when=_appt_dt_label(appt, tz, lang)),
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=kb,
-    )
+        reply_markup=kb)
     return CA_CONFIRM
 
 
@@ -1288,17 +1237,11 @@ async def ca_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         # Official cancelled → notify the requester (in their language)
         if user_chat_id:
             _, req_lang = await get_user_prefs(user_chat_id)
-            await context.bot.send_message(
-                user_chat_id,
+            await send_markdown(context.bot, user_chat_id,
                 t("cancel_done_by_official_to_user", req_lang,
-                  id=appt["id"], official=md(appt["official_name"])),
-                parse_mode=ParseMode.MARKDOWN,
-            )
+                  id=appt["id"], official=md(appt["official_name"])))
             await _send_cancellation_ics(context, user_chat_id, appt)
-        await query.edit_message_text(
-            t("cancel_done_official_ack", lang, id=appt["id"]),
-            parse_mode=ParseMode.MARKDOWN,
-        )
+        await edit_markdown(query, t("cancel_done_official_ack", lang, id=appt["id"]))
         # Also remove it from the official's own calendar
         if off and off.get("chat_id"):
             await _send_cancellation_ics(context, off["chat_id"], appt)
@@ -1307,21 +1250,16 @@ async def ca_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         if off and off.get("chat_id"):
             user_display = md(appt.get("user_display_name")
                               or appt.get("user_username") or "The requester")
-            await context.bot.send_message(
-                off["chat_id"],
+            await send_markdown(context.bot, off["chat_id"],
                 f"❌ Appointment (ID: `{appt['id']}`) with "
                 + (f"*{user_display}*" if user_display else "a congregant")
                 + (f" (@{md(appt['user_username'])})" if appt.get("user_username") else "")
-                + " has been cancelled by the requester.",
-                parse_mode=ParseMode.MARKDOWN,
-            )
+                + " has been cancelled by the requester.")
             await _send_cancellation_ics(context, off["chat_id"], appt)
         notified = bool(off and off.get("chat_id"))
-        await query.edit_message_text(
+        await edit_markdown(query,
             t("cancel_done_requester_ack_notified" if notified else "cancel_done_requester_ack",
-              lang, id=appt["id"]),
-            parse_mode=ParseMode.MARKDOWN,
-        )
+              lang, id=appt["id"]))
         # Also remove it from the requester's own calendar
         if user_chat_id:
             await _send_cancellation_ics(context, user_chat_id, appt)
@@ -1390,11 +1328,8 @@ async def cmd_reschedule(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         "✖️ " + t("cancel_aborted", lang).rstrip("."),
         callback_data=f"{CB_RESCHED_PREFIX}abort",
     )])
-    await update.message.reply_text(
-        t("resched_list_header", lang),
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=InlineKeyboardMarkup(rows),
-    )
+    await reply_markdown(update.message, t("resched_list_header", lang),
+        reply_markup=InlineKeyboardMarkup(rows))
     return RS_SELECT
 
 
@@ -1479,31 +1414,25 @@ async def rs_newtime(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     if role == "official":
         # Notify the requester.
-        await context.bot.send_message(
-            appt["user_chat_id"],
+        await send_markdown(context.bot, appt["user_chat_id"],
             f"📅 *Reschedule requested for appointment `{appt_id}`*\n"
             f"With: {md(appt['official_name'])}\n"
             f"New time: {new_dt_str}\n"
             f"Purpose: {md(appt.get('description', ''))}"
             + _requester_proxy_note(appt),
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=kb,
-        )
+            reply_markup=kb)
     else:
         # Requester is rescheduling → notify the official side (officer + proxies).
         requester = md(appt.get("user_display_name")
                        or appt.get("user_username") or "The requester")
         for r in permissions._official_side_recipients(off) if off else []:
             try:
-                await context.bot.send_message(
-                    r["chat_id"],
+                await send_markdown(context.bot, r["chat_id"],
                     f"📅 *Reschedule requested for appointment `{appt_id}`*\n"
                     f"From: {requester}\n"
                     f"New time: {new_dt_str}\n"
                     f"Purpose: {md(appt.get('description', ''))}",
-                    parse_mode=ParseMode.MARKDOWN,
-                    reply_markup=kb,
-                )
+                    reply_markup=kb)
             except TelegramError:
                 pass
 
@@ -1549,12 +1478,9 @@ async def _handle_reschedule_response(
         await storage.save_appointments(appts)
         await query.edit_message_text("❌ Reschedule declined; the original time stands.")
         if proposer_chat:
-            await context.bot.send_message(
-                proposer_chat,
+            await send_markdown(context.bot, proposer_chat,
                 f"❌ Your reschedule request for appointment `{appt_id}` was declined; "
-                "the original time stands.",
-                parse_mode=ParseMode.MARKDOWN,
-            )
+                "the original time stands.")
         return
 
     # rs_accept

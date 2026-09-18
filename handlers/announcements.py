@@ -16,7 +16,7 @@ from typing import Any
 
 import storage
 import translation
-from common import _is_affirmative, get_user_prefs, now_tz
+from common import _is_affirmative, get_user_prefs, now_tz, reply_markdown, validate_markdown
 from handlers.notifications import CAPTION_LIMIT
 from handlers.broadcast import (
     BC_SELECT,
@@ -179,6 +179,9 @@ async def cmd_announcements(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return "\n\n".join(parts)
 
     rendered = [(a, await _announcement_for_lang(a, lang)) for a in live]
+    # NB: raw on purpose. This has a BETTER fallback than plain text — it
+    # re-renders with everything escaped, so the list keeps its structure. A
+    # generic plain-text retry would swallow the BadRequest and lose that.
     try:
         await update.message.reply_text(_build(False), parse_mode=ParseMode.MARKDOWN)
     except BadRequest:
@@ -187,7 +190,7 @@ async def cmd_announcements(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         # escaped-on-render and are now taken as markup. Escaping everything
         # loses emphasis but is far better than showing nobody anything.
         logger.warning("Announcement Markdown failed to render; retrying escaped.")
-        await update.message.reply_text(_build(True), parse_mode=ParseMode.MARKDOWN)
+        await reply_markdown(update.message, _build(True))
 
 
 @admin_only
@@ -195,10 +198,8 @@ async def cmd_addannouncement(update: Update, context: ContextTypes.DEFAULT_TYPE
     uid, uname, dname = user_info(update)
     activity.log_command("addannouncement", uid, uname, dname)
     context.user_data.clear()
-    await update.message.reply_text(
-        f"📢 *Add Announcement*\n\nTitle (max {ANN_TITLE_MAX} characters):",
-        parse_mode=ParseMode.MARKDOWN,
-    )
+    await reply_markdown(update.message,
+        f"📢 *Add Announcement*\n\nTitle (max {ANN_TITLE_MAX} characters):")
     return AN_TITLE
 
 
@@ -222,18 +223,12 @@ async def an_body(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     # Validate the admin's Markdown now, by rendering it back to them, rather
     # than at send time. One unbalanced * or _ makes Telegram reject the whole
     # message, and finding that out mid-broadcast is far worse than here.
-    try:
-        await update.message.reply_text(
+    # NB: this send must stay raw. A plain-text fallback here would swallow the
+    # BadRequest that IS the validation, and every body would be accepted.
+    if not await validate_markdown(
+            update.message,
             _render_announcement({"title": context.user_data["an_title"], "body": body},
-                                 escape=False),
-            parse_mode=ParseMode.MARKDOWN,
-        )
-    except BadRequest as exc:
-        await update.message.reply_text(
-            f"⚠️ I couldn't render that as Markdown ({exc.message}).\n\n"
-            "Use *bold*, _italic_, `code` — each marker needs a matching pair. "
-            "Please edit and re-send the body:"
-        )
+                                 escape=False)):
         return AN_BODY
 
     context.user_data["an_body"] = body
@@ -302,10 +297,8 @@ async def an_expires(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     preview = _render_announcement(
         {"title": context.user_data["an_title"], "body": context.user_data["an_body"]},
         escape=False)
-    await update.message.reply_text(
-        f"{preview}\n\n_Expires: {text} (end of day)_\n\nSave this announcement? (yes/no)",
-        parse_mode=ParseMode.MARKDOWN,
-    )
+    await reply_markdown(update.message,
+        f"{preview}\n\n_Expires: {text} (end of day)_\n\nSave this announcement? (yes/no)")
     return AN_CONFIRM
 
 
@@ -350,13 +343,10 @@ async def an_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     options = await _broadcast_target_options(context.bot, lang)
     context.user_data["bc_options"] = options
     context.user_data["bc_selected"] = set()
-    await update.message.reply_text(
-        f"✅ Announcement saved (ID: `{ann['id']}`).\n\n"
+    await reply_markdown(update.message, f"✅ Announcement saved (ID: `{ann['id']}`).\n\n"
         "Now choose where to broadcast it, then tap *Send* "
         "(or *Cancel* to skip broadcasting — it will still appear in /announcements):",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=_bc_keyboard(options, set()),
-    )
+        reply_markup=_bc_keyboard(options, set()))
     return BC_SELECT
 
 
@@ -374,7 +364,7 @@ async def cmd_listannouncements(update: Update, context: ContextTypes.DEFAULT_TY
         mark = "🟢" if _ann_is_active(a, now) else "⚪️ expired"
         title = escape_markdown(str(a.get("title", "?")), version=1)
         lines.append(f"{mark} *{title}* — until {a.get('expires', '?')} (ID: `{a.get('id')}`)")
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+    await reply_markdown(update.message, "\n".join(lines))
 
 
 @admin_only
@@ -390,7 +380,7 @@ async def cmd_delannouncement(update: Update, context: ContextTypes.DEFAULT_TYPE
     for i, a in enumerate(live, 1):
         title = escape_markdown(str(a.get("title", "?")), version=1)
         lines.append(f"{i}. *{title}* — until {a.get('expires', '?')}")
-    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+    await reply_markdown(update.message, "\n".join(lines))
     return DA_SELECT
 
 
@@ -411,11 +401,9 @@ async def da_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await storage.save_announcements(anns)
     activity.log_command("delannouncement", uid, uname, dname,
                          details=f"Expired announcement {target.get('id')}")
-    await update.message.reply_text(
+    await reply_markdown(update.message,
         f"✅ Announcement `{target.get('id')}` is no longer shown. "
-        f"It will be permanently deleted after {ANNOUNCEMENT_PURGE_AFTER_DAYS} days.",
-        parse_mode=ParseMode.MARKDOWN,
-    )
+        f"It will be permanently deleted after {ANNOUNCEMENT_PURGE_AFTER_DAYS} days.")
     return ConversationHandler.END
 
 

@@ -19,6 +19,7 @@ from telegram.ext import Application, ContextTypes
 
 from common import (
     md,
+    send_markdown,
     _answer_cb,  # noqa: F401  (re-exported for handlers importing from here)
     _event_category,
     format_dt,
@@ -144,7 +145,7 @@ async def _send_markdown(bot, chat_id, text: str) -> None:
     service. Never let formatting be the reason a notification goes undelivered.
     """
     try:
-        await bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN)
+        await send_markdown(bot, chat_id, text)
     except BadRequest:
         logger.warning("Notification to %s failed to render as Markdown; sending plain.", chat_id)
         await bot.send_message(chat_id, text)
