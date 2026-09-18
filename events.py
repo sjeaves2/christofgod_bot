@@ -176,9 +176,21 @@ async def all_upcoming(days_ahead: int = 90) -> list[dict[str, Any]]:
 # Service-link health check
 # ---------------------------------------------------------------------------
 
-#: Marker written into data/events.yaml.example. A live config containing it
-#: was seeded from the template and never filled in.
-LINK_PLACEHOLDER = "SETMEWITHSETSERVICELINK"
+#: Markers that identify a link copied from data/events.yaml.example and never
+#: filled in. SETMEWITHSETSERVICELINK is current; REPLACE_ME is what the
+#: template said before v0.17.3, and it is what the LIVE config re-seeded before
+#: 2026-09-16 actually contains — a check that knew only the new spelling was
+#: blind to the very file that motivated it. Retiring a placeholder means adding
+#: it here, not replacing the list.
+LINK_PLACEHOLDERS = ("SETMEWITHSETSERVICELINK", "REPLACE_ME")
+
+#: The template's dummy meeting id. Catches a link whose placeholder passcode was
+#: replaced but whose meeting was not.
+PLACEHOLDER_MEETING = "/j/0000000000"
+
+
+def _is_placeholder_link(url: str) -> bool:
+    return any(m in url for m in LINK_PLACEHOLDERS) or PLACEHOLDER_MEETING in url
 
 
 async def check_service_links(days_ahead: int = 30) -> list[tuple[str, str]]:
@@ -204,7 +216,7 @@ async def check_service_links(days_ahead: int = 30) -> list[tuple[str, str]]:
     for ev in await all_upcoming(days_ahead):
         url = (ev.get("url") or "").strip()
         label = f"{ev['name']} ({ev['service_time']:%a %d %b})"
-        if LINK_PLACEHOLDER in url:
+        if _is_placeholder_link(url):
             problems.append((label, "still set to the template placeholder"))
         elif not url and ev.get("type") == "convocation":
             problems.append((label, "has no join link"))

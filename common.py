@@ -6,16 +6,20 @@ localization — never on feature modules — so anything may import it freely.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Any
 
 import pytz
+from telegram.constants import ParseMode
 from telegram.error import BadRequest
 from telegram.helpers import escape_markdown
 
 from localization import CATALOG, DEFAULT_LANG, localized_datetime
 from settings import TZ
 import storage
+
+logger = logging.getLogger(__name__)
 
 
 def now_tz() -> datetime:
@@ -113,3 +117,21 @@ def md(value: Any) -> str:
     message never arrives. See the 2026-07-12 /userlist incident.
     """
     return escape_markdown("" if value is None else str(value), version=1)
+
+
+async def reply_markdown(message, text: str, **kwargs):
+    """reply_text in Markdown, retrying as plain text if Telegram rejects it.
+
+    md() above is the fix; this is the seatbelt. Escaping is easy to forget at
+    one call site out of dozens, and the failure is total — the message simply
+    never arrives. On 2026-09-17 that silently disabled /events and then
+    /setservicelink, the command needed to repair the data that broke them.
+
+    Losing the bold is a blemish. Losing the message is an outage.
+    """
+    try:
+        return await message.reply_text(text, parse_mode=ParseMode.MARKDOWN, **kwargs)
+    except BadRequest:
+        logger.warning("Message failed to render as Markdown; sending plain text.")
+        kwargs.pop("parse_mode", None)
+        return await message.reply_text(text, **kwargs)
