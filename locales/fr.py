@@ -191,6 +191,11 @@ STRINGS: dict[str, str] = {
         "Pour les détails d'une commande, envoyez `/help <commande>` (p. ex. `/help appointment`)."
     ),
     "help_unknown_topic": "Je n'ai pas d'aide pour cela. Essayez : {topics}",
+    "group_nudge": (
+        "Gardons cela hors du groupe — écrivez-moi en privé et je vous "
+        "répondrai là-bas."
+    ),
+    "group_nudge_button": "Ouvrir une discussion privée",
     "edited_message_ignored": (
         "Je ne réponds pas aux messages modifiés. Veuillez l'envoyer à nouveau "
         "comme un nouveau message."
