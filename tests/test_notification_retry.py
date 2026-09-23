@@ -245,11 +245,19 @@ class TestTargetResolution:
 
 class TestGroupGate:
     async def test_group_message_raises_stop(self):
+        """Ordinary group chatter must never reach a real handler.
+
+        The gate now nudges a COMMAND towards a private chat (see
+        tests/test_group_nudge.py); everything else is still dropped in
+        silence, and either way nothing downstream sees it.
+        """
         import bot
         ctx = MagicMock()
         upd = MagicMock()
+        upd.effective_message.text = "just talking in the group"
         with pytest.raises(ext.ApplicationHandlerStop):
-            await bot._ignore_group_messages(upd, ctx)
+            await bot.nudge_group_to_private(upd, ctx)
+        upd.effective_message.reply_text.assert_not_called()
 
     async def test_my_chat_member_logs_and_records(self, caplog):
         import logging

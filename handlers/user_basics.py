@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import logging
+from datetime import datetime, timedelta
 import re
 
 import permissions
@@ -41,7 +42,7 @@ from telegram import (
     ReplyKeyboardRemove,
     Update,
 )
-from telegram.error import BadRequest
+from telegram.error import BadRequest, TelegramError
 from telegram.ext import ApplicationHandlerStop, ContextTypes, ConversationHandler
 from telegram.helpers import escape_markdown
 
@@ -134,6 +135,14 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         commands=cmd_text),
         reply_markup=ReplyKeyboardRemove() if already_known else None)
     activity.log_command("start", uid, uname, dname)
+
+    # A deep link from the group nudge carries what the member originally
+    # asked for, so the button finishes the job instead of leaving them to
+    # type the command a second time in a different window.
+    payload = (context.args or [None])[0]
+    follow_up = DEEP_LINK_FOLLOW_UPS.get(payload)
+    if follow_up is not None:
+        await follow_up(update, context)
 
 
 async def _register_official_if_known(
@@ -245,6 +254,83 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Hint that per-command help is available.
     text += "\n\n" + t("help_topic_hint", lang)
     await reply_markdown(update.message, text)
+
+
+#: Telegram username of this bot, for the deep link in the group nudge.
+BOT_USERNAME = "christofgod_bot"
+
+#: One nudge per command per chat per this long. Twelve members asking about
+#: the same service should not produce twelve posts in the group.
+GROUP_NUDGE_COOLDOWN = timedelta(minutes=30)
+
+#: (chat_id, command) -> when it was last nudged. In memory on purpose: a
+#: restart forgetting a cooldown costs one extra nudge, which is not worth a
+#: file write on every group message.
+_group_nudge_sent: dict[tuple[int, str], datetime] = {}
+
+#: Commands whose deep link can carry the request through to the private chat,
+#: so the member gets what they asked for instead of having to ask again.
+#: Commands the deep link carries through to the private chat. Kept in step
+#: with DEEP_LINK_FOLLOW_UPS at the bottom of this module, which is what /start
+#: actually runs; a test asserts the two agree.
+DEEP_LINK_COMMANDS = {"events", "announcements", "donate", "help", "privacy"}
+
+
+def _group_command(text: str) -> str | None:
+    """The bare command from a group message, or None if it is not one.
+
+    Handles "/events", "/events@christofgod_bot" and trailing arguments.
+    """
+    if not text or not text.startswith("/"):
+        return None
+    word = text.split()[0][1:]
+    return word.split("@")[0].lower() or None
+
+
+async def nudge_group_to_private(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Answer a command typed in a group by pointing the member to a DM.
+
+    The bot serves private chats only, so before this every group message was
+    dropped in silence — and a member typing /events in the group had no way to
+    learn that the bot could answer. Of twelve registered members, one had ever
+    run a command.
+
+    The reply goes to the GROUP rather than as a DM on purpose: Telegram forbids
+    a bot from opening a conversation with someone who has not started it, so a
+    private reply would be silence for exactly the newcomer who most needs the
+    answer.
+
+    It matters most for /prayer. That used to vanish, leaving the member to type
+    something personal into a group of twelve; now they are redirected before
+    they say it.
+
+    Ordinary group conversation is still dropped without comment — a bot that
+    replied to chatter would be the clutter this exists to avoid.
+    """
+    msg = update.effective_message
+    command = _group_command(getattr(msg, "text", "") or "")
+    if msg is None or command is None:
+        raise ApplicationHandlerStop
+
+    key = (msg.chat.id, command)
+    now = now_tz()
+    last = _group_nudge_sent.get(key)
+    if last is not None and now - last < GROUP_NUDGE_COOLDOWN:
+        raise ApplicationHandlerStop
+    _group_nudge_sent[key] = now
+
+    uid, _, _ = user_info(update)
+    _, lang = await get_user_prefs(uid)
+    payload = command if command in DEEP_LINK_COMMANDS else "start"
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton(
+        t("group_nudge_button", lang),
+        url=f"https://t.me/{BOT_USERNAME}?start={payload}",
+    )]])
+    try:
+        await msg.reply_text(t("group_nudge", lang), reply_markup=kb)
+    except TelegramError:
+        logger.warning("Could not post the group nudge in %s.", msg.chat.id, exc_info=True)
+    raise ApplicationHandlerStop
 
 
 async def ignore_edited_messages(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -683,3 +769,19 @@ async def notif_prefs_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.edit_message_reply_markup(reply_markup=_notif_prefs_keyboard(prefs, lang))
 
 
+# Imported here rather than at the top: announcements.py pulls in the
+# notification and broadcast modules, and importing it at module scope would
+# put this module in the middle of that chain for no reason.
+from handlers.announcements import cmd_announcements  # noqa: E402
+
+#: Deep-link payloads that /start acts on, from the group nudge's button.
+#: Deliberately only commands that ANSWER — nothing that opens a conversation,
+#: because a member who has just pressed Start has not asked to be put into
+#: one, and /cancel would be their first experience of the bot.
+DEEP_LINK_FOLLOW_UPS = {
+    "events": cmd_events,
+    "announcements": cmd_announcements,
+    "donate": cmd_donate,
+    "privacy": cmd_privacy,
+    "help": cmd_help,
+}
