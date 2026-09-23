@@ -189,6 +189,11 @@ STRINGS: dict[str, str] = {
         "Ukuthola imininingwane ngomyalo, thumela `/help <umyalo>` (isb. `/help appointment`)."
     ),
     "help_unknown_topic": "Anginalo usizo ngalokho. Zama okukodwa kwalokhu: {topics}",
+    "group_nudge": (
+        "Asikugcine lokhu ngaphandle kwengxoxo yeqembu — ngithumele umyalezo "
+        "ngasese futhi ngizophendula lapho."
+    ),
+    "group_nudge_button": "Vula ingxoxo eyimfihlo",
     "edited_message_ignored": (
         "Angiyiphenduli imilayezo ehleliwe. Sicela uyithumele futhi "
         "njengomlayezo omusha."

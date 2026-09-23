@@ -27,7 +27,6 @@ from telegram.constants import ChatType
 from telegram.error import TelegramError
 from telegram.ext import (
     Application,
-    ApplicationHandlerStop,
     CallbackQueryHandler,
     ChatMemberHandler,
     CommandHandler,
@@ -193,6 +192,7 @@ from handlers.user_basics import (  # noqa: F401
     cmd_start,
     cmd_stop,
     cmd_unknown,
+    nudge_group_to_private,
     ignore_edited_messages,
     cmd_usercount,
     cmd_userlist,
@@ -306,15 +306,6 @@ async def daily_maintenance_job(context: ContextTypes.DEFAULT_TYPE) -> None:
 # ---------------------------------------------------------------------------
 # Command-execution logging, identity refresh, and config-drift alerts
 # ---------------------------------------------------------------------------
-
-async def _ignore_group_messages(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Drop any message from a group/channel — the bot only serves private chats.
-
-    Raising ApplicationHandlerStop prevents all later handlers (commands,
-    conversations, free-text) from acting on group/channel messages.
-    """
-    raise ApplicationHandlerStop
-
 
 async def _refresh_user_identity(uid: int, uname: str | None, dname: str) -> None:
     """Keep the stored user record's username/display_name in sync with Telegram.
@@ -746,11 +737,12 @@ def main() -> None:
     app.add_handler(ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
 
     # Group -1 runs before the real handlers in group 0:
-    #   1. Drop anything sent from a group/channel (bot serves private chats only)
+    #   1. Group/channel messages: a COMMAND gets a nudge to DM the bot,
+    #      anything else is dropped (the bot serves private chats only)
     #   2. Drop edited messages (update.message is None on those — see below)
     #   3. Log private command execution at INFO
     app.add_handler(
-        MessageHandler(~filters.ChatType.PRIVATE, _ignore_group_messages), group=-1
+        MessageHandler(~filters.ChatType.PRIVATE, nudge_group_to_private), group=-1
     )
     app.add_handler(
         MessageHandler(filters.UpdateType.EDITED_MESSAGE, ignore_edited_messages),
