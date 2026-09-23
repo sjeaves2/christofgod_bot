@@ -19,8 +19,8 @@ Keep this file updated whenever any of it changes in BotFather.
 |---|---|
 | Username | `@christofgod_bot` |
 | Name | `Christ of God bot` |
-| Avatar ("botpic", `/setuserpic`) | `deploy/botfather-avatar.png` (commit the image alongside this file) |
-| Description picture | Set, and confirmed legitimate on 2026-09-16 (not attacker residue). Export and commit it as `deploy/botfather-description-pic.png` so it is restorable. |
+| Avatar ("botpic", `/setuserpic`) | `deploy/botfather-avatar.png` — committed 2026-09-23, 1080×1080 PNG |
+| Description picture | `deploy/botfather-description-pic.png` — committed 2026-09-23, 1584×1224 PNG. Confirmed legitimate on 2026-09-16 (not attacker residue). |
 | Privacy policy URL | `https://github.com/sjeaves2/christofgod_bot/blob/main/PRIVACY.md` |
 
 **Avatar vs description picture.** The *avatar* is the round image shown beside
@@ -125,3 +125,26 @@ restart** — an attacker's edits would survive only until the next deploy.
 
 The trade-off is that changing the description would require a code change and
 a restart rather than a BotFather edit. Worth doing if this happens twice.
+
+## Restoring the images
+
+Both images are in this directory, so they survive anything done to the bot
+through Telegram. BotFather keeps no history: an image that exists only in
+Telegram cannot be recovered once someone replaces it, which is how the
+description was lost on 2026-09-16.
+
+- **Avatar** — BotFather → `/mybots` → the bot → *Edit Bot* → *Edit Botpic*,
+  then send `deploy/botfather-avatar.png`. Telegram crops it to a circle, so
+  it must stay square.
+- **Description picture** — *Edit Bot* → *Edit Description Picture*, then send
+  `deploy/botfather-description-pic.png`. This is what someone sees before
+  they press Start, not the round avatar.
+
+`tests/test_botfather_identity_committed.py` fails the build if either file
+goes missing, stops being a PNG, or shrinks to a placeholder, and checks the
+avatar is square and at least 512px.
+
+The description picture carries the PayPal "Scan to donate" QR code. It points
+at the same public donation link `/donate` already gives out, so it is not
+sensitive — but if the PayPal account ever changes, this image needs replacing
+along with the `/donate` link, or it will keep sending people to the old one.
