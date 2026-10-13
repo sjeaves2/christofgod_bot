@@ -31,10 +31,17 @@ from typing import Any
 
 import permissions
 import storage
-from common import _is_affirmative, get_user_prefs, now_tz, reply_markdown, send_markdown
+from common import (
+    _is_affirmative,
+    format_dt,
+    get_user_prefs,
+    now_tz,
+    reply_markdown,
+    send_markdown,
+)
 from localization import t
 from permissions import user_info
-from settings import activity
+from settings import TZ, activity
 from telegram import Update
 from telegram.error import TelegramError
 from telegram.ext import ContextTypes, ConversationHandler
@@ -56,6 +63,68 @@ RESP_SELECT, RESP_TEXT = range(42, 44)
 STATUS_PENDING = "pending"
 STATUS_ANSWERED = "answered"
 STATUS_DISMISSED = "dismissed"
+
+
+# Rate limits. A prayer request costs the member nothing to send and DMs every
+# prayer admin, so it was the one member-reachable input with no throttle
+# (appointments already have a cooldown and a pending cap). Found in the
+# 2026-10-13 security review.
+#
+# Both windows are ROLLING, not calendar days: a calendar reset invites five at
+# 23:59 and five more a minute later, and "you may send another at 3:15" is a
+# more honest thing to tell someone than "tomorrow".
+PRAYER_COOLDOWN = timedelta(minutes=5)
+PRAYER_DAILY_LIMIT = 5
+PRAYER_DAILY_WINDOW = timedelta(hours=24)
+
+
+def _created_times(requests: list[dict[str, Any]], chat_id: int) -> list[datetime]:
+    """When this member submitted, newest last. Unparseable records are skipped.
+
+    Read from the stored requests rather than a counter in memory: the stub of
+    an answered or dismissed request keeps its `created`, so the limit survives
+    a restart and needs no new state file. Stubs are purged after
+    STUB_RETENTION_DAYS (30), far outside any window here.
+    """
+    out: list[datetime] = []
+    for r in requests:
+        if r.get("requester_chat_id") != chat_id:
+            continue
+        raw = r.get("created")
+        if not raw:
+            continue
+        try:
+            dt = datetime.fromisoformat(str(raw))
+        except ValueError:
+            continue
+        if dt.tzinfo is None:          # tolerate a naive legacy record
+            dt = TZ.localize(dt)
+        out.append(dt)
+    return sorted(out)
+
+
+def next_allowed_at(requests: list[dict[str, Any]], chat_id: int,
+                    now: datetime | None = None) -> datetime | None:
+    """When this member may next submit, or None if they may submit now.
+
+    Returns the LATER of the two limits, so a member is never told to come back
+    at a time when the other limit would still refuse them.
+    """
+    now = now or now_tz()
+    mine = _created_times(requests, chat_id)
+    if not mine:
+        return None
+
+    waits: list[datetime] = []
+    if now - mine[-1] < PRAYER_COOLDOWN:
+        waits.append(mine[-1] + PRAYER_COOLDOWN)
+
+    in_window = [c for c in mine if now - c < PRAYER_DAILY_WINDOW]
+    if len(in_window) >= PRAYER_DAILY_LIMIT:
+        # A slot frees when the oldest of the most recent LIMIT falls out.
+        waits.append(sorted(in_window)[-PRAYER_DAILY_LIMIT] + PRAYER_DAILY_WINDOW)
+
+    return max(waits) if waits else None
 
 
 def new_request_id() -> str:
@@ -173,7 +242,20 @@ def format_for_admin(req: dict[str, Any]) -> str:
 async def cmd_prayer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     uid, uname, dname = user_info(update)
     activity.log_command("prayer", uid, uname, dname)
-    _, lang = await get_user_prefs(uid)
+    tz, lang = await get_user_prefs(uid)
+
+    # Checked HERE, before the member writes anything. Refusing after someone
+    # has typed out a page about a crisis would be a cruel way to enforce a
+    # limit, and they would have to retype it. Prayer admins are exempt: they
+    # may be submitting for someone who phoned in or has no Telegram.
+    if not permissions.is_prayer_admin(update):
+        retry_at = next_allowed_at(await storage.get_prayer_requests(), uid)
+        if retry_at is not None:
+            activity.log_command("prayer", uid, uname, dname, details="rate limited")
+            await reply_markdown(update.message, t(
+                "prayer_rate_limited", lang, when=format_dt(retry_at, tz, lang)))
+            return ConversationHandler.END
+
     context.user_data.pop("pr_text", None)
     await reply_markdown(update.message, t("prayer_prompt", lang, limit=PRAYER_MAX))
     return PR_TEXT
