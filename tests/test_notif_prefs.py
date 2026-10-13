@@ -265,7 +265,7 @@ class TestDeliveryToOptedIn:
 
         sent = []
 
-        async def _send_payload(bot_, chat_id, media, text, caches):
+        async def _send_payload(bot_, chat_id, media, text, caches, **kwargs):
             sent.append(chat_id)
             return True
 
