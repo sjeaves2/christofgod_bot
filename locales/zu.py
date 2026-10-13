@@ -152,6 +152,7 @@ STRINGS: dict[str, str] = {
     "notif_reminder_title": "🔔 *Isikhumbuzo: {name}*",
     "notif_service_begins": "Inkonzo iqala: {when}",
     "notif_join": "🔗 Joyina: {url}",
+    "notif_join_button": "🔗 Joyina inkonzo",
     "notif_announcements_header": "⚠️ *Izaziso:*",
 
     # -- /settimezone --

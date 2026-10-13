@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import pytz
-from telegram import InputFile
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 from telegram.constants import ParseMode
 from telegram.error import BadRequest, TelegramError
 from telegram.ext import Application, ContextTypes
@@ -49,20 +49,47 @@ logger = logging.getLogger(__name__)
 # partial, and why it showed up right after the catch-up job pruned the map.
 _state_lock = asyncio.Lock()
 
-def _render_notification(event: dict[str, Any], tz: pytz.BaseTzInfo, lang: str) -> str:
-    """Build a reminder message localized and time-zoned for one recipient."""
+#: Telegram rejects a whole message if an inline button's url is not a valid
+#: http(s) URL, so anything else keeps the old behaviour of printing the link in
+#: the text. A placeholder link passes this and leads nowhere — that is a
+#: configuration problem, and check_service_links() is what reports it.
+def _join_url(event: dict[str, Any]) -> str | None:
+    url = (event.get("url") or "").strip()
+    if not url.lower().startswith(("http://", "https://")):
+        return None
+    return None if any(c.isspace() for c in url) else url
+
+
+def _join_markup(event: dict[str, Any], lang: str) -> InlineKeyboardMarkup | None:
+    """A tappable "Join the service" button, or None if the link cannot be one."""
+    url = _join_url(event)
+    if not url:
+        return None
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton(t("notif_join_button", lang), url=url)]])
+
+
+def _render_notification(event: dict[str, Any], tz: pytz.BaseTzInfo, lang: str,
+                         inline_url: bool = True) -> str:
+    """Build a reminder message localized and time-zoned for one recipient.
+
+    inline_url=False leaves the join link out of the text, for when a tappable
+    button carries it instead — a 90-character Zoom URL in the body is both
+    ugly and fiddly to hit on a phone.
+    """
     lines = [
         t("notif_reminder_title", lang, name=md(event["name"])),
         t("notif_service_begins", lang, when=format_dt(event["service_time"], tz, lang)),
     ]
     if event.get("description"):
         lines.append(f"\n_{md(event['description'])}_")
-    if event.get("url"):
-        # The url is escaped like every other field. A Zoom password may contain
-        # an underscore, and a freshly seeded config contains a placeholder — and
-        # ONE unbalanced marker makes Telegram reject the whole message, so an
-        # unescaped link here silently cancels the reminder for the congregation.
-        # This is the same defect that broke /events on 2026-09-17.
+    if event.get("url") and inline_url:
+        # Only when no button carries the link. The url is escaped like every
+        # other field: a Zoom password may contain an underscore, and a freshly
+        # seeded config contains a placeholder — ONE unbalanced marker makes
+        # Telegram reject the whole message, so an unescaped link here silently
+        # cancels the reminder. That is the defect that broke /events on
+        # 2026-09-17.
         lines.append("\n" + t("notif_join", lang, url=md(event["url"])))
     if event.get("announcements"):
         lines.append("\n" + t("notif_announcements_header", lang))
@@ -100,7 +127,8 @@ def _resolve_local_media(src: str | None) -> Path | None:
 
 
 async def _send_media(bot, chat_id, kind: str, source: str,
-                      caption: str | None = None, cache: dict | None = None):
+                      caption: str | None = None, cache: dict | None = None,
+                      reply_markup=None):
     """Send a photo or document to one chat.
 
     *source* may be an https URL, a local file path, or a Telegram file_id.
@@ -123,10 +151,12 @@ async def _send_media(bot, chat_id, kind: str, source: str,
             media = source  # assume it's already a Telegram file_id
     try:
         if kind == "photo":
-            msg = await bot.send_photo(chat_id, media, caption=caption, parse_mode=parse_mode)
+            msg = await bot.send_photo(chat_id, media, caption=caption,
+                                       parse_mode=parse_mode, reply_markup=reply_markup)
             fid = msg.photo[-1].file_id if getattr(msg, "photo", None) else None
         else:
-            msg = await bot.send_document(chat_id, media, caption=caption, parse_mode=parse_mode)
+            msg = await bot.send_document(chat_id, media, caption=caption,
+                                          parse_mode=parse_mode, reply_markup=reply_markup)
             fid = msg.document.file_id if getattr(msg, "document", None) else None
     finally:
         if opened:
@@ -136,40 +166,44 @@ async def _send_media(bot, chat_id, kind: str, source: str,
     return fid
 
 
-async def _send_markdown(bot, chat_id, text: str) -> None:
-    """Send *text* as Markdown, falling back to plain text if Telegram rejects it.
+async def _send_markdown(bot, chat_id, text: str, reply_markup=None) -> None:
+    """Send *text* as Markdown, with whatever button the caller supplied.
 
-    Escaping above should make this unreachable. It is here because the cost of
-    the two failures is wildly asymmetric: a reminder that renders without bold
-    is a cosmetic blemish, a reminder that never arrives means someone misses a
-    service. Never let formatting be the reason a notification goes undelivered.
+    common.send_markdown owns the Markdown-to-plain fallback (v0.18.0); this
+    exists only to keep the notification call sites reading as one operation.
+    A BadRequest that is NOT a formatting fault — an unacceptable button url,
+    say — propagates, so the caller can decide: see deliver_event_notifications,
+    which resends with the link in the text rather than losing the reminder.
     """
-    try:
-        await send_markdown(bot, chat_id, text)
-    except BadRequest:
-        logger.warning("Notification to %s failed to render as Markdown; sending plain.", chat_id)
-        await bot.send_message(chat_id, text)
+    await send_markdown(bot, chat_id, text, reply_markup=reply_markup)
 
 
-async def _send_notification_payload(bot, chat_id, media: dict, text: str, caches: dict) -> None:
+async def _send_notification_payload(bot, chat_id, media: dict, text: str, caches: dict,
+                                    reply_markup=None) -> None:
     """Deliver a notification to one chat: image/document with the reminder text as
     a caption, plus the text as its own message if it exceeds the caption limit."""
     image = media.get("image")
     document = media.get("document")
     if not image and not document:
-        await _send_markdown(bot, chat_id, text)
+        await _send_markdown(bot, chat_id, text, reply_markup=reply_markup)
         return
     caption = text if len(text) <= CAPTION_LIMIT else None
     caption_used = False
     if image:
-        await _send_media(bot, chat_id, "photo", image, caption=caption, cache=caches["image"])
+        # The button rides with whichever message carries the caption, so the
+        # member sees one message with the text and the link together.
+        await _send_media(bot, chat_id, "photo", image, caption=caption,
+                          cache=caches["image"],
+                          reply_markup=reply_markup if caption else None)
         caption_used = caption is not None
     if document:
         cap = None if caption_used else caption
-        await _send_media(bot, chat_id, "document", document, caption=cap, cache=caches["document"])
+        await _send_media(bot, chat_id, "document", document, caption=cap,
+                          cache=caches["document"],
+                          reply_markup=reply_markup if cap else None)
         caption_used = caption_used or (cap is not None)
     if caption is None:  # text too long to be a caption — send separately
-        await _send_markdown(bot, chat_id, text)
+        await _send_markdown(bot, chat_id, text, reply_markup=reply_markup)
 
 
 async def _notification_recipients(event: dict[str, Any]) -> dict:
@@ -235,9 +269,23 @@ async def deliver_event_notifications(bot, event: dict[str, Any]) -> int:
     delivered: set = set()
     for chat_id in pending:
         tz, lang = recipients[chat_id]
-        text = _render_notification(event, tz, lang)
+        markup = _join_markup(event, lang)
+        text = _render_notification(event, tz, lang, inline_url=markup is None)
         try:
-            await _send_notification_payload(bot, chat_id, media, text, caches)
+            try:
+                await _send_notification_payload(bot, chat_id, media, text, caches,
+                                                 reply_markup=markup)
+            except BadRequest as exc:
+                # A url Telegram will not accept as a button (BUTTON_URL_INVALID
+                # and friends). Never let a link cost the whole reminder: resend
+                # with the link in the text, as before buttons existed.
+                if markup is None:
+                    raise
+                logger.warning("Join button rejected for chat %s (%s); "
+                               "resending with the link in the text.", chat_id, exc)
+                await _send_notification_payload(
+                    bot, chat_id, media,
+                    _render_notification(event, tz, lang, inline_url=True), caches)
             delivered.add(chat_id)
             sent += 1
         except TelegramError as exc:
