@@ -147,6 +147,7 @@ STRINGS: dict[str, str] = {
     "notif_reminder_title": "🔔 *Reminder: {name}*",
     "notif_service_begins": "Service begins: {when}",
     "notif_join": "🔗 Join: {url}",
+    "notif_join_button": "🔗 Join the service",
     "notif_announcements_header": "⚠️ *Announcements:*",
 
     # -- /settimezone --
