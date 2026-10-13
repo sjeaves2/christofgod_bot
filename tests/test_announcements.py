@@ -363,7 +363,31 @@ class TestTranslationModule:
         import translation
         assert translation.translate("", "en", "es") is None
 
-    def test_backend_exception_returns_none(self):
+    def test_no_backend_returns_none(self):
+        """There is no translation backend; every call must return None.
+
+        Removed 2026-10-13 with deep-translator, which was the only source of
+        four security advisories and had never produced a translation in
+        production (the free Google endpoint refuses AWS IPs). Callers already
+        fall back to the original text, so this IS the production behaviour,
+        not a regression.
+        """
         import translation
-        with patch("deep_translator.GoogleTranslator", side_effect=RuntimeError("down")):
-            assert translation.translate("hello", "en", "es") is None
+        assert translation.translate("hello", "en", "es") is None
+
+    def test_the_library_is_gone(self):
+        """A reinstated dependency should be a deliberate act, not a drift."""
+        reqs = (Path(__file__).resolve().parents[1] / "requirements.txt").read_text()
+        assert "deep-translator" not in reqs, (
+            "deep-translator is back in requirements.txt. It brought four "
+            "advisories (PYSEC-2022-252, and three in urllib3 via requests). "
+            "If a backend is genuinely wanted, choose one that is maintained "
+            "and works from AWS, and say so here."
+        )
+
+    def test_callers_still_fall_back_to_the_original(self):
+        """The contract the rest of the code depends on."""
+        import translation
+        for args in [("hello", "en", "es"), ("", "en", "es"),
+                     ("hello", "en", "en"), ("hello", "en", "xx")]:
+            assert translation.translate(*args) is None

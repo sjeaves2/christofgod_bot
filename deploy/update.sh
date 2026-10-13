@@ -58,8 +58,24 @@ echo "    $previous -> $current"
 echo "==> Installing dependencies"
 "$VENV/bin/pip" install -q -r requirements.txt
 
+# pip install never REMOVES. A dependency dropped from requirements.txt stays
+# in the venv for good, and keeps its advisories with it — removing
+# deep-translator on 2026-10-13 would otherwise have left requests, urllib3 and
+# beautifulsoup4 behind, carrying the four CVEs the removal was meant to clear.
+echo "==> Removing packages requirements.txt no longer needs"
+orphans="$("$VENV/bin/python" deploy/prune_venv.py requirements.txt || true)"
+if [ -n "$orphans" ]; then
+    echo "$orphans" | sed "s/^/    - /"
+    # shellcheck disable=SC2086
+    "$VENV/bin/pip" uninstall -q -y $orphans || true
+else
+    echo "    nothing to remove"
+fi
+
 # Import check before restarting: catches a missing dependency or a syntax
-# error while the old process is still happily running.
+# error while the old process is still happily running. It is also what
+# verifies the pruning above — anything wrongly removed shows up here, before
+# the running bot is touched.
 echo "==> Verifying the new code imports"
 if ! "$VENV/bin/python" -c "import bot" > /dev/null; then
     echo
@@ -69,6 +85,11 @@ if ! "$VENV/bin/python" -c "import bot" > /dev/null; then
     # the next run would then see main already at origin/main, report "already
     # up to date", and quietly leave the broken files in place.
     git reset --hard --quiet "$previous"
+    # A git reset does not undo an uninstall, so put the venv back too. Without
+    # this, a bad prune would leave the bot unable to start on the NEXT restart
+    # even though the code had been rolled back.
+    echo "    restoring the virtualenv"
+    "$VENV/bin/pip" install -q -r requirements.txt || true
     echo "Rolled back. Fix the problem, push, then re-run ./deploy/update.sh"
     exit 1
 fi
