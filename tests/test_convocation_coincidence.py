@@ -81,7 +81,7 @@ class TestNoDuplicateNotifications:
                 "announcements": [], "url": "", "description": ""}
 
     async def _deliver_both(self, sends):
-        async def fake_send(bot, chat_id, media, text, caches):
+        async def fake_send(bot, chat_id, media, text, caches, **kwargs):
             sends.append(chat_id)
             await asyncio.sleep(0.01)  # real network latency: forces interleaving
 
@@ -122,7 +122,7 @@ class TestNoDuplicateNotifications:
         self._isolate()
 
         async def go():
-            async def fake_send(bot, chat_id, media, text, caches):
+            async def fake_send(bot, chat_id, media, text, caches, **kwargs):
                 return None
             with patch.object(N, "_send_notification_payload", fake_send), \
                  patch.object(storage, "get_all_users", AsyncMock(return_value=[])):
@@ -139,7 +139,7 @@ class TestNoDuplicateNotifications:
             {"other": {"name": "Other", "service_time": "x", "notified": [-999]}})
 
         async def go():
-            async def fake_send(bot, chat_id, media, text, caches):
+            async def fake_send(bot, chat_id, media, text, caches, **kwargs):
                 await asyncio.sleep(0.01)
             with patch.object(N, "_send_notification_payload", fake_send), \
                  patch.object(storage, "get_all_users", AsyncMock(return_value=[])):
