@@ -48,6 +48,26 @@ else
     echo "    data/events.yaml already present — left untouched"
 fi
 
+# Everything under data/ and logs/ is congregational: names, phone numbers,
+# appointment purposes, prayer-request stubs. config/ holds the bot token and
+# the admin list. None of it should be world-readable, and a umask on a shared
+# box is not a guarantee — set the modes explicitly, every run, so a file
+# created loosely at some point is corrected rather than inherited forever.
+# NB: no global `umask` here — this script later writes the systemd unit via
+# `sudo tee`, and a lingering restrictive umask would create it 0600. The
+# directory modes below are what actually protect these files: 750 stops any
+# other local user traversing in, whatever mode a file inside happens to have.
+echo "==> Tightening permissions on data and configuration"
+mkdir -p data logs
+chmod 750 data logs 2>/dev/null || true
+find data logs -type f -exec chmod 640 {} + 2>/dev/null || true
+# config.yaml holds the live bot token: owner-only, not even the group.
+[ -f config/config.yaml ] && chmod 600 config/config.yaml
+for f in config/admins.yaml config/officials.yaml; do
+    [ -f "$f" ] && chmod 640 "$f"
+done
+echo "    data/ and logs/ 750, their contents 640, config/config.yaml 600"
+
 echo "==> Checking configuration"
 missing=0
 if [ ! -f config/config.yaml ]; then

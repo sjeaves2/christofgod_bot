@@ -20,10 +20,29 @@ import handlers.appointments as ha
 TZ = pytz.timezone("America/New_York")
 
 
+def _ahead(days: int, **replace):
+    """A tz-aware datetime *days* from now, with the offset CORRECT for THAT date.
+
+    `datetime.now(TZ) + timedelta(days=30)` keeps TODAY's UTC offset. Across a
+    DST boundary that is an hour away from what `TZ.localize()` produces for the
+    same wall-clock time — and `TZ.localize()` is what the handlers do with a
+    date and time the user types.
+
+    That broke test_overlapping_time_rejected for the fortnight before the
+    2026-11-01 DST change: the fixture's 10:00 was EDT while the handler read
+    10:15 as EST, so the two no longer overlapped and the rejection never
+    fired. A real appointment is never built this way, so the bug was in the
+    fixture, not the product — but it failed CI for a month every autumn.
+
+    Build the wall-clock time first, then localize it, exactly as the code does.
+    """
+    naive = datetime.now(TZ).replace(tzinfo=None) + timedelta(days=days)
+    return TZ.localize(naive.replace(**replace))
+
+
 def _future(hour: int, minute: int):
     """A fixed time of day on a day ~30 days out — relative so it never rots."""
-    base = datetime.now(TZ) + timedelta(days=30)
-    return base.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    return _ahead(30, hour=hour, minute=minute, second=0, microsecond=0)
 
 
 
@@ -53,7 +72,7 @@ def _officials() -> list:
 
 
 def _make_appt(user_chat_id=111, official_id="off1", status="pending", appt_id="EXIST1") -> dict:
-    dt = (datetime.now(TZ) + timedelta(days=5)).replace(microsecond=0)
+    dt = _ahead(5, microsecond=0)
     return {
         "id": appt_id,
         "user_chat_id": user_chat_id,
@@ -84,7 +103,7 @@ class TestHelpers:
         assert 175 <= delta_days <= 190
 
     def _at(self, days, status="pending", official_id="off1", user_chat_id=111, i=0):
-        dt = (datetime.now(TZ) + timedelta(days=days)).replace(microsecond=0)
+        dt = _ahead(days, microsecond=0)
         return {
             "id": f"A{i}", "user_chat_id": user_chat_id, "official_id": official_id,
             "official_name": "Pastor Test", "requested_datetime": dt.isoformat(),
@@ -92,7 +111,7 @@ class TestHelpers:
         }
 
     def _end(self, days=6):
-        return (datetime.now(TZ) + timedelta(days=days)).replace(microsecond=0)
+        return _ahead(days, microsecond=0)
 
     def test_counts_active_appt_in_window(self):
         from handlers.appointments import _count_active_appts_with_official
@@ -229,14 +248,14 @@ class TestDateWindow:
 
     async def test_future_date_accepted(self):
         from handlers.appointments import AP_DESC
-        future = (datetime.now(TZ) + timedelta(days=30)).strftime("%Y-%m-%d")
+        future = _ahead(30).strftime("%Y-%m-%d")
         result, _, ctx = await self._run_ap_time(future, "10:00")
         assert result == AP_DESC
         assert ctx.user_data.get("ap_time") == "10:00"
 
     async def test_past_date_rejected(self):
         from handlers.appointments import AP_DATE
-        past = (datetime.now(TZ) - timedelta(days=1)).strftime("%Y-%m-%d")
+        past = _ahead(-1).strftime("%Y-%m-%d")
         result, upd, ctx = await self._run_ap_time(past, "10:00")
         assert result == AP_DATE
         assert "ap_time" not in ctx.user_data
@@ -244,7 +263,7 @@ class TestDateWindow:
 
     async def test_too_far_future_rejected(self):
         from handlers.appointments import AP_DATE
-        far = (datetime.now(TZ) + timedelta(days=400)).strftime("%Y-%m-%d")
+        far = _ahead(400).strftime("%Y-%m-%d")
         result, upd, ctx = await self._run_ap_time(far, "10:00")
         assert result == AP_DATE
         assert "ap_time" not in ctx.user_data
@@ -253,7 +272,7 @@ class TestDateWindow:
 
     async def test_just_inside_window_accepted(self):
         from handlers.appointments import AP_DESC
-        near = (datetime.now(TZ) + timedelta(days=150)).strftime("%Y-%m-%d")
+        near = _ahead(150).strftime("%Y-%m-%d")
         result, _, _ = await self._run_ap_time(near, "10:00")
         assert result == AP_DESC
 
@@ -266,14 +285,13 @@ class TestDateWindow:
 
     async def test_bad_time_format_stays_in_time(self):
         from handlers.appointments import AP_TIME
-        future = (datetime.now(TZ) + timedelta(days=30)).strftime("%Y-%m-%d")
+        future = _ahead(30).strftime("%Y-%m-%d")
         result, _, _ = await self._run_ap_time(future, "9am")
         assert result == AP_TIME
 
     async def test_overlapping_time_rejected(self):
         from handlers.appointments import AP_DATE
-        day = (datetime.now(TZ) + timedelta(days=30)).replace(
-            hour=10, minute=0, second=0, microsecond=0)
+        day = _ahead(30, hour=10, minute=0, second=0, microsecond=0)
         existing = {
             "id": "CLASH1", "user_chat_id": 111, "official_id": "off2",
             "official_name": "Bishop X",
@@ -289,8 +307,7 @@ class TestDateWindow:
 
     async def test_non_overlapping_time_accepted(self):
         from handlers.appointments import AP_DESC
-        day = (datetime.now(TZ) + timedelta(days=30)).replace(
-            hour=10, minute=0, second=0, microsecond=0)
+        day = _ahead(30, hour=10, minute=0, second=0, microsecond=0)
         existing = {
             "id": "OK1", "user_chat_id": 111, "official_id": "off2",
             "official_name": "Bishop X",
@@ -362,8 +379,7 @@ class TestApOfficialSelection:
 class TestPerOfficialWindowLimit:
     def _appt_offset(self, days, official_id="off1", user_chat_id=111, status="confirmed", i=0):
         # An appointment `days` from now, at 09:00 on that day.
-        dt = (datetime.now(TZ) + timedelta(days=days)).replace(
-            hour=9, minute=0, second=0, microsecond=0)
+        dt = _ahead(days, hour=9, minute=0, second=0, microsecond=0)
         return {
             "id": f"W{i}", "user_chat_id": user_chat_id, "official_id": official_id,
             "official_name": "Pastor Test", "requested_datetime": dt.isoformat(),
@@ -441,7 +457,7 @@ class TestConfirmGuard:
     async def _run_confirm(self, existing_appts):
         from handlers.appointments import ap_confirm
         ctx = _make_context()
-        future = datetime.now(TZ) + timedelta(days=10)
+        future = _ahead(10)
         ctx.user_data.update({
             "ap_official": {"id": "off1", "name": "Pastor Test"},
             "ap_date": future.strftime("%Y-%m-%d"),
@@ -484,7 +500,7 @@ class TestConfirmGuard:
     async def test_blocks_when_limit_reached(self):
         from telegram.ext import ConversationHandler
         # 4 existing appts with off1 within the window → the 5th is blocked.
-        base = datetime.now(TZ) + timedelta(days=10)
+        base = _ahead(10)
         existing = []
         for k in range(4):
             dt = (base - timedelta(days=k + 1)).replace(hour=9, minute=0, second=0, microsecond=0)
@@ -502,7 +518,7 @@ class TestConfirmGuard:
     async def test_blocks_when_overlap_with_other_official_appears(self):
         from telegram.ext import ConversationHandler
         # Same 10:00 slot as the confirm flow's date/time, but a different official.
-        future = datetime.now(TZ) + timedelta(days=10)
+        future = _ahead(10)
         slot = future.replace(hour=10, minute=0, second=0, microsecond=0)
         clash = {
             "id": "CLASH2", "user_chat_id": 111, "official_id": "off2",
@@ -524,8 +540,7 @@ class TestConfirmGuard:
 
 class TestCallbackOverlapGuard:
     def _slot(self, hour=10):
-        return (datetime.now(TZ) + timedelta(days=10)).replace(
-            hour=hour, minute=0, second=0, microsecond=0)
+        return _ahead(10, hour=hour, minute=0, second=0, microsecond=0)
 
     def _target(self, appt_id="TARGET", **extra):
         slot = self._slot()
@@ -725,12 +740,12 @@ class TestCallbackOverlapGuard:
 class TestPastGuards:
     def test_appt_is_past_true(self):
         from handlers.appointments import _appt_is_past
-        past = (datetime.now(TZ) - timedelta(days=1)).replace(microsecond=0)
+        past = _ahead(-1, microsecond=0)
         assert _appt_is_past({"confirmed_datetime": past.isoformat()}) is True
 
     def test_appt_is_past_false_for_future(self):
         from handlers.appointments import _appt_is_past
-        fut = (datetime.now(TZ) + timedelta(days=1)).replace(microsecond=0)
+        fut = _ahead(1, microsecond=0)
         assert _appt_is_past({"requested_datetime": fut.isoformat()}) is False
 
     def test_datetime_is_past_string(self):
@@ -776,22 +791,22 @@ class TestReschedulePastGuards:
         return upd, saved
 
     async def test_proposing_past_time_rejected(self):
-        appt = self._appt(datetime.now(TZ) + timedelta(days=3))
+        appt = self._appt(_ahead(3))
         upd, saved = await self._run_counter_msg(appt, "2000-01-01 10:00")
         # Not applied: status stays pending, nothing saved as counter_proposed.
         assert appt["status"] == "pending"
         assert "past" in upd.message.reply_text.call_args[0][0].lower()
 
     async def test_proposing_future_time_accepted(self):
-        appt = self._appt(datetime.now(TZ) + timedelta(days=3))
-        future = (datetime.now(TZ) + timedelta(days=10)).strftime("%Y-%m-%d 10:00")
+        appt = self._appt(_ahead(3))
+        future = _ahead(10).strftime("%Y-%m-%d 10:00")
         upd, saved = await self._run_counter_msg(appt, future)
         assert appt["status"] == "counter_proposed"
 
     async def test_counter_on_past_appointment_blocked(self):
         # appt_callback "counter" on a past appointment is refused.
         from handlers.appointments import CB_APPT_PREFIX
-        past = self._appt(datetime.now(TZ) - timedelta(days=1), appt_id="PASTR")
+        past = self._appt(_ahead(-1), appt_id="PASTR")
         ctx = _make_context()
         q = MagicMock()
         q.answer = AsyncMock()
@@ -809,3 +824,31 @@ class TestReschedulePastGuards:
             await ha.appt_callback(upd, ctx)
         assert "PASTR" not in ha._counter_propose_state
         assert "passed" in q.edit_message_text.call_args[0][0].lower()
+
+
+class TestTheFixtureHelperItself:
+    """_ahead() must agree with what the handlers compute, all year round.
+
+    The bug this guards against only bites when "now + N days" crosses a DST
+    change, so a test that merely exercises the fixtures would pass for most of
+    the year and fail every autumn — which is exactly what happened. Spanning
+    several horizons means at least one crosses a boundary from any date.
+    """
+
+    def test_offset_always_matches_localize_for_that_date(self):
+        for days in (1, 30, 120, 200, 300):
+            d = _ahead(days)
+            expected = TZ.localize(d.replace(tzinfo=None))
+            assert d.utcoffset() == expected.utcoffset(), (
+                f"_ahead({days}) carries the wrong UTC offset: {d.utcoffset()} "
+                f"vs {expected.utcoffset()} that TZ.localize gives for "
+                f"{d.replace(tzinfo=None)}. A handler localizing the same "
+                "wall-clock time would disagree with the fixture by an hour."
+            )
+
+    def test_wall_clock_fields_are_preserved(self):
+        d = _ahead(30, hour=10, minute=15, second=0, microsecond=0)
+        assert (d.hour, d.minute) == (10, 15)
+
+    def test_negative_days_go_backwards(self):
+        assert _ahead(-1) < _ahead(0) < _ahead(1)
