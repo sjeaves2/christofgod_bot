@@ -118,3 +118,47 @@ class TestUpdateScriptIsWrapped:
         """main "$@" must forward the release tag, or it deploys main instead."""
         t = self._text()
         assert 'TARGET="${1:-}"' in t and 'git checkout --quiet "$TARGET"' in t
+
+
+class TestSetupTightensPermissions:
+    """data/ and logs/ hold congregational data; config/ holds the token.
+
+    Found 2026-10-13 during a security review: data/ and logs/ were 0775 and
+    admins.yaml 0664 on the server. Nothing was actually exposed — /home/ubuntu
+    is 0750 and it is a single-user box — but the modes were inherited rather
+    than chosen, and the next box might not be single-user.
+
+    setup.sh sets them on every run, so a file created loosely at some point is
+    corrected rather than inherited forever.
+    """
+
+    @staticmethod
+    def _text():
+        return (REPO / "deploy" / "setup.sh").read_text()
+
+    def test_data_and_log_directories_are_not_world_readable(self):
+        assert "chmod 750 data logs" in self._text()
+
+    def test_the_token_file_is_owner_only(self):
+        t = self._text()
+        assert "chmod 600 config/config.yaml" in t, (
+            "config.yaml holds the live bot token; group-readable is not enough"
+        )
+
+    def test_the_admin_list_is_not_world_readable(self):
+        assert "config/admins.yaml" in self._text()
+
+    def test_no_global_umask_is_left_set(self):
+        """setup.sh writes the systemd unit with `sudo tee` further down; a
+        lingering restrictive umask would create that unit 0600."""
+        body = self._text()
+        assert "\numask " not in body, (
+            "a global umask here would also apply to the systemd unit written "
+            "later in this script"
+        )
+
+    def test_the_script_still_parses(self):
+        import subprocess
+        p = subprocess.run(["bash", "-n", str(REPO / "deploy" / "setup.sh")],
+                           capture_output=True, text=True)
+        assert p.returncode == 0, p.stderr

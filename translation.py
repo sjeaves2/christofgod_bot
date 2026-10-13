@@ -1,12 +1,23 @@
 """Best-effort machine translation for admin-typed runtime content.
 
-Wraps deep-translator's Google backend behind a tiny, failure-safe interface so
-the rest of the codebase never imports the library directly — swapping backends
-(official Cloud Translate, DeepL, an LLM) only changes this module.
+**There is currently no backend.** translate() returns None, so callers fall
+back to the original text — which is exactly what happened in production
+anyway: deep-translator's free Google endpoint refuses requests from AWS IPs,
+so every call from the server had already been returning None.
+
+The library was removed on 2026-10-13 because it was the sole source of four
+security advisories (its own PYSEC-2022-252, and three in urllib3 2.7.0 reached
+through requests), none of which bought anything: in the live data not one
+announcement had ever been translated, and none had a cached translation.
+
+This module stays because the contract is worth keeping. The rest of the
+codebase never imports a translation library directly, so adding a backend that
+works — Google Cloud Translate with a key, DeepL, a self-hosted
+LibreTranslate — is a change to this one function and nothing else.
 
 Design contract: translate() NEVER raises. Any failure — network down,
-throttling, unsupported language, library breakage — returns None, and callers
-fall back to the original text.
+throttling, unsupported language, no backend at all — returns None, and callers
+fall back to the original text. Every caller already relies on this.
 """
 
 from __future__ import annotations
@@ -15,24 +26,21 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Our locale codes happen to match Google's for the languages we offer
-# (en, es, fr, zu). Map here if that ever diverges.
-_GOOGLE_LANG = {"en": "en", "es": "es", "fr": "fr", "zu": "zu"}
+# Locale codes we offer. A new backend maps these to whatever it expects.
+SUPPORTED = ("en", "es", "fr", "zu")
 
 
 def translate(text: str, source_lang: str, target_lang: str) -> str | None:
     """Translate *text*, or return None if translation isn't possible.
 
-    Blocking (network call) — invoke via asyncio.to_thread from async code.
+    Returns None for everything while no backend is configured. Kept blocking
+    in signature (callers use asyncio.to_thread) so wiring a real backend in
+    does not ripple outwards.
     """
-    src = _GOOGLE_LANG.get(source_lang)
-    dst = _GOOGLE_LANG.get(target_lang)
-    if not text or not src or not dst or src == dst:
+    if not text or source_lang not in SUPPORTED or target_lang not in SUPPORTED:
         return None
-    try:
-        from deep_translator import GoogleTranslator
-        result = GoogleTranslator(source=src, target=dst).translate(text)
-        return result or None
-    except Exception as exc:  # deliberately broad — see module docstring
-        logger.warning("Translation %s→%s failed: %s", source_lang, target_lang, exc)
+    if source_lang == target_lang:
         return None
+    logger.debug("No translation backend configured; %s→%s returning None.",
+                 source_lang, target_lang)
+    return None
