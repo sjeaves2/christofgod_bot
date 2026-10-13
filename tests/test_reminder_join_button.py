@@ -32,10 +32,15 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import handlers.notifications as N  # noqa: E402
 
 TZ = pytz.timezone("America/New_York")
-REAL_URL = "https://us06web.zoom.us/j/81594253541?pwd=e3BzF98vLF2t2biXwRGbCVaRUUOrVN.1"
+# A fixture, never a real link. A Zoom URL embeds its passcode, so a realistic
+# one IS a credential — tests/test_no_secrets_committed.py exists because this
+# repository has leaked one before, and it caught this file using the live
+# Sabbath Eve link on 2026-10-13. Nothing here needs a real host: what these
+# tests exercise is the scheme and the length, not the domain.
+JOIN_URL = "https://example.test/j/1234567890?pwd=NOTAREALPASSCODE.1"
 
 
-def _event(url=REAL_URL, **extra):
+def _event(url=JOIN_URL, **extra):
     ev = {
         "key": "ev1",
         "name": "God's Holy Convocation—Sabbath Eve",
@@ -51,7 +56,7 @@ def _event(url=REAL_URL, **extra):
 
 class TestWhichLinksBecomeButtons:
     @pytest.mark.parametrize("url", [
-        REAL_URL,
+        JOIN_URL,
         "http://example.test/j/1",
         "HTTPS://EXAMPLE.TEST/J/1",          # scheme case is not significant
     ])
@@ -60,7 +65,7 @@ class TestWhichLinksBecomeButtons:
 
     @pytest.mark.parametrize("url", [
         "", None, "   ",
-        "zoom.us/j/1",                        # no scheme
+        "example.test/j/1",                   # no scheme
         "ftp://example.test/j/1",             # wrong scheme
         "https://example.test/j/1 extra",     # whitespace
         "Call Pastor for the link",           # free text an admin might type
@@ -70,7 +75,7 @@ class TestWhichLinksBecomeButtons:
 
     def test_the_button_carries_the_url_unaltered(self):
         btn = N._join_markup(_event(), "en").inline_keyboard[0][0]
-        assert btn.url == REAL_URL, "the passcode must survive intact"
+        assert btn.url == JOIN_URL, "the passcode must survive intact"
 
     def test_the_button_label_is_localized(self):
         from localization import t
@@ -83,12 +88,12 @@ class TestWhichLinksBecomeButtons:
 class TestTheTextAdaptsToTheButton:
     def test_the_url_leaves_the_text_when_a_button_carries_it(self):
         msg = N._render_notification(_event(), TZ, "en", inline_url=False)
-        assert "zoom.us" not in msg, "a 90-character URL in the body is the thing we removed"
+        assert "example.test" not in msg, "the long URL in the body is what we removed"
         assert "Sabbath Eve" in msg, "the rest of the reminder must survive"
 
     def test_the_url_stays_in_the_text_when_there_is_no_button(self):
         msg = N._render_notification(_event(), TZ, "en", inline_url=True)
-        assert "zoom.us" in msg
+        assert "example.test" in msg
 
     def test_an_unbuttonable_link_is_still_shown(self):
         """A link the bot cannot make a button of must not simply vanish."""
@@ -132,7 +137,7 @@ class TestDeliveryUsesTheButton:
         assert len(sends) == 1
         text, markup = sends[0]
         assert markup is not None, "the join link should be a button"
-        assert "zoom.us" not in text
+        assert "example.test" not in text
 
     async def test_a_rejected_button_still_delivers_the_reminder(self):
         """Never let a link cost the whole message — that is the whole lesson
@@ -141,7 +146,7 @@ class TestDeliveryUsesTheButton:
         assert sends, "the reminder must still arrive"
         text, markup = sends[-1]
         assert markup is None, "the retry drops the button"
-        assert "zoom.us" in text, "and puts the link back in the text"
+        assert "example.test" in text, "and puts the link back in the text"
 
     async def test_an_event_with_no_link_sends_no_button(self):
         sends = await self._deliver(_event(url=""))
