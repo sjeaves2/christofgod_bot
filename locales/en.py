@@ -184,6 +184,11 @@ STRINGS: dict[str, str] = {
         "For details on a command, send `/help <command>` (e.g. `/help appointment`)."
     ),
     "help_unknown_topic": "I don't have help for that. Try one of: {topics}",
+    "prayer_rate_limited": (
+        "🙏 So that every request receives the attention it deserves, there is a "
+        "short wait between prayer requests.\n\nYou can send another at {when}.\n\n"
+        "If this is urgent, please contact a minister directly."
+    ),
     "group_nudge": (
         "Let's keep this out of the group chat — message me privately and "
         "I'll answer there."
