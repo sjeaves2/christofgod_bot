@@ -119,6 +119,25 @@ def md(value: Any) -> str:
     return escape_markdown("" if value is None else str(value), version=1)
 
 
+def is_button_url(value: Any) -> str | None:
+    """The url if Telegram will accept it on an inline button, else None.
+
+    Telegram rejects the ENTIRE message when a button's url is unacceptable, so
+    this is the gate every button has to pass. Deliberately strict and dull: a
+    http(s) scheme and no whitespace. Anything else — a bare "zoom.us/j/1", a
+    phone number, or an admin who typed "ask Pastor for the link" — is not a
+    url, and the caller shows it as text instead.
+
+    It does NOT judge whether the link works. A placeholder from the config
+    template passes and leads nowhere; that is a configuration fault, and
+    events.check_service_links() is what reports it.
+    """
+    url = str(value or "").strip()
+    if not url.lower().startswith(("http://", "https://")):
+        return None
+    return None if any(c.isspace() for c in url) else url
+
+
 async def validate_markdown(message, text: str) -> bool:
     """Render *text* back to its author to prove Telegram accepts the markup.
 

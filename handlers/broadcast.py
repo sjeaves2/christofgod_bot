@@ -186,6 +186,9 @@ async def _bc_expand_recipients(options: list[dict], selected: set[str]) -> list
 async def _bc_send_pending(bot, context) -> list[dict]:
     """Send the message/media to all recipients not yet delivered. Returns failures."""
     media: dict | None = context.user_data.get("bc_media")
+    # An announcement may carry a link, shown as a button. None for a plain
+    # /broadcast, and for a media send whose caption went elsewhere.
+    markup = context.user_data.get("bc_markup")
     message: str = context.user_data.get("bc_message", "")
     recipients: list[dict] = context.user_data["bc_recipients"]
     done: set = context.user_data["bc_done"]
@@ -196,9 +199,10 @@ async def _bc_send_pending(bot, context) -> list[dict]:
         try:
             if media:
                 await _send_media(bot, r["chat_id"], media["kind"], media["file_id"],
-                                  caption=media["caption"] or None)
+                                  caption=media["caption"] or None,
+                                  reply_markup=markup if media["caption"] else None)
             else:
-                await send_markdown(bot, r["chat_id"], message)
+                await send_markdown(bot, r["chat_id"], message, reply_markup=markup)
             done.add(r["chat_id"])
         except TelegramError as exc:
             failures.append(r)
