@@ -6,6 +6,12 @@ on:
     branches: ["**"]
   pull_request:
     branches: ["**"]
+  schedule:
+    # Mondays 06:00 UTC. An advisory is published against code that has not
+    # changed, so waiting for the next commit means waiting indefinitely — this
+    # repository goes weeks between pushes. A failed scheduled run emails the
+    # repository owner, which is the whole point.
+    - cron: "0 6 * * 1"
 
 jobs:
   test:
@@ -54,3 +60,53 @@ jobs:
 
       - name: Run tests
         run: pytest -v
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          # 3.12 deliberately, matching the server: the resolver's choice
+          # depends on the interpreter. On 3.9 it picks pillow 11.3.0, which
+          # has advisories; on 3.12 it picks 12.3.0, which does not. Auditing
+          # under the wrong version reports vulnerabilities nobody is running.
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install production dependencies
+        # requirements.txt, not -dev: this asks what the SERVER would install.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Audit installed packages
+        # Freeze first, then audit the frozen list, with pip-audit in a
+        # SEPARATE virtualenv. Two mistakes this avoids, both found by trying
+        # them on 2026-10-14:
+        #
+        #   * `pip-audit -r requirements.txt` does NOT resolve transitive
+        #     dependencies. Given only deep-translator it reports that package
+        #     alone and never looks at urllib3 — which is exactly where three
+        #     of the four advisories in the October review actually were. A
+        #     freeze lists every installed package by name, so nothing is
+        #     missed.
+        #   * Installing pip-audit into the SAME environment drags in its own
+        #     requests/urllib3, and the audit then reports advisories in the
+        #     audit tool rather than in the bot.
+        #
+        # A failure here BLOCKS MERGING, which is intended: the alternative is
+        # finding out months later, by hand, as we did. If an advisory has no
+        # fix and the risk has been accepted, add
+        #   --ignore-vuln <ID>
+        # below WITH A COMMENT saying who accepted it and why. Never silence
+        # the whole step.
+        run: |
+          pip freeze > /tmp/frozen.txt
+          python -m venv /tmp/audit-tool
+          /tmp/audit-tool/bin/pip install -q pip-audit
+          /tmp/audit-tool/bin/pip-audit -r /tmp/frozen.txt --strict --progress-spinner off
