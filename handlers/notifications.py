@@ -18,6 +18,7 @@ from telegram.error import BadRequest, TelegramError
 from telegram.ext import Application, ContextTypes
 
 from common import (
+    is_button_url,
     md,
     send_markdown,
     _answer_cb,  # noqa: F401  (re-exported for handlers importing from here)
@@ -49,20 +50,9 @@ logger = logging.getLogger(__name__)
 # partial, and why it showed up right after the catch-up job pruned the map.
 _state_lock = asyncio.Lock()
 
-#: Telegram rejects a whole message if an inline button's url is not a valid
-#: http(s) URL, so anything else keeps the old behaviour of printing the link in
-#: the text. A placeholder link passes this and leads nowhere — that is a
-#: configuration problem, and check_service_links() is what reports it.
-def _join_url(event: dict[str, Any]) -> str | None:
-    url = (event.get("url") or "").strip()
-    if not url.lower().startswith(("http://", "https://")):
-        return None
-    return None if any(c.isspace() for c in url) else url
-
-
 def _join_markup(event: dict[str, Any], lang: str) -> InlineKeyboardMarkup | None:
     """A tappable "Join the service" button, or None if the link cannot be one."""
-    url = _join_url(event)
+    url = is_button_url(event.get("url"))
     if not url:
         return None
     return InlineKeyboardMarkup(

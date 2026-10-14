@@ -152,6 +152,7 @@ STRINGS: dict[str, str] = {
     "notif_reminder_title": "🔔 *Isikhumbuzo: {name}*",
     "notif_service_begins": "Inkonzo iqala: {when}",
     "notif_join": "🔗 Joyina: {url}",
+    "ann_link_button": "🔗 Vula isixhumanisi",
     "notif_join_button": "🔗 Joyina inkonzo",
     "notif_announcements_header": "⚠️ *Izaziso:*",
 
