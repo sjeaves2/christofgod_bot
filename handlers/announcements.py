@@ -16,7 +16,14 @@ from typing import Any
 
 import storage
 import translation
-from common import _is_affirmative, get_user_prefs, now_tz, reply_markdown, validate_markdown
+from common import (
+    _is_affirmative,
+    get_user_prefs,
+    is_button_url,
+    now_tz,
+    reply_markdown,
+    validate_markdown,
+)
 from handlers.notifications import CAPTION_LIMIT
 from handlers.broadcast import (
     BC_SELECT,
@@ -27,7 +34,7 @@ from handlers.broadcast import (
 from localization import t
 from permissions import admin_only, user_info
 from settings import TZ, activity
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes, ConversationHandler
@@ -89,12 +96,33 @@ ANN_BODY_MAX = 1024
 # Conversation states. Offset past the BC_* constants (0-2) because the
 # add-announcement conversation re-enters the broadcast target-selection
 # states after saving.
-AN_TITLE, AN_BODY, AN_MEDIA, AN_EXPIRES, AN_CONFIRM = range(3, 8)
+AN_TITLE, AN_BODY, AN_MEDIA, AN_LINK, AN_EXPIRES, AN_CONFIRM = range(3, 9)
 DA_SELECT = 8
 
 
-def _render_announcement(ann: dict[str, Any], escape: bool = True) -> str:
-    """'📢 title + body' block.
+def announcement_markup(ann: dict[str, Any], lang: str) -> InlineKeyboardMarkup | None:
+    """A tappable button for an announcement's link, or None if it has none.
+
+    The url was validated when the admin entered it (an_link), so this is
+    belt-and-braces: an older record predates the field, and a hand-edited
+    announcements.yaml could hold anything. Telegram rejects the whole message
+    over a bad button url, so never build one from an unchecked value.
+    """
+    url = is_button_url(ann.get("link"))
+    if not url:
+        return None
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton(t("ann_link_button", lang), url=url)]])
+
+
+def _render_announcement(ann: dict[str, Any], escape: bool = True,
+                        show_link: bool = True) -> str:
+    """'📢 title + body' block, with the link as text unless a button carries it.
+
+    show_link=False is for the push, where announcement_markup() puts the link
+    on a tappable button. /announcements renders several announcements into ONE
+    message, so it keeps the links as text: a column of buttons there would be
+    noise, and a button Telegram refused would cost the whole list.
 
     escape=False passes the admin's own Markdown straight through, so *bold* and
     _italic_ work as typed. That is only safe for text the admin wrote and we
@@ -113,7 +141,13 @@ def _render_announcement(ann: dict[str, Any], escape: bool = True) -> str:
     if escape:
         title = escape_markdown(title, version=1)
         body = escape_markdown(body, version=1)
-    return f"📢 *{title}*\n\n{body}"
+    out = f"📢 *{title}*\n\n{body}"
+    link = str(ann.get("link") or "").strip()
+    if link and show_link:
+        # Always escaped, whatever `escape` says: a url is never the admin's
+        # formatting, and one underscore in it would reject the whole message.
+        out += f"\n\n🔗 {escape_markdown(link, version=1)}"
+    return out
 
 
 
@@ -241,6 +275,37 @@ _EXPIRES_PROMPT = ("Expiration date (YYYY-MM-DD) — the announcement "
                    "shows through the end of that day:")
 
 
+_LINK_PROMPT = ("Send a link for this announcement and members get a tappable "
+                "button, or /skip for none:")
+
+
+async def an_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Optional link, shown to members as a button rather than a raw URL.
+
+    Validated here rather than at send time: Telegram rejects the ENTIRE
+    message if a button's url is unacceptable, so a bad one would silently cost
+    the whole announcement. Better to say so now, while the admin is still here
+    and can paste a different one.
+    """
+    text = (update.message.text or "").strip()
+    url = is_button_url(text)
+    if not url:
+        await update.message.reply_text(
+            "That does not look like a link Telegram will accept — it needs to "
+            "start with http:// or https:// and contain no spaces.\n\n"
+            "Send the link again, or /skip for none:")
+        return AN_LINK
+    context.user_data["an_link"] = url
+    await update.message.reply_text(_EXPIRES_PROMPT)
+    return AN_EXPIRES
+
+
+async def an_skip_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data["an_link"] = ""
+    await update.message.reply_text(_EXPIRES_PROMPT)
+    return AN_EXPIRES
+
+
 async def an_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Optional photo/document for the announcement push.
 
@@ -271,15 +336,15 @@ async def an_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return AN_MEDIA
 
     context.user_data["an_media"] = {"kind": kind, "file_id": file_id}
-    await msg.reply_text(_EXPIRES_PROMPT)
-    return AN_EXPIRES
+    await msg.reply_text(_LINK_PROMPT)
+    return AN_LINK
 
 
 async def an_skip_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """/skip — post the announcement as text only."""
     context.user_data.pop("an_media", None)
-    await update.message.reply_text(_EXPIRES_PROMPT)
-    return AN_EXPIRES
+    await update.message.reply_text(_LINK_PROMPT)
+    return AN_LINK
 
 
 async def an_expires(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -318,6 +383,7 @@ async def an_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "created": now_tz().isoformat(),
         "created_by": dname,
         "expires": context.user_data["an_expires"],
+        "link": context.user_data.get("an_link", ""),
     }
     anns = await storage.get_announcements()
     anns.append(ann)
@@ -329,7 +395,9 @@ async def an_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     # can be pushed out immediately (Cancel skips the push; it's already saved).
     # The stored body keeps the admin's Markdown; escape=False so *bold* reaches
     # the congregation as typed (it was validated in an_body).
-    rendered = _append_sender(_render_announcement(ann, escape=False), dname)
+    has_button = announcement_markup(ann, lang) is not None
+    rendered = _append_sender(
+        _render_announcement(ann, escape=False, show_link=not has_button), dname)
     media = context.user_data.get("an_media")
     if media:
         # Media carries the text as its caption — Telegram has no "photo plus
@@ -340,6 +408,10 @@ async def an_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     else:
         context.user_data["bc_message"] = rendered
         context.user_data.pop("bc_media", None)
+    # The link rides as a button on the pushed message. Recipients are the
+    # configured group targets, rendered in the church default language, so one
+    # markup serves them all.
+    context.user_data["bc_markup"] = announcement_markup(ann, lang)
     options = await _broadcast_target_options(context.bot, lang)
     context.user_data["bc_options"] = options
     context.user_data["bc_selected"] = set()
