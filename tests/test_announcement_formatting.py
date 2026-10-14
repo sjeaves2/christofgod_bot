@@ -118,20 +118,20 @@ class TestAnnouncementMedia:
     async def test_photo_is_captured(self):
         ctx = self._ctx_ready()
         upd = _update(photo=[MagicMock(file_id="PIC1")])
-        assert await A.an_media(upd, ctx) == A.AN_EXPIRES
+        assert await A.an_media(upd, ctx) == A.AN_LINK  # the optional link step
         assert ctx.user_data["an_media"] == {"kind": "photo", "file_id": "PIC1"}
 
     async def test_document_is_captured(self):
         ctx = self._ctx_ready()
         upd = _update(document=MagicMock(file_id="DOC1"))
-        assert await A.an_media(upd, ctx) == A.AN_EXPIRES
+        assert await A.an_media(upd, ctx) == A.AN_LINK  # the optional link step
         assert ctx.user_data["an_media"] == {"kind": "document", "file_id": "DOC1"}
 
     async def test_skip_leaves_it_text_only(self):
         ctx = self._ctx_ready()
         ctx.user_data["an_media"] = {"kind": "photo", "file_id": "OLD"}
         upd = _update(text="/skip")
-        assert await A.an_skip_media(upd, ctx) == A.AN_EXPIRES
+        assert await A.an_skip_media(upd, ctx) == A.AN_LINK  # the optional link step
         assert "an_media" not in ctx.user_data
 
     async def test_plain_text_at_the_media_step_reprompts(self):
