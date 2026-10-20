@@ -55,8 +55,20 @@ if [ "$previous" = "$current" ]; then
 fi
 echo "    $previous -> $current"
 
+# --upgrade-strategy eager, not plain --upgrade. pip upgrades only the
+# packages NAMED in the file by default (--upgrade-strategy only-if-needed),
+# so a transitive dependency freezes at whatever was current when it was first
+# installed and never moves again. On 2026-10-20 that left the server on
+# certifi from July — the CA bundle httpx verifies Telegram with — while CI,
+# which installs fresh every run, had been testing against October's. Plain
+# --upgrade moved pytz (named in the file) and nothing else.
+#
+# The effect of this line is that the server ends up with what a fresh install
+# resolves to, which is what CI tested. The cost is that a release published
+# after CI ran can land here untested; the import check below is what catches
+# it, and a lockfile is the heavier answer if that ever bites.
 echo "==> Installing dependencies"
-"$VENV/bin/pip" install -q -r requirements.txt
+"$VENV/bin/pip" install -q --upgrade --upgrade-strategy eager -r requirements.txt
 
 # pip install never REMOVES. A dependency dropped from requirements.txt stays
 # in the venv for good, and keeps its advisories with it — removing
@@ -88,6 +100,14 @@ if ! "$VENV/bin/python" -c "import bot" > /dev/null; then
     # A git reset does not undo an uninstall, so put the venv back too. Without
     # this, a bad prune would leave the bot unable to start on the NEXT restart
     # even though the code had been rolled back.
+    #
+    # NB what this does NOT do: it reinstalls anything missing, but it cannot
+    # DOWNGRADE a package the eager upgrade above moved — pip is not told which
+    # versions were there before. The running bot is safe either way, because
+    # the import check happens before the restart and the old process keeps its
+    # already-loaded modules. The exposure is the NEXT restart, which would pair
+    # rolled-back code with upgraded packages. If that ever happens, pin the
+    # offending package in requirements.txt and deploy again.
     echo "    restoring the virtualenv"
     "$VENV/bin/pip" install -q -r requirements.txt || true
     echo "Rolled back. Fix the problem, push, then re-run ./deploy/update.sh"
