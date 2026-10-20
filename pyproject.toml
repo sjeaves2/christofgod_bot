@@ -23,3 +23,29 @@ select = ["E", "W", "F"]
 asyncio_mode = "auto"
 asyncio_default_test_loop_scope = "function"
 asyncio_default_fixture_loop_scope = "function"
+
+# Silence ONE known-correct advisory, by its exact text.
+#
+# Every conversation in bot.py is entered by a CommandHandler and has a
+# CallbackQueryHandler in its states, so python-telegram-bot notes that
+# callback queries are not tracked per message. That is the intended
+# behaviour: per_message=True requires EVERY entry point, state handler and
+# fallback to be a CallbackQueryHandler, so setting it would break the command
+# entry — and emits three warnings instead of one. Verified 2026-10-20.
+#
+# It was 90 warnings in a run: six handlers times the ~15 tests that build the
+# application. One known, unfixable advisory repeated until real warnings would
+# be lost in it.
+#
+# The signal is NOT discarded. tests/test_conversation_per_message.py asserts
+# that no conversation is purely callback-driven — the one case where
+# per_message=True WOULD be correct — so the day such a conversation is added,
+# that test fails and names it. Narrow the filter, never widen it: anything
+# other than this exact message should still be seen.
+# NB: an "error::DeprecationWarning" entry was considered and left out. It
+# would catch deprecations early, but a dependency's own internal deprecation
+# would then fail the build over something unfixable here. Add it deliberately,
+# not as a side effect of this filter.
+filterwarnings = [
+    "ignore:If 'per_message=False', 'CallbackQueryHandler' will not be tracked for every message.*:UserWarning",
+]
