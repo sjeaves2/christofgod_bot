@@ -162,3 +162,66 @@ class TestSetupTightensPermissions:
         p = subprocess.run(["bash", "-n", str(REPO / "deploy" / "setup.sh")],
                            capture_output=True, text=True)
         assert p.returncode == 0, p.stderr
+
+
+class TestUpdateKeepsDependenciesCurrent:
+    """A deploy must leave the server with what CI tested.
+
+    `pip install -r requirements.txt` never upgrades a package that already
+    satisfies the spec, so a TRANSITIVE dependency freezes at whatever was
+    current when it was first installed. On 2026-10-20 that had left the server
+    on certifi from July — the CA bundle httpx verifies Telegram with — while
+    CI, installing fresh every run, had been testing against October's. Eight
+    packages had drifted, including the timezone rules this bot schedules
+    services by.
+
+    The subtlety that made it worse: plain `--upgrade` does NOT fix it. pip's
+    default --upgrade-strategy is only-if-needed, so it moves the packages
+    NAMED in the file and leaves their dependencies alone. Tried on the server:
+    it upgraded pytz and nothing else.
+    """
+
+    @staticmethod
+    def _text():
+        return (REPO / "deploy" / "update.sh").read_text()
+
+    @staticmethod
+    def _install_command() -> str:
+        """The pip install line that provisions the venv, comments excluded.
+
+        Searching the whole file would match the comment ABOVE this line, which
+        quotes the very flags being asserted on — two mutations passed that way
+        before this was noticed.
+        """
+        lines = [ln.strip() for ln in (REPO / "deploy" / "update.sh").read_text().splitlines()
+                 if not ln.lstrip().startswith("#")]
+        installs = [ln for ln in lines if "pip" in ln and "install" in ln
+                    and "requirements.txt" in ln]
+        assert installs, "update.sh no longer installs requirements at all"
+        return installs[0]          # the provisioning one; later is the rollback
+
+    def test_the_install_upgrades(self):
+        assert "--upgrade" in self._install_command(), (
+            "without this the server's transitive dependencies never move again"
+        )
+
+    def test_it_upgrades_eagerly(self):
+        """only-if-needed is the default and does not reach transitive deps."""
+        assert "--upgrade-strategy eager" in self._install_command(), (
+            "plain --upgrade moves only the packages named in requirements.txt; "
+            "certifi, pillow and tzdata are not named there"
+        )
+
+    def test_the_upgrade_happens_before_the_import_check(self):
+        """The import check is what catches a bad upgrade, so it must run
+        after one — and both before the service is restarted."""
+        t = self._text()
+        assert t.index("--upgrade-strategy eager") < t.index("import bot")
+        assert t.index("import bot") < t.index("Restarting")
+
+    def test_the_rollback_limit_is_written_down(self):
+        """pip is never told the previous versions, so a rollback cannot
+        downgrade. Someone will eventually need to know that."""
+        t = self._text()
+        tail = t[t.index("New code fails to import"):]
+        assert "DOWNGRADE" in tail or "downgrade" in tail
