@@ -130,9 +130,22 @@ fi
 # 2026-09-04 outage it reported "active" for 87 minutes while DNS was dead and
 # the bot sat retrying an unresolvable hostname, reaching nobody. The process
 # was alive and useless. Wait for proof it is actually talking to Telegram.
-echo "==> Waiting for Telegram polling to start"
+# 60s, not 20s. On 2026-10-27 the v0.22.0 deploy reported failure and the line
+# arrived ONE SECOND after the loop gave up: the restart returned at 16:52:10,
+# Python finished importing at 16:52:20, the wait expired at 16:52:30, polling
+# started at 16:52:31. Ten of the twenty seconds went on interpreter startup
+# alone, which grows with every dependency, so the old budget was already
+# thinner than it looked and the margin was luck rather than headroom.
+#
+# The cost of waiting longer is only a slower deploy on a genuinely broken
+# bot, and nothing is rolled back on this check either way. The cost of being
+# too short is a false failure that trains the reader to ignore a real one —
+# which is exactly what this check exists to prevent.
+POLL_WAIT_SECONDS=60
+
+echo "==> Waiting for Telegram polling to start (up to ${POLL_WAIT_SECONDS}s)"
 polling=""
-for _ in $(seq 1 20); do
+for _ in $(seq 1 "$POLL_WAIT_SECONDS"); do
     if journalctl -u "$SERVICE_NAME" --since "$restart_at" --no-pager 2>/dev/null \
          | grep -q "Long polling started"; then
         polling=yes
@@ -143,7 +156,8 @@ done
 
 if [ -z "$polling" ]; then
     echo
-    echo "The service is running but never reported 'Long polling started'."
+    echo "The service is running but never reported 'Long polling started'"
+    echo "within ${POLL_WAIT_SECONDS}s."
     echo "It may be unable to reach api.telegram.org — check DNS and the token."
     echo "The bot has NOT been rolled back; it is up but possibly not receiving."
     echo
