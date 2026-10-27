@@ -37,8 +37,17 @@ ALLOWED_TOKENS = {"111111111:AAAA-NOT-A-REAL-TOKEN-FOR-TESTS-ONLY"}
 ZOOM_PWD_RE = re.compile(r"zoom\.us/j/(\d+)[^\s\"']*?pwd=([A-Za-z0-9_.-]+)")
 ALLOWED_ZOOM = {("0000000000", "SETMEWITHSETSERVICELINK")}
 
+# A federal Employer Identification Number, 12-3456789. Board compliance items
+# (v0.22.0) are the first feature whose free text invites one — "EIN 54-1234567,
+# renewal portal login with the treasurer" is exactly what an officer would
+# type into /addboarditem. data/board_items.yaml is untracked for that reason;
+# this is the guard for the day someone pastes a real item into a test fixture
+# or the template, which is how the Zoom links leaked twice.
+EIN_RE = re.compile(r"\b\d{2}-\d{7}\b")
+
 # Files that legitimately describe the patterns without containing a secret.
-EXEMPT = {"tests/test_no_secrets_committed.py"}
+EXEMPT = {"tests/test_no_secrets_committed.py",
+          "tests/test_board_items_untracked.py"}
 
 
 def _tracked_text_files() -> list[Path]:
@@ -99,6 +108,21 @@ class TestNoCredentialsTracked:
             + "\n  ".join(findings)
             + "\n\nJoin links belong in data/events.yaml (untracked) and are set "
               "with /setservicelink, never committed."
+        )
+
+    def test_no_federal_tax_id_committed(self):
+        findings = []
+        for p in _tracked_text_files():
+            for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
+                for m in EIN_RE.finditer(line):
+                    rel = p.relative_to(REPO)
+                    findings.append(f"{rel}:{i} — {m.group(0)}")
+        assert not findings, (
+            "something shaped like a federal tax ID (EIN) appears in a tracked "
+            "file:\n  " + "\n  ".join(findings)
+            + "\n\nBoard compliance details belong in data/board_items.yaml, "
+              "which is untracked. If this is a deliberate placeholder, use a "
+              "form that cannot be mistaken for real and exempt the file here."
         )
 
     def test_live_config_is_not_tracked(self):

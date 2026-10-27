@@ -63,6 +63,7 @@ ADMIN_COMMANDS_TEXT = """\
 /userlist — list registered users
 /stats — usage and system stats (/stats usage, /stats 30)
 /backup — send a data backup now (also runs nightly at 3am)
+/setboardofficer — turn the board-officer flag on or off for a registered user
 /adminhelp — show this list"""
 
 # Shown ONLY to admins with `prayer: true`. Listing these for every admin would
@@ -77,19 +78,37 @@ PRAYER_COMMANDS_TEXT = """\
 
 _Answering or dismissing a request deletes what the member wrote._"""
 
+# Shown ONLY to board officers, for the same reason as the prayer block:
+# board_officer_only answers "Unknown command", so listing these for everyone
+# would advertise a queue most people cannot open. English only — the board is
+# English-speaking and these are corporate records, not congregational text.
+BOARD_COMMANDS_TEXT = """\
+*Board officers:*
+/boarditems — pending corporate deadlines in date order; complete, edit,
+    delete or reopen them from the list
+/addboarditem — add an obligation (what, when, lead time, details, link)
+/boardcalendar — download the pending deadlines as an all-day calendar
+    file, with reminders mirroring the bot's own schedule
 
-def _commands_text(lang: str, is_adm: bool, is_prayer: bool = False) -> str:
-    """Localized user command list, with admin sections appended as applicable.
+_Notices go out daily at 6am to every board officer: first at the item's lead
+time, then weekly, then every day inside 21 days._"""
 
-    The prayer block is gated separately: `prayer: true` is a narrower group
-    than "administrator", and the commands should be invisible to admins who
-    cannot use them.
+
+def _commands_text(lang: str, is_adm: bool, is_prayer: bool = False,
+                   is_board: bool = False) -> str:
+    """Localized user command list, with role sections appended as applicable.
+
+    Each extra block is gated on its OWN role, never on "administrator":
+    `prayer: true` and `board_officer: true` are both narrower than admin, and
+    the commands should be invisible to admins who cannot use them.
     """
     text = t("user_commands", lang)
     if is_adm:
         text += "\n\n" + ADMIN_COMMANDS_TEXT
     if is_prayer:
         text += "\n\n" + PRAYER_COMMANDS_TEXT
+    if is_board:
+        text += "\n\n" + BOARD_COMMANDS_TEXT
     return text
 
 
@@ -129,7 +148,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
 
     is_adm = permissions.is_admin(update)
-    cmd_text = _commands_text(lang, is_adm, permissions.is_prayer_admin(update))
+    cmd_text = _commands_text(lang, is_adm, permissions.is_prayer_admin(update),
+                              await permissions.is_board_officer(update))
 
     await reply_markdown(update.message, t("welcome", lang, bot_name=BOT_DISPLAY_NAME,
         commands=cmd_text),
@@ -250,7 +270,8 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     activity.log_command("help", uid, uname, dname)
     text = _commands_text(lang, permissions.is_admin(update),
-                          permissions.is_prayer_admin(update))
+                          permissions.is_prayer_admin(update),
+                          await permissions.is_board_officer(update))
     # Hint that per-command help is available.
     text += "\n\n" + t("help_topic_hint", lang)
     await reply_markdown(update.message, text)
