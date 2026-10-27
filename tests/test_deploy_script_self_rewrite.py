@@ -103,8 +103,16 @@ class TestUpdateScriptIsWrapped:
         )
 
     def test_main_is_invoked_with_the_arguments(self):
-        """A wrapper that is never called deploys nothing at all."""
-        assert self._text().rstrip().endswith('main "$@"')
+        """A wrapper that is never called deploys nothing at all.
+
+        The last line must be the CALL, not a comment containing it. endswith()
+        alone accepted `# main "$@"` — a mutation that comments the call out
+        left this test green while the script did nothing, found 2026-10-27.
+        """
+        last = self._text().rstrip().rsplit("\n", 1)[-1].strip()
+        assert last == 'main "$@"', (
+            f"the script's last line is {last!r}, not the call to main"
+        )
 
     def test_the_reason_is_recorded_in_the_file(self):
         """Someone will be tempted to unwrap this; the note is the defence."""
