@@ -14,6 +14,7 @@ import yaml
 from telegram import Update
 from telegram.ext import ContextTypes, ConversationHandler
 
+import storage
 from cache import make_rt_yaml
 from settings import CONFIG_DIR
 
@@ -208,6 +209,58 @@ def _official_side_recipients(off: dict) -> list[dict]:
 def admin_only(handler):
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not is_admin(update):
+            await update.message.reply_text("⛔ Unknown command.")
+            return ConversationHandler.END
+        return await handler(update, context)
+    wrapper.__name__ = handler.__name__
+    return wrapper
+
+
+async def is_board_officer(update: Update) -> bool:
+    """Whether this user is a board officer of the corporation.
+
+    A different axis from everything else in this module. Admins and officials
+    are loaded from config/ at import and fixed for the process; board officers
+    are a flag on the USER record in data/users.yaml, which means the list can
+    be changed with /setboardofficer and takes effect without a restart. That is
+    the point — a board changes by vote, not by deploy.
+
+    The flag is read strictly: only `board_officer: true` counts. Absent is
+    false, and so is the string "false", which is what a hand-edited YAML file
+    eventually contains.
+    """
+    users = await storage.get_all_users()
+    uid = update.effective_user.id
+    record = next((u for u in users if u.get("chat_id") == uid), None)
+    return (record or {}).get("board_officer") is True
+
+
+async def board_officer_names() -> list[str]:
+    """Display names of the current board officers, for an audit line."""
+    users = await storage.get_all_users()
+    return [str(u.get("display_name") or u.get("username") or u.get("chat_id"))
+            for u in users if u.get("board_officer") is True]
+
+
+async def board_officer_chat_ids() -> list[int]:
+    """Chat ids to notify about board items."""
+    users = await storage.get_all_users()
+    return [int(u["chat_id"]) for u in users
+            if u.get("board_officer") is True and u.get("chat_id")]
+
+
+def board_officer_only(handler):
+    """Gate a handler to board officers — NOT to administrators.
+
+    Deliberately not `is_admin(update) or ...`. Board items are corporate
+    records of the nonprofit, not church operations, and the two groups only
+    partly overlap: some admins hold no board seat. Mirrors
+    prayer_admin_only in replying "Unknown command" rather than "access
+    denied", so the existence of the board queue is not advertised to people who
+    cannot act on it.
+    """
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not await is_board_officer(update):
             await update.message.reply_text("⛔ Unknown command.")
             return ConversationHandler.END
         return await handler(update, context)

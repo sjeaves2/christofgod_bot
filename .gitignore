@@ -23,6 +23,11 @@ data/appointments.yaml
 data/appointments_archive.yaml
 data/announcements.yaml
 
+# Board compliance items. NOT tracked: descriptions carry registration numbers,
+# filing account references and renewal portal links, and this repository is
+# public. Ship data/board_items.yaml.example instead.
+data/board_items.yaml
+
 # Python cache
 __pycache__/
 *.pyc

@@ -1,4 +1,4 @@
-"""ICS (iCalendar) file generation for events and appointments."""
+"""ICS (iCalendar) file generation for events, appointments and board deadlines."""
 
 from __future__ import annotations
 
@@ -8,6 +8,8 @@ from typing import Any
 
 import pytz
 from icalendar import Alarm, Calendar, Event, vText
+
+import board_items as bi
 
 
 _ALARM_OFFSETS: list[tuple[int, str]] = [
@@ -82,6 +84,63 @@ def events_to_ics(events: list[dict[str, Any]],
             note = "\n".join(evt["announcements"])
             existing = vevent.get("description", "")
             vevent["description"] = (str(existing) + "\n\n" + note).strip() if existing else note
+        cal.add_component(vevent)
+    return cal.to_ical()
+
+
+def _board_item_uid(item: dict[str, Any]) -> str:
+    """Stable UID so a re-export UPDATES the officer's calendar entry.
+
+    The item id survives completion and reopening — that is the whole point of
+    rolling an item forward rather than replacing it — so the same obligation
+    keeps one calendar entry across every renewal cycle, with the date moving.
+    A fresh uuid per export would instead leave an officer with one dead entry
+    per cycle, which is the bug _event_uid above was written to fix.
+    """
+    return f"board-{item.get('id', 'unknown')}@christofgodbot"
+
+
+def board_items_to_ics(items: list[dict[str, Any]],
+                       calendar_name: str = "Board Deadlines") -> bytes:
+    """All-day calendar entries for board compliance items, with alarms.
+
+    All-day (DTSTART;VALUE=DATE) because these obligations have no time of day;
+    inventing 9am would be a fiction the officer then has to read around. DTEND
+    is the following day, as RFC 5545 requires — an all-day event's end is
+    exclusive, and omitting it leaves clients to guess.
+
+    The alarms do NOT mirror the bot's schedule exactly. A VALARM carries one
+    trigger and ICS has no "weekly, then daily" rule to express, so mirroring
+    would mean ~28 alarms per item. The ladder in
+    board_items.ics_alarm_offsets() is five at most, never earlier than the
+    item's own lead time; the bot remains the authoritative nag.
+    """
+    cal = _make_calendar(calendar_name)
+    for item in items:
+        due = bi.due_date(item)
+        if due is None:
+            # No date, nothing to put on a calendar. Skipped rather than
+            # defaulted to today, which would plant a false deadline.
+            continue
+        vevent = Event()
+        vevent.add("summary", str(item.get("action") or "Board deadline"))
+        vevent.add("dtstart", due)
+        vevent.add("dtend", due + timedelta(days=1))
+        vevent.add("uid", _board_item_uid(item))
+        vevent.add("sequence", bi.sequence_of(item))
+        vevent.add("status", "CONFIRMED")
+        if item.get("description"):
+            vevent.add("description", str(item["description"]))
+        if item.get("url"):
+            vevent.add("url", str(item["url"]))
+        for days in bi.ics_alarm_offsets(item):
+            alarm = Alarm()
+            alarm.add("action", "DISPLAY")
+            alarm.add("description",
+                      f"{item.get('action') or 'Board deadline'} — "
+                      f"due in {days} day{'s' if days != 1 else ''}")
+            alarm.add("trigger", timedelta(days=-days))
+            vevent.add_component(alarm)
         cal.add_component(vevent)
     return cal.to_ical()
 
