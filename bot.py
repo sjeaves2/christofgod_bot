@@ -240,6 +240,41 @@ from handlers.prayer import (  # noqa: F401
     purge_old_stubs,
     resp_text,
 )
+from handlers.board import (  # noqa: F401
+    BOARD_NOTICE_TIME,
+    AB_ACTION,
+    AB_CONFIRM,
+    AB_DESC,
+    AB_DUE,
+    AB_NOTIFY,
+    AB_URL,
+    BI_EDIT_VALUE,
+    BI_MENU,
+    BI_NEXT_DUE,
+    CB_BOARD_PREFIX,
+    CB_BOFF_PREFIX,
+    ab_action,
+    ab_confirm,
+    ab_desc,
+    ab_due,
+    ab_notify,
+    ab_skip_desc,
+    ab_skip_notify,
+    ab_skip_url,
+    ab_url,
+    bi_edit_value,
+    bi_next_due,
+    bi_skip_edit,
+    bi_skip_next_due,
+    board_callback,
+    board_notice_job,
+    board_officer_callback,
+    cmd_addboarditem,
+    cmd_boardcalendar,
+    cmd_boarditems,
+    cmd_setboardofficer,
+    purge_deleted_board_items,
+)
 from handlers.stats import cmd_stats  # noqa: F401
 
 logger = logging.getLogger(__name__)
@@ -282,7 +317,8 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         reply = "✅ Contact received. You have been recognised as an official."
     else:
         reply = "✅ Contact received. Thank you!"
-    cmd_text = _commands_text(lang, is_adm, permissions.is_prayer_admin(update))
+    cmd_text = _commands_text(lang, is_adm, permissions.is_prayer_admin(update),
+                              await permissions.is_board_officer(update))
 
     await update.message.reply_text(reply, reply_markup=ReplyKeyboardRemove())
     await reply_markdown(update.message, cmd_text)
@@ -292,7 +328,8 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def daily_maintenance_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Daily: archive long-past appointments, purge the appointment archive,
-    purge long-expired announcements, and trim the runtime log.
+    purge long-expired announcements and soft-deleted board items, and trim the
+    runtime log.
 
     bot.log is pruned here as well as at startup so a bot that stays up for
     months does not accumulate an unbounded file.
@@ -301,6 +338,7 @@ async def daily_maintenance_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     await purge_archived_appointments()
     await purge_old_announcements()
     await purge_old_stubs()
+    await purge_deleted_board_items()
     removed = prune_log_file(LOGS_DIR / "bot.log", RUNTIME_LOG_RETENTION, TZ)
     if removed:
         logger.info("Daily maintenance pruned %d old log line(s).", removed)
@@ -587,6 +625,19 @@ async def post_init(app: Application) -> None:
         name="nightly_backup",
     )
 
+    # Board compliance notices — DM'd to board officers at 6am church time.
+    #
+    # run_daily, not run_repeating: these are calendar-day decisions (is today
+    # inside the lead time? has a notice already gone out today?), and a
+    # repeating interval anchored to process start would drift an hour earlier
+    # every restart until the 6am notice arrived at 2am. The schedule itself
+    # is self-healing, so a day missed entirely is caught the next morning.
+    app.job_queue.run_daily(
+        board_notice_job,
+        time=BOARD_NOTICE_TIME,
+        name="board_notices",
+    )
+
     # Daily maintenance: archive/purge old appointments and purge long-expired
     # announcements (runs shortly after each startup, then every 24h).
     app.job_queue.run_repeating(
@@ -849,6 +900,63 @@ def main() -> None:
     app.add_handler(respond_prayer_conv)
     app.add_handler(CommandHandler("prayerrequests", cmd_prayerrequests))
     app.add_handler(CommandHandler("dismissprayer", cmd_dismissprayer))
+
+    # Board compliance items. The callback router is an ENTRY POINT as well as
+    # a state handler: user_data does not survive a restart, and every deploy
+    # restarts the bot, so without this a keyboard already on an officer's
+    # screen would go dead and tapping it would do nothing at all. As an entry
+    # point the tap re-enters the conversation at the right place instead.
+    board_items_conv = ConversationHandler(
+        entry_points=[
+            CommandHandler("boarditems", cmd_boarditems),
+            CallbackQueryHandler(board_callback,
+                                 pattern=f"^{re.escape(CB_BOARD_PREFIX)}"),
+        ],
+        states={
+            BI_MENU: [CallbackQueryHandler(
+                board_callback, pattern=f"^{re.escape(CB_BOARD_PREFIX)}")],
+            BI_EDIT_VALUE: [
+                CommandHandler("skip", bi_skip_edit),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, bi_edit_value),
+            ],
+            BI_NEXT_DUE: [
+                CommandHandler("skip", bi_skip_next_due),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, bi_next_due),
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_conversation)],
+        allow_reentry=True,
+    )
+    app.add_handler(board_items_conv)
+
+    add_board_item_conv = ConversationHandler(
+        entry_points=[CommandHandler("addboarditem", cmd_addboarditem)],
+        states={
+            AB_ACTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, ab_action)],
+            AB_DUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ab_due)],
+            AB_NOTIFY: [
+                CommandHandler("skip", ab_skip_notify),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, ab_notify),
+            ],
+            AB_DESC: [
+                CommandHandler("skip", ab_skip_desc),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, ab_desc),
+            ],
+            AB_URL: [
+                CommandHandler("skip", ab_skip_url),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, ab_url),
+            ],
+            AB_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, ab_confirm)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_conversation)],
+        allow_reentry=True,
+    )
+    app.add_handler(add_board_item_conv)
+
+    app.add_handler(CommandHandler("boardcalendar", cmd_boardcalendar))
+    app.add_handler(CommandHandler("setboardofficer", cmd_setboardofficer))
+    app.add_handler(CallbackQueryHandler(
+        board_officer_callback, pattern=f"^{re.escape(CB_BOFF_PREFIX)}"))
 
     # Catch-all free-text handler. MUST come after every ConversationHandler:
     # PTB runs only the first matching handler per group, and this one matches

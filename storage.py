@@ -30,6 +30,12 @@ notif_state_cache = FileCache(DATA_DIR / "notification_state.yaml")
 # Groups/channels the bot has been added to (discovered via membership events),
 # used to populate the /broadcast target list.
 groups_cache = FileCache(DATA_DIR / "known_groups.yaml")
+# Board compliance items — corporate renewal deadlines (logo registration, tax
+# exemption, filings). Round-trip mode: officers will hand-edit this file to
+# correct a date or paste a registration number, and their comments should
+# survive the bot's own saves. Untracked, like events.yaml: the descriptions
+# carry registration and account numbers, and this repository is public.
+board_items_cache = FileCache(DATA_DIR / "board_items.yaml", round_trip=True)
 # Prayer requests. The most sensitive file the bot holds: health, finances and
 # family crises in members' own words. The request TEXT is deleted the moment a
 # request is answered or dismissed, leaving only a stub; see handlers/prayer.py.
@@ -91,6 +97,17 @@ async def save_announcements(anns: list[dict[str, Any]]) -> None:
     data = ann_cache._data or {}
     data["announcements"] = anns
     await ann_cache.save(data)
+
+
+async def get_board_items() -> list[dict[str, Any]]:
+    data = await board_items_cache.get()
+    return data.get("items") or [] if data else []
+
+
+async def save_board_items(items: list[dict[str, Any]]) -> None:
+    data = board_items_cache._data or {}
+    data["items"] = items
+    await board_items_cache.save(data)
 
 
 async def _load_notif_state() -> dict[str, Any]:
