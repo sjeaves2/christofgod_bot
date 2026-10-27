@@ -1,0 +1,50 @@
+# Board compliance items — corporate obligations with renewal deadlines.
+#
+# To use this file:
+#
+#   cp data/board_items.yaml.example data/board_items.yaml
+#
+# You normally will not need to: the bot creates data/board_items.yaml on its
+# first save, and /addboarditem is the intended way in. This template exists so
+# a fresh clone has something to read, and so the field names are documented
+# somewhere a human can find them.
+#
+# data/board_items.yaml is NOT tracked in git. Descriptions here hold
+# registration numbers, filing references and portal links, and this repository
+# is public. Keep every real value out of THIS file.
+#
+# Only board officers can see or change these items. Set the flag with
+# /setboardofficer (a board officer runs it and picks from the registered
+# users); the field it writes is `board_officer: true` on the user's record in
+# data/users.yaml, and an absent field means false.
+
+items:
+
+  # A fully populated example. Delete it once you have real items.
+  - id: EXAMPLE1
+    # What has to be done. Shown as the heading of every notice.
+    action: Renew logo trademark registration
+    # Due date, YYYY-MM-DD. All-day: these obligations have no time of day, and
+    # the ICS export writes them as all-day events for the same reason.
+    due: 2099-03-14
+    # Lead time in days. The first notice goes out this far ahead, then weekly,
+    # then every day once inside 21 days. Default 60 if omitted.
+    notify_days: 60
+    # Free text. Registration numbers, who files it, what it costs, what is
+    # needed. Reaches officers as Markdown, so *bold* and _italic_ work.
+    description: |
+      Serial number and filing details go here.
+      Renewal window opens one year before the due date.
+    # Optional. Board officers get this as a tappable button on each notice.
+    # Must start with http:// or https:// — anything else is shown as text.
+    url: https://example.test/renewals
+    # pending | completed | deleted. Absent means pending, because an item
+    # nobody has marked done is an obligation that has not been met.
+    status: pending
+    # Written by the bot each time it sends a notice, so a restart cannot
+    # double-send and an outage self-heals. Do not set this by hand.
+    last_notified: null
+    # Previous cycles. Completing an item appends to this and keeps the item,
+    # so renewing it again is "reopen with a new due date" rather than a new
+    # item — which is what makes the renewal history worth having.
+    history: []

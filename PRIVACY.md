@@ -30,6 +30,14 @@ at <https://github.com/sjeaves2/christofgod_bot>.
 | Your language (`/language`) | So the bot replies in English, Spanish, French or isiZulu |
 | Your reminder preferences (`/notifications`) | So you only receive the reminders you asked for |
 
+### If you serve on the board
+
+For members who serve as officers of the corporation, an administrator sets a
+single flag on your record marking you as a board officer. It controls who can
+see and manage the corporation's compliance deadlines, and who receives the
+daily reminders about them. It is not shown to other members, and it holds
+nothing beyond the fact of the role.
+
 ### Your phone number — only if you choose to share it
 
 The bot may invite you to share your contact. This is used **solely** to
@@ -64,6 +72,16 @@ days. The ministry does not keep a lasting copy of what you shared.
 
 Please share what you are comfortable sharing. For anything you would rather
 not have written down at all, speak to an official directly.
+
+### Board compliance records
+
+Separately from anything about members, the bot keeps the corporation's own
+renewal deadlines — things like trademark and tax-exemption filings — so it can
+remind the board before they lapse. These are records about the organisation,
+not about you. The only personal detail they contain is the name of the officer
+who added an item or marked it complete, kept as a record of who acted.
+
+Only board officers can see them.
 
 ### Activity records
 
@@ -110,6 +128,7 @@ grants no access to anyone outside it.
 | Appointments | Moved to an archive 90 days after the meeting |
 | Archived appointments | Deleted after 2 years |
 | Announcements | Deleted 30 days after they expire |
+| Board compliance items | Kept while the obligation recurs, so each renewal has its history; a deleted item is removed after 90 days |
 | Prayer requests | The text is deleted as soon as the request is answered or closed; the short record 30 days later |
 | Activity records | 90 days, then automatically deleted |
 | Technical logs | 45 days, then automatically deleted |
