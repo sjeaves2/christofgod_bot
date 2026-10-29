@@ -589,11 +589,35 @@ async def post_init(app: Application) -> None:
         BotCommand("stop", "Unsubscribe from notifications"),
     ])
 
-    # Weekly reschedule job — runs every Sunday at 00:05 to extend notification window
+    # Weekly reschedule — extends the notification window as events enter the
+    # 400-day horizon that schedule_all_upcoming() looks at.
+    #
+    # NO `first=`, so the first run is one interval (7 days) from startup;
+    # that is PTB's documented default. It used to be `first=10 seconds`, which
+    # meant that ten seconds after every start this job removed and re-added
+    # all ~180 notification jobs that the schedule_all_upcoming() call above had
+    # just created. Measured on the 2026-10-29 restart:
+    #
+    #     12:43:07.196  Scheduled 180 upcoming event notifications   <- above
+    #     12:43:17.484  Scheduled 180 upcoming event notifications   <- this job
+    #
+    # Pure duplication, and the source of the 32,592 "Added job"/"Removed job"
+    # lines that were a third of a 45 MB bot.log.
+    #
+    # The premise was checked rather than assumed, because removing it would be
+    # wrong if post_init's jobs did not survive: APScheduler holds jobs added
+    # before its scheduler starts and flushes them on start, so the pass above
+    # — which runs before Application.start() — does take effect. Verified
+    # empirically in tests/test_reschedule_startup.py, not just read from docs.
+    #
+    # An unrestarted process still gets its weekly pass; a restarted one gets
+    # post_init's. Nothing is left unscheduled either way.
+    #
+    # (The comment here used to claim "runs every Sunday at 00:05". It never
+    # did: run_repeating anchors to process start, not to a wall-clock day.)
     app.job_queue.run_repeating(
         reschedule_job,
         interval=timedelta(days=7),
-        first=timedelta(seconds=10),
         name="weekly_reschedule",
     )
 
