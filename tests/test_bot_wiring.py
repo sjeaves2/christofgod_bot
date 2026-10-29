@@ -355,9 +355,24 @@ class TestLogHousekeeping:
             await bot.post_init(app)
         reset.assert_called_once()
 
-    async def test_daily_maintenance_prunes_runtime_log(self):
+    async def test_daily_maintenance_does_not_touch_the_runtime_log(self):
+        """bot.log is rotated by its handler now, not pruned here.
+
+        This used to assert the opposite: that daily maintenance called
+        prune_log_file on bot.log with the 45-day window. That pruner read the
+        WHOLE file and rewrote it — 9.1 seconds to delete 8 lines from a 45 MB
+        log, measured on the server 2026-10-29 — and it ran at every import of
+        settings as well as here. It was replaced by a
+        TimedRotatingFileHandler, so the work is now a single unlink of an
+        expired file.
+
+        Pinned as a test because "the daily job should tidy the log" is an
+        obvious-sounding thing to re-add.
+        """
         import bot
-        prune = MagicMock(return_value=7)
+        assert not hasattr(bot, "prune_log_file"), (
+            "bot imports prune_log_file again; bot.log rotates itself"
+        )
 
         async def _noop():
             return 0
@@ -365,13 +380,9 @@ class TestLogHousekeeping:
         with patch("bot.archive_old_appointments", side_effect=_noop), \
              patch("bot.purge_archived_appointments", side_effect=_noop), \
              patch("bot.purge_old_announcements", side_effect=_noop), \
-             patch("bot.prune_log_file", prune):
+             patch("bot.purge_old_stubs", side_effect=_noop), \
+             patch("bot.purge_deleted_board_items", side_effect=_noop):
             await bot.daily_maintenance_job(MagicMock())
-        prune.assert_called_once()
-        assert str(prune.call_args[0][0]).endswith("bot.log")
-        # bot.log uses the shorter runtime window (45d), not the activity
-        # log's 90d retention.
-        assert prune.call_args[0][1] == bot.RUNTIME_LOG_RETENTION == 45
 
 
 class TestScheduledJobs:

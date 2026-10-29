@@ -77,13 +77,17 @@ def _wait_loop() -> str:
     return text[start:end]
 
 
-def _run_loop(tmp_path, found_on_attempt: int | None):
+def _run_loop(tmp_path, found_on_attempt: int | None,
+              marker: str = "Application started"):
     """Execute the real wait loop with journalctl and sleep stubbed out.
 
     `found_on_attempt` is which journalctl call first reports polling, or None
-    for a bot that never comes up. sleep is a no-op so a 60-second budget does
-    not cost 60 seconds of test time — which also means this measures ATTEMPTS,
-    the thing the budget actually controls.
+    for a bot that never comes up. `marker` is the log line the stub emits when
+    it does — the loop must accept either of the two real markers.
+
+    sleep is a no-op so a 60-second budget does not cost 60 seconds of test
+    time, which also means this measures ATTEMPTS, the thing the budget
+    actually controls.
     """
     if found_on_attempt is None:
         # Running to exhaustion is O(budget). Fail fast rather than hanging:
@@ -103,13 +107,14 @@ SERVICE_NAME="christofgod-bot"
 restart_at="2026-10-27 16:52:10"
 COUNTER="{counter}"
 TRIGGER="{trigger}"
+MARKER="{marker}"
 
 # Stubs. Defined as functions so they win inside the loop's pipeline.
 journalctl() {{
     n=$(( $(cat "$COUNTER") + 1 ))
     echo "$n" > "$COUNTER"
     if [ -n "$TRIGGER" ] && [ "$n" -ge "$TRIGGER" ]; then
-        echo "Long polling started — using getUpdates to check for incoming messages"
+        echo "[INFO] $MARKER"
     else
         echo "[INFO] settings: ---- Bot process started ----"
     fi
@@ -192,6 +197,53 @@ class TestTheWaitIsLongEnough:
         say so.
         """
         assert _poll_wait_seconds() <= MAX_RUNNABLE_BUDGET
+
+
+class TestWhichMarkerItWaitsFor:
+    """v0.22.1 widened the wait; this is the correction it should have been.
+
+    "Long polling started" is this project's OWN httpx filter firing on the
+    first completed HTTP request. For an idle bot that first getUpdates is a
+    long poll, so it does not complete until its timeout expires — measured
+    25.4s after polling had actually begun on one restart and 11s on another.
+    It lags by a Telegram-controlled, variable amount.
+
+    "Application started" is python-telegram-bot's, and _application.py awaits
+    the updater coroutine BEFORE logging it, so it cannot appear until polling
+    is running. Measured at 8.19s.
+    """
+
+    def test_it_accepts_the_ptb_marker(self, tmp_path):
+        polling, _attempts = _run_loop(tmp_path, found_on_attempt=1,
+                                       marker="Application started")
+        assert polling == "yes", (
+            "the loop ignores 'Application started', the only marker that is "
+            "guaranteed to follow start_polling"
+        )
+
+    def test_it_still_accepts_the_httpx_marker(self, tmp_path):
+        """Kept as an alternative: whichever appears first ends the wait."""
+        polling, _attempts = _run_loop(
+            tmp_path, found_on_attempt=1,
+            marker="Long polling started — using getUpdates")
+        assert polling == "yes"
+
+    def test_an_unrelated_log_line_does_not_end_the_wait(self, tmp_path):
+        """The alternation must not be so loose that ordinary startup chatter
+        counts as proof the bot is polling."""
+        for noise in ("Bot process started", "Scheduled 179 upcoming event "
+                      "notifications", "Application is stopping", "started"):
+            polling, _attempts = _run_loop(tmp_path, found_on_attempt=1,
+                                           marker=noise)
+            assert polling == "no", f"{noise!r} was accepted as proof of polling"
+
+    def test_both_markers_are_named_in_the_script(self):
+        """Behaviourally covered above; this names the pair so a future edit
+        that drops one is visible in the diff."""
+        markers = re.search(r'^POLL_MARKERS="([^"]+)"', _script_text(), re.M)
+        assert markers, "POLL_MARKERS is no longer a plain assignment"
+        assert set(markers.group(1).split("|")) == {
+            "Application started", "Long polling started"}
 
 
 class TestItStillFailsWhenItShould:
