@@ -49,35 +49,28 @@ from telegram.ext import (
 # that they are used inside main()'s handler construction.
 # ---------------------------------------------------------------------------
 
-from settings import (  # noqa: F401
-    BOT_DISPLAY_NAME,
-    BOT_TOKEN,
-    LOGS_DIR,
-    RUNTIME_LOG_RETENTION,
-    TZ,
-    activity,
-)
+from settings import BOT_DISPLAY_NAME, BOT_TOKEN, activity
 import error_reporting
 import permissions
 import storage
 
 from network_watchdog import CHECK_INTERVAL, watchdog_job
 
-from permissions import (  # noqa: F401
+from permissions import (
     user_info,
 )
 # The /broadcast command was retired in favour of /addannouncement, which does
 # the same push plus a stored, translatable, expiring record. The delivery
 # engine below (target selection, send, retry) is still very much in use — it
 # is what actually pushes an announcement out.
-from handlers.broadcast import (  # noqa: F401
+from handlers.broadcast import (
     BC_RETRY,
     BC_SELECT,
     CB_BC_PREFIX,
     bc_retry,
     bc_select,
 )
-from handlers.announcements import (  # noqa: F401
+from handlers.announcements import (
     AN_BODY,
     AN_CONFIRM,
     AN_EXPIRES,
@@ -100,7 +93,7 @@ from handlers.announcements import (  # noqa: F401
     da_select,
     purge_old_announcements,
 )
-from handlers.events_admin import (  # noqa: F401
+from handlers.events_admin import (
     AE_CONFIRM,
     AE_DATE,
     AE_DESC,
@@ -138,7 +131,7 @@ from handlers.events_admin import (  # noqa: F401
     sl_select,
     sl_url,
 )
-from handlers.appointments import (  # noqa: F401
+from handlers.appointments import (
     CB_APSEL_PREFIX,
     CB_CANCEL_PREFIX,
     CB_RESCHED_PREFIX,
@@ -172,7 +165,7 @@ from handlers.appointments import (  # noqa: F401
     rs_newtime,
     rs_select,
 )
-from handlers.user_basics import (  # noqa: F401
+from handlers.user_basics import (
     CB_LANG_PREFIX,
     CB_NOTIFPREF_PREFIX,
     CB_TZ_PREFIX,
@@ -204,28 +197,22 @@ from handlers.user_basics import (  # noqa: F401
     tz_typed,
 )
 from common import (
-    # noqa: F401,
     get_user_prefs,
     md,
     reply_markdown,
     send_markdown,
 )
-from events import (  # noqa: F401
-    _merge_special_events,
-    _resolve_targets,
-    all_upcoming,
-    check_service_links,
-)
-from handlers.notifications import (  # noqa: F401
+from events import check_service_links
+from handlers.notifications import (
     notification_catchup_job,
     schedule_all_upcoming,
 )
-from handlers.backup import (  # noqa: F401
+from handlers.backup import (
     BACKUP_TIME,
     cmd_backup,
     nightly_backup_job,
 )
-from handlers.prayer import (  # noqa: F401
+from handlers.prayer import (
     PR_CONFIRM,
     PR_TEXT,
     RESP_TEXT,
@@ -233,13 +220,12 @@ from handlers.prayer import (  # noqa: F401
     cmd_prayer,
     cmd_prayerrequests,
     cmd_respondprayer,
-    pending_requests,
     pr_confirm,
     pr_text,
     purge_old_stubs,
     resp_text,
 )
-from handlers.board import (  # noqa: F401
+from handlers.board import (
     BOARD_NOTICE_TIME,
     AB_ACTION,
     AB_CONFIRM,
@@ -274,7 +260,7 @@ from handlers.board import (  # noqa: F401
     cmd_setboardofficer,
     purge_deleted_board_items,
 )
-from handlers.stats import cmd_stats  # noqa: F401
+from handlers.stats import cmd_stats
 
 logger = logging.getLogger(__name__)
 
@@ -563,32 +549,37 @@ async def _alert_on_bad_service_links(app: Application) -> None:
             logger.warning("Could not alert %s about service links.", chat_id, exc_info=True)
 
 
-async def post_init(app: Application) -> None:
-    # A restart usually means new code, so last run's traces are stale.
-    error_reporting.reset_error_log()
-    await schedule_all_upcoming(app)
-    await alert_on_bad_service_links(app)
+#: The command menu Telegram shows every user. Admin, prayer and board
+#: commands are deliberately ABSENT: each is gated and answers "Unknown
+#: command" to everyone else, so listing them here would advertise queues most
+#: people cannot open. /help assembles the per-role lists instead.
+PUBLIC_COMMANDS: list[BotCommand] = [
+    BotCommand("start", "Register and show welcome"),
+    BotCommand("help", "Show available commands"),
+    BotCommand("events", "Upcoming events (next 30 days)"),
+    BotCommand("exportcalendar", "Download ICS calendar file"),
+    BotCommand("appointment", "Request a meeting with an official"),
+    BotCommand("myappointments", "List your appointments"),
+    BotCommand("cancelappointment", "Cancel a pending or confirmed appointment"),
+    BotCommand("reschedule", "Propose a new time for an upcoming appointment"),
+    BotCommand("settimezone", "Set your time zone for displayed times"),
+    BotCommand("language", "Choose your language"),
+    BotCommand("notifications", "Choose which reminders you receive"),
+    BotCommand("prayer", "Send a prayer request"),
+    BotCommand("privacy", "What the bot stores about you"),
+    BotCommand("donate", "Support the congregation with a gift"),
+    BotCommand("announcements", "View current announcements"),
+    BotCommand("stop", "Unsubscribe from notifications"),
+]
 
-    # Set bot commands
-    await app.bot.set_my_commands([
-        BotCommand("start", "Register and show welcome"),
-        BotCommand("help", "Show available commands"),
-        BotCommand("events", "Upcoming events (next 30 days)"),
-        BotCommand("exportcalendar", "Download ICS calendar file"),
-        BotCommand("appointment", "Request a meeting with an official"),
-        BotCommand("myappointments", "List your appointments"),
-        BotCommand("cancelappointment", "Cancel a pending or confirmed appointment"),
-        BotCommand("reschedule", "Propose a new time for an upcoming appointment"),
-        BotCommand("settimezone", "Set your time zone for displayed times"),
-        BotCommand("language", "Choose your language"),
-        BotCommand("notifications", "Choose which reminders you receive"),
-        BotCommand("prayer", "Send a prayer request"),
-        BotCommand("privacy", "What the bot stores about you"),
-        BotCommand("donate", "Support the congregation with a gift"),
-        BotCommand("announcements", "View current announcements"),
-        BotCommand("stop", "Unsubscribe from notifications"),
-    ])
 
+def _register_jobs(app: Application) -> None:
+    """Attach the recurring jobs. Called from post_init.
+
+    Lifted out of post_init so that function reads as the four things startup
+    does rather than as one 114-line block. The comments here are the record of
+    why each cadence is what it is — several were written after an incident.
+    """
     # Weekly reschedule — extends the notification window as events enter the
     # 400-day horizon that schedule_all_upcoming() looks at.
     #
@@ -677,6 +668,16 @@ async def post_init(app: Application) -> None:
         first=CHECK_INTERVAL,
         name="network_watchdog",
     )
+
+
+async def post_init(app: Application) -> None:
+    # A restart usually means new code, so last run's traces are stale.
+    error_reporting.reset_error_log()
+    await schedule_all_upcoming(app)
+    await alert_on_bad_service_links(app)
+
+    await app.bot.set_my_commands(PUBLIC_COMMANDS)
+    _register_jobs(app)
 
 
 async def reschedule_job(context: ContextTypes.DEFAULT_TYPE) -> None:
