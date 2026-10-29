@@ -456,7 +456,7 @@ class TestPrayerIsWired:
              patch.object(bot, "purge_archived_appointments", AsyncMock()), \
              patch.object(bot, "purge_old_announcements", AsyncMock()), \
              patch.object(bot, "purge_old_stubs", AsyncMock()) as purge, \
-             patch.object(bot, "prune_log_file", lambda *a, **k: None):
+             patch.object(bot, "purge_deleted_board_items", AsyncMock()):
             await bot.daily_maintenance_job(MagicMock())
         assert purge.called, "daily maintenance must purge old prayer stubs"
 

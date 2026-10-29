@@ -6,7 +6,6 @@ Records are kept for 3 months (configurable via retention_days).
 from __future__ import annotations
 
 import logging
-import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -125,56 +124,3 @@ class ActivityLogger:
             self._log_file.write_text("".join(kept), encoding="utf-8")
         except OSError as exc:
             _log.error("Failed to prune log: %s", exc)
-
-
-# ---------------------------------------------------------------------------
-# Runtime-log pruning (bot.log)
-# ---------------------------------------------------------------------------
-
-# A record starts with "YYYY-MM-DD HH:MM:SS"; continuation lines (tracebacks)
-# have no timestamp and belong to the record above them.
-_RECORD_START = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
-
-
-def prune_log_file(path: str | Path, retention_days: int,
-                   tz: pytz.BaseTzInfo, now: datetime | None = None) -> int:
-    """Drop log records older than *retention_days* from *path*.
-
-    Written for bot.log, which the logging FileHandler keeps open: the file is
-    rewritten IN PLACE (seek/truncate on the same inode) rather than replaced,
-    so the handler's descriptor stays valid and later writes are not lost to an
-    unlinked file.
-
-    Multi-line records are kept intact — a traceback's continuation lines
-    inherit the keep/drop decision of the timestamped line that started it.
-    Returns the number of lines removed.
-    """
-    path = Path(path)
-    if not path.exists():
-        return 0
-    cutoff = (now or datetime.now(tz)) - timedelta(days=retention_days)
-    try:
-        with open(path, "r+", encoding="utf-8", errors="replace") as fh:
-            lines = fh.readlines()
-            kept: list[str] = []
-            keeping = True          # keep anything before the first timestamp
-            for line in lines:
-                m = _RECORD_START.match(line)
-                if m:
-                    try:
-                        stamp = tz.localize(
-                            datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S"))
-                        keeping = stamp >= cutoff
-                    except (ValueError, TypeError):
-                        keeping = True      # unparseable date: keep it
-                if keeping:
-                    kept.append(line)
-            removed = len(lines) - len(kept)
-            if removed:
-                fh.seek(0)
-                fh.writelines(kept)
-                fh.truncate()
-            return removed
-    except OSError as exc:
-        _log.error("Failed to prune %s: %s", path, exc)
-        return 0
