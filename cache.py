@@ -97,6 +97,29 @@ class FileCache:
         else:
             yaml.dump(data, fh, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
+    async def save_key(self, key: str, value: Any) -> None:
+        """Replace one top-level key, leaving the rest of the document alone.
+
+        Five callers in storage.py used to do this by hand, reaching into
+        `self._data` from outside the class. The logic is unchanged; it just
+        lives with the data it touches now.
+
+        It reads `_data` rather than awaiting `get()`, deliberately. Awaiting
+        get() would make the write path re-check the file's mtime and possibly
+        reload, which changes when on-disk state becomes visible — a behaviour
+        change, not a tidy-up, and one that breaks tests relying on the cached
+        copy.
+
+        Known limitation, latent rather than live: `_data` is None until
+        something has loaded the file, so a save with no preceding read writes
+        a fresh document and DROPS any other top-level keys. Every caller reads
+        before writing, so this has never bitten. Fixing it means loading
+        first, which is the behaviour change described above.
+        """
+        data = self._data or {}
+        data[key] = value
+        await self.save(data)
+
     async def save(self, data: Any) -> None:
         async with self._lock:
             self._data = data

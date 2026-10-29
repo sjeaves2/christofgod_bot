@@ -31,7 +31,7 @@ from common import (
 )
 from ics_generator import appointment_cancellation_to_ics, appointment_to_ics
 from localization import status_label, t
-from permissions import admin_only, user_info
+from permissions import user_info
 from settings import TZ, activity
 from telegram import (
     InlineKeyboardButton,
@@ -425,12 +425,6 @@ def _count_active_appts_with_official(
 CB_APPT_PREFIX = "appt:"
 # Official picker for the /appointment request flow (distinct from CB_APPT_PREFIX).
 CB_APSEL_PREFIX = "apsel:"
-
-
-@admin_only
-async def admin_check_pass(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Placeholder — used only to block unknown admin commands from non-admins."""
-    pass
 
 
 async def cmd_appointment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
