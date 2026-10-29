@@ -49,7 +49,6 @@ from telegram.ext import (
 # that they are used inside main()'s handler construction.
 # ---------------------------------------------------------------------------
 
-from activity_logger import prune_log_file
 from settings import (  # noqa: F401
     BOT_DISPLAY_NAME,
     BOT_TOKEN,
@@ -328,20 +327,18 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def daily_maintenance_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Daily: archive long-past appointments, purge the appointment archive,
-    purge long-expired announcements and soft-deleted board items, and trim the
-    runtime log.
+    and purge long-expired announcements, prayer stubs and soft-deleted board
+    items.
 
-    bot.log is pruned here as well as at startup so a bot that stays up for
-    months does not accumulate an unbounded file.
+    bot.log is NOT handled here any more. It rotates daily and drops expired
+    files on its own (see settings.py), which replaced a pruner that read the
+    whole file — 9 seconds of every startup on a 45 MB log.
     """
     await archive_old_appointments()
     await purge_archived_appointments()
     await purge_old_announcements()
     await purge_old_stubs()
     await purge_deleted_board_items()
-    removed = prune_log_file(LOGS_DIR / "bot.log", RUNTIME_LOG_RETENTION, TZ)
-    if removed:
-        logger.info("Daily maintenance pruned %d old log line(s).", removed)
 
 
 # ---------------------------------------------------------------------------

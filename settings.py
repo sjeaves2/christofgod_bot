@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import logging
 import re
+from logging.handlers import TimedRotatingFileHandler
 from datetime import datetime
 from pathlib import Path
 
 import pytz
 import yaml
 
-from activity_logger import ActivityLogger, prune_log_file
+from activity_logger import ActivityLogger
 
 BASE_DIR = Path(__file__).parent
 CONFIG_DIR = BASE_DIR / "config"
@@ -80,23 +81,59 @@ _console_handler = logging.StreamHandler()
 _console_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
 _console_handler.setLevel(LOG_LEVEL)
 
-# Trim records older than the retention window before attaching the handler:
-# at this point nothing holds the file open, so the rewrite is safe.
-_pruned = prune_log_file(_log_file, RUNTIME_LOG_RETENTION, TZ)
-
-# File handler — appends across restarts
-_file_handler = logging.FileHandler(_log_file, mode="a", encoding="utf-8")
+# One file per day, deleted whole once it falls outside the retention window.
+#
+# This replaced a custom pruner that read the ENTIRE log into memory at every
+# import of this module and rewrote it in place. Measured on the live server
+# 2026-10-29: 9.1 seconds to delete 8 lines from a 45 MB file, which was most
+# of the bot's ~8s startup and ran TWICE per deploy (update.sh does an import
+# check). It also allocated the whole file — a 45 MB spike on a 412 MB box
+# whose one outage was caused by memory exhaustion.
+#
+# Rotation makes the cost O(1): expired files are unlinked, never read. It also
+# removes the constraint that forced the old design — the in-place rewrite
+# existed to keep this handler's file descriptor valid, and a rotating handler
+# manages its own.
+#
+# backupCount counts FILES, not days. With daily rotation that is normally the
+# same thing; if the bot is down for a stretch, no file is written for those
+# days, so the window covers 45 days of ACTIVITY rather than 45 calendar days.
+# That is the more useful of the two.
+#
+# Rotated files are named bot.log.YYYY-MM-DD, so searching history means
+# `grep logs/bot.log*` rather than `grep logs/bot.log`.
+_file_handler = TimedRotatingFileHandler(
+    _log_file, when="midnight", backupCount=RUNTIME_LOG_RETENTION,
+    encoding="utf-8")
 _file_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
 _file_handler.setLevel(LOG_LEVEL)
 
 # Root at DEBUG so demoted-to-DEBUG records can reach handlers; the handlers'
 # own levels (LOG_LEVEL) decide what is actually emitted.
 logging.basicConfig(level=logging.DEBUG, handlers=[_console_handler, _file_handler])
+
+# apscheduler narrates every job tick at INFO ("Running job X", "Job X executed
+# successfully", "Added job", "Removed job"). Measured 2026-10-29 on the live
+# server: of 259,251 lines in a 45 MB bot.log, **253,256 (97.7%) were these**.
+# Everything the bot itself logged came to about 650 lines. The cost was not
+# just disk: the pruner this file used to run at import read the WHOLE log
+# every time, so the volume was also most of the bot's startup and a 45 MB
+# allocation on a 412 MB box. Rotation fixed the reading; this fixes the
+# writing, so the files stay small too.
+#
+# Set on the PARENT logger, which is enough: apscheduler's children
+# (apscheduler.executors.default, apscheduler.scheduler) have no explicit level,
+# so their effective level resolves through this one. Contrast the httpx
+# handling below, which needs a FILTER because it rewrites records rather than
+# dropping them.
+#
+# Still recoverable: at LOG_LEVEL=DEBUG the scheduler goes back to being
+# verbose, the same bargain the httpx filter strikes.
+logging.getLogger("apscheduler").setLevel(
+    logging.DEBUG if LOG_LEVEL <= logging.DEBUG else logging.WARNING)
+
 logger = logging.getLogger(__name__)
 logger.info("---- Bot process started ----")
-if _pruned:
-    logger.info("Pruned %d log line(s) older than %d days from %s",
-                _pruned, RUNTIME_LOG_RETENTION, _log_file.name)
 
 
 class _HttpxApiLogFilter(logging.Filter):
