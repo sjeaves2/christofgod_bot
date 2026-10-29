@@ -52,9 +52,7 @@ async def get_all_users() -> list[dict[str, Any]]:
 
 
 async def save_users(users: list[dict[str, Any]]) -> None:
-    data = users_cache._data or {}
-    data["users"] = users
-    await users_cache.save(data)
+    await users_cache.save_key("users", users)
 
 
 async def get_all_events_data() -> dict[str, Any]:
@@ -72,9 +70,7 @@ async def get_appointments() -> list[dict[str, Any]]:
 
 
 async def save_appointments(appts: list[dict[str, Any]]) -> None:
-    data = appts_cache._data or {}
-    data["appointments"] = appts
-    await appts_cache.save(data)
+    await appts_cache.save_key("appointments", appts)
 
 
 async def get_prayer_requests() -> list[dict[str, Any]]:
@@ -83,9 +79,7 @@ async def get_prayer_requests() -> list[dict[str, Any]]:
 
 
 async def save_prayer_requests(requests: list[dict[str, Any]]) -> None:
-    data = prayer_cache._data or {}
-    data["requests"] = requests
-    await prayer_cache.save(data)
+    await prayer_cache.save_key("requests", requests)
 
 
 async def get_announcements() -> list[dict[str, Any]]:
@@ -94,9 +88,7 @@ async def get_announcements() -> list[dict[str, Any]]:
 
 
 async def save_announcements(anns: list[dict[str, Any]]) -> None:
-    data = ann_cache._data or {}
-    data["announcements"] = anns
-    await ann_cache.save(data)
+    await ann_cache.save_key("announcements", anns)
 
 
 async def get_board_items() -> list[dict[str, Any]]:
@@ -105,9 +97,7 @@ async def get_board_items() -> list[dict[str, Any]]:
 
 
 async def save_board_items(items: list[dict[str, Any]]) -> None:
-    data = board_items_cache._data or {}
-    data["items"] = items
-    await board_items_cache.save(data)
+    await board_items_cache.save_key("items", items)
 
 
 async def _load_notif_state() -> dict[str, Any]:
