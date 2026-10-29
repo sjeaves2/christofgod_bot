@@ -130,24 +130,41 @@ fi
 # 2026-09-04 outage it reported "active" for 87 minutes while DNS was dead and
 # the bot sat retrying an unresolvable hostname, reaching nobody. The process
 # was alive and useless. Wait for proof it is actually talking to Telegram.
-# 60s, not 20s. On 2026-10-27 the v0.22.0 deploy reported failure and the line
-# arrived ONE SECOND after the loop gave up: the restart returned at 16:52:10,
-# Python finished importing at 16:52:20, the wait expired at 16:52:30, polling
-# started at 16:52:31. Ten of the twenty seconds went on interpreter startup
-# alone, which grows with every dependency, so the old budget was already
-# thinner than it looked and the margin was luck rather than headroom.
+# Wait for EITHER marker, and prefer "Application started".
 #
-# The cost of waiting longer is only a slower deploy on a genuinely broken
-# bot, and nothing is rolled back on this check either way. The cost of being
-# too short is a false failure that trains the reader to ignore a real one —
-# which is exactly what this check exists to prevent.
+# v0.22.1 widened this wait from 20s to 60s after a healthy deploy reported
+# failure. That stopped the false alarms but treated a symptom: profiling on
+# 2026-10-29 showed the bot is up and polling in about EIGHT seconds, and that
+# "Long polling started" is not the moment polling starts at all.
+#
+# That line comes from this project's own httpx log filter, which fires on the
+# first completed HTTP request. For an idle bot the first getUpdates is a LONG
+# POLL, so the request does not complete until its timeout expires with no
+# updates — measured 25.4s after polling had begun on one restart and 11s on
+# another. It lags by a Telegram-controlled, variable amount.
+#
+# "Application started" is python-telegram-bot's own, and _application.py runs
+# the updater coroutine BEFORE it:
+#     loop.run_until_complete(updater_coroutine)   # start_polling completes
+#     loop.run_until_complete(self.start())        # logs "Application started"
+# So that line cannot appear until polling is actually running. It arrived at
+# 8.19s on the restart measured.
+#
+# Both are logged at INFO, so a config/config.yaml with log.level above INFO
+# hides both — hence the note in the failure message below.
+#
+# 60s is kept, but it is now generous headroom rather than a budget being
+# squeezed: nothing is rolled back on this check either way, and the cost of
+# being too short is a false failure that trains the reader to ignore a real
+# one, which is exactly what this check exists to prevent.
 POLL_WAIT_SECONDS=60
+POLL_MARKERS="Application started|Long polling started"
 
-echo "==> Waiting for Telegram polling to start (up to ${POLL_WAIT_SECONDS}s)"
+echo "==> Waiting for the bot to start polling (up to ${POLL_WAIT_SECONDS}s)"
 polling=""
 for _ in $(seq 1 "$POLL_WAIT_SECONDS"); do
     if journalctl -u "$SERVICE_NAME" --since "$restart_at" --no-pager 2>/dev/null \
-         | grep -q "Long polling started"; then
+         | grep -qE "$POLL_MARKERS"; then
         polling=yes
         break
     fi
@@ -156,13 +173,13 @@ done
 
 if [ -z "$polling" ]; then
     echo
-    echo "The service is running but never reported 'Long polling started'"
-    echo "within ${POLL_WAIT_SECONDS}s."
+    echo "The service is running but never reported 'Application started' or"
+    echo "'Long polling started' within ${POLL_WAIT_SECONDS}s."
     echo "It may be unable to reach api.telegram.org — check DNS and the token."
     echo "The bot has NOT been rolled back; it is up but possibly not receiving."
     echo
-    echo "One false alarm to rule out: that line is logged at INFO, so a"
-    echo "config/config.yaml with log.level above INFO hides it and this check"
+    echo "One false alarm to rule out: both lines are logged at INFO, so a"
+    echo "config/config.yaml with log.level above INFO hides them and this check"
     echo "fails on a perfectly healthy bot."
     journalctl -u "$SERVICE_NAME" --since "$restart_at" --no-pager --lines=30
     exit 1
