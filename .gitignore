@@ -23,6 +23,15 @@ data/appointments.yaml
 data/appointments_archive.yaml
 data/announcements.yaml
 
+# Prayer requests. The most sensitive file the bot holds: health, finances,
+# bereavement and family crises in members' own words. This entry was MISSING
+# until 2026-10-29 — the file had never been committed, but `git add -A` would
+# have staged it, in a public repository. Nothing leaked, partly because
+# handlers/prayer.py deletes the request text as soon as a request is answered
+# or dismissed, so the live file is usually near-empty. That is a mitigation,
+# not a reason to leave this out.
+data/prayer_requests.yaml
+
 # Board compliance items. NOT tracked: descriptions carry registration numbers,
 # filing account references and renewal portal links, and this repository is
 # public. Ship data/board_items.yaml.example instead.
