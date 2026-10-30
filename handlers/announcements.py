@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import uuid
 from datetime import datetime, timedelta
 from typing import Any
@@ -26,10 +27,14 @@ from common import (
 )
 from handlers.notifications import CAPTION_LIMIT
 from handlers.broadcast import (
+    BC_RETRY,
     BC_SELECT,
+    CB_BC_PREFIX,
     _append_sender,
     _bc_keyboard,
     _broadcast_target_options,
+    bc_retry,
+    bc_select,
 )
 from localization import t
 from permissions import admin_only, user_info
@@ -37,7 +42,16 @@ from settings import TZ, activity
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.error import BadRequest
-from telegram.ext import ContextTypes, ConversationHandler
+from telegram.ext import (
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    ConversationHandler,
+    MessageHandler,
+    filters,
+)
+
+from handlers.shared import cancel_conversation
 from telegram.helpers import escape_markdown
 
 logger = logging.getLogger(__name__)
@@ -479,3 +493,70 @@ async def da_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 
+
+
+# ---------------------------------------------------------------------------
+# Conversation assembly
+# ---------------------------------------------------------------------------
+#
+# Built here rather than in bot.main(). See handlers/events_admin.py for why
+# these are functions and not module-level constants, and why allow_reentry is
+# set on both.
+#
+# This module is the reason handlers/shared.py exists. handlers/user_basics.py
+# imports cmd_announcements from here, so importing the /cancel fallback back
+# out of user_basics would close the cycle
+# announcements -> user_basics -> announcements. shared.py is a leaf and
+# imports no feature code, which tests/test_handlers_shared.py enforces.
+
+
+def add_announcement_conversation() -> ConversationHandler:
+    """/addannouncement — compose, then hand off to broadcast target selection.
+
+    The last two states belong to handlers/broadcast.py: once the announcement
+    is saved the flow continues straight into choosing who receives it, rather
+    than making the admin run a second command. That is why this conversation
+    holds BC_SELECT and BC_RETRY, and why BC_RETRY's pattern is narrower than
+    BC_SELECT's — a retry tap must not be read as a fresh target choice.
+
+    AN_MEDIA and AN_LINK are skippable, so each takes a /skip CommandHandler
+    ahead of its message handlers. AN_MEDIA accepts a photo, a document, or
+    text, in that order.
+    """
+    return ConversationHandler(
+        entry_points=[CommandHandler("addannouncement", cmd_addannouncement)],
+        states={
+            AN_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, an_title)],
+            AN_BODY: [MessageHandler(filters.TEXT & ~filters.COMMAND, an_body)],
+            AN_MEDIA: [
+                CommandHandler("skip", an_skip_media),
+                MessageHandler(filters.PHOTO | filters.Document.ALL, an_media),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, an_media),
+            ],
+            AN_LINK: [
+                CommandHandler("skip", an_skip_link),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, an_link),
+            ],
+            AN_EXPIRES: [MessageHandler(filters.TEXT & ~filters.COMMAND, an_expires)],
+            AN_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, an_confirm)],
+            # After saving, the flow re-uses the broadcast target selection.
+            BC_SELECT: [CallbackQueryHandler(
+                bc_select, pattern=f"^{re.escape(CB_BC_PREFIX)}")],
+            BC_RETRY: [CallbackQueryHandler(
+                bc_retry, pattern=f"^{re.escape(CB_BC_PREFIX)}retry:")],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_conversation)],
+        allow_reentry=True,
+    )
+
+
+def delete_announcement_conversation() -> ConversationHandler:
+    """/delannouncement — pick the announcement to remove."""
+    return ConversationHandler(
+        entry_points=[CommandHandler("delannouncement", cmd_delannouncement)],
+        states={
+            DA_SELECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, da_select)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_conversation)],
+        allow_reentry=True,
+    )
