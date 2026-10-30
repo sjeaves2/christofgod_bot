@@ -10,6 +10,12 @@ conversation they were trying to leave. Several prompts tell people to send
 
 Found in production on 2026-09-16 (ERR-D616E9) while testing /prayer, after
 roughly four months in which no test exercised a fallback.
+
+It lives in handlers/shared.py rather than handlers/user_basics.py, so that
+every feature module can assemble its own conversations without importing
+user_basics — which imports handlers.announcements and would otherwise make
+the announcements factory a circular import. tests/test_handlers_shared.py
+guards that module's leaf status.
 """
 
 from __future__ import annotations
@@ -24,7 +30,7 @@ from telegram.ext import CommandHandler, ConversationHandler
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import handlers.user_basics as UB  # noqa: E402
+import handlers.shared as SHARED  # noqa: E402
 from localization import AVAILABLE_LANGUAGES, t  # noqa: E402
 
 LANGS = list(AVAILABLE_LANGUAGES)
@@ -48,9 +54,9 @@ def _ctx(**user_data):
 
 async def _cancel(lang="en", **user_data):
     upd, ctx = _update(), _ctx(**user_data)
-    with patch.object(UB, "get_user_prefs", AsyncMock(return_value=(None, lang))), \
-         patch.object(UB.activity, "log_command", lambda *a, **k: None):
-        state = await UB.cancel_conversation(upd, ctx)
+    with patch.object(SHARED, "get_user_prefs", AsyncMock(return_value=(None, lang))), \
+         patch.object(SHARED.activity, "log_command", lambda *a, **k: None):
+        state = await SHARED.cancel_conversation(upd, ctx)
     return state, ctx, upd
 
 
@@ -61,7 +67,7 @@ class TestCancelBehaviour:
 
     async def test_it_is_awaitable(self):
         """The whole bug: a sync callback returning an int cannot be awaited."""
-        assert inspect.iscoroutinefunction(UB.cancel_conversation)
+        assert inspect.iscoroutinefunction(SHARED.cancel_conversation)
 
     async def test_tells_the_member_it_was_cancelled(self):
         """Silence after /cancel is indistinguishable from the old failure."""
@@ -76,9 +82,9 @@ class TestCancelBehaviour:
 
     async def test_logged_for_stats(self):
         upd, ctx = _update(), _ctx()
-        with patch.object(UB, "get_user_prefs", AsyncMock(return_value=(None, "en"))), \
-             patch.object(UB.activity, "log_command") as log:
-            await UB.cancel_conversation(upd, ctx)
+        with patch.object(SHARED, "get_user_prefs", AsyncMock(return_value=(None, "en"))), \
+             patch.object(SHARED.activity, "log_command") as log:
+            await SHARED.cancel_conversation(upd, ctx)
         assert log.call_args[0][0] == "cancel"
 
     @pytest.mark.parametrize("lang", LANGS)
@@ -167,7 +173,7 @@ class TestEveryCallbackIsAwaitable:
                 continue
             for fb in h.fallbacks:
                 if isinstance(fb, CommandHandler) and "cancel" in fb.commands:
-                    if fb.callback is not UB.cancel_conversation:
+                    if fb.callback is not SHARED.cancel_conversation:
                         wrong.append(getattr(fb.callback, "__name__", str(fb.callback)))
         assert not wrong, f"/cancel fallbacks not using cancel_conversation: {wrong}"
 

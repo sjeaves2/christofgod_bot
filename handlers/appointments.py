@@ -41,7 +41,16 @@ from telegram import (
 )
 from telegram.constants import ParseMode
 from telegram.error import TelegramError
-from telegram.ext import ContextTypes, ConversationHandler
+from telegram.ext import (
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    ConversationHandler,
+    MessageHandler,
+    filters,
+)
+
+from handlers.shared import cancel_conversation
 
 logger = logging.getLogger(__name__)
 
@@ -1499,3 +1508,75 @@ async def _handle_reschedule_response(
     await query.edit_message_text("✅ Reschedule accepted; the new time is confirmed.")
 
 
+
+
+# ---------------------------------------------------------------------------
+# Conversation assembly
+# ---------------------------------------------------------------------------
+#
+# Built here rather than in bot.main(). See handlers/events_admin.py for why
+# these are functions and not module-level constants, and why allow_reentry is
+# set on every one.
+#
+# Unlike the event-admin conversations, these mix step kinds: a tap on an
+# inline keyboard (CallbackQueryHandler, gated by the CB_* prefix the keyboard
+# was built with) and typed replies (MessageHandler). The prefixes are what
+# route a tap to the right conversation, so a wrong one here sends an officer's
+# tap into a different flow — tests/test_handler_registration_order.py pins
+# each pattern for that reason.
+
+
+def _typed(callback) -> list:
+    """A typed free-text step."""
+    return [MessageHandler(filters.TEXT & ~filters.COMMAND, callback)]
+
+
+def _tapped(callback, prefix: str) -> list:
+    """A step driven by an inline-keyboard tap carrying `prefix`."""
+    return [CallbackQueryHandler(callback, pattern=f"^{re.escape(prefix)}")]
+
+
+def appointment_conversation() -> ConversationHandler:
+    """/appointment — pick an official, then date, time, purpose, confirm."""
+    return ConversationHandler(
+        entry_points=[CommandHandler("appointment", cmd_appointment)],
+        states={
+            AP_OFFICIAL: _tapped(ap_official, CB_APSEL_PREFIX),
+            AP_DATE: _typed(ap_date),
+            AP_TIME: _typed(ap_time),
+            AP_DESC: _typed(ap_desc),
+            AP_CONFIRM: _typed(ap_confirm),
+        },
+        fallbacks=[CommandHandler("cancel", cancel_conversation)],
+        allow_reentry=True,
+    )
+
+
+def cancel_appointment_conversation() -> ConversationHandler:
+    """/cancelappointment — pick one, then confirm. Both steps are taps.
+
+    Both states use the SAME prefix, so the conversation's state is what
+    distinguishes "which appointment" from "yes, really".
+    """
+    return ConversationHandler(
+        entry_points=[CommandHandler("cancelappointment", cmd_cancelappointment)],
+        states={
+            CA_SELECT: _tapped(ca_select, CB_CANCEL_PREFIX),
+            CA_CONFIRM: _tapped(ca_confirm, CB_CANCEL_PREFIX),
+        },
+        fallbacks=[CommandHandler("cancel", cancel_conversation)],
+        allow_reentry=True,
+    )
+
+
+def reschedule_conversation() -> ConversationHandler:
+    """/reschedule — tap the appointment, then type the new time."""
+    return ConversationHandler(
+        entry_points=[CommandHandler("reschedule", cmd_reschedule)],
+        states={
+            RS_SELECT: _tapped(rs_select, CB_RESCHED_PREFIX),
+            RS_NEWTIME: _typed(rs_newtime),
+        },
+        fallbacks=[CommandHandler("cancel", cancel_conversation)],
+        allow_reentry=True,
+    )

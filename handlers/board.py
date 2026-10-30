@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 from datetime import date, time, timedelta
 from typing import Any
 
@@ -45,7 +46,16 @@ from permissions import admin_only, board_officer_only, user_info
 from settings import TZ, activity
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile, Update
 from telegram.error import TelegramError
-from telegram.ext import ContextTypes, ConversationHandler
+from telegram.ext import (
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    ConversationHandler,
+    MessageHandler,
+    filters,
+)
+
+from handlers.shared import cancel_conversation
 
 logger = logging.getLogger(__name__)
 
@@ -955,3 +965,73 @@ async def board_officer_callback(update: Update, context: ContextTypes.DEFAULT_T
                                  f"{'on' if now_officer else 'off'}")
     await query.edit_message_reply_markup(
         reply_markup=_officer_keyboard(_sorted_users(users)))
+
+
+# ---------------------------------------------------------------------------
+# Conversation assembly
+# ---------------------------------------------------------------------------
+#
+# Built here rather than in bot.main(). See handlers/events_admin.py for why
+# these are functions and not module-level constants, and why allow_reentry is
+# set on both.
+
+
+def _skippable(skip_callback, value_callback) -> list:
+    """An optional step: /skip to leave it unset, or type a value.
+
+    The /skip CommandHandler must come FIRST. The message handler is
+    TEXT & ~COMMAND so it would not match /skip anyway, but relying on that
+    puts the behaviour of this step in the filter rather than in the order,
+    and the order is what reads correctly.
+    """
+    return [
+        CommandHandler("skip", skip_callback),
+        MessageHandler(filters.TEXT & ~filters.COMMAND, value_callback),
+    ]
+
+
+def board_items_conversation() -> ConversationHandler:
+    """/boarditems — the pending queue, with drill-down and edit actions.
+
+    The callback router is an ENTRY POINT as well as a state handler.
+    user_data does not survive a restart and every deploy restarts the bot, so
+    without this a keyboard already on an officer's screen would go dead:
+    tapping it would do nothing at all — no error, no reply. As an entry point
+    the tap re-enters the conversation at the right place instead.
+    """
+    return ConversationHandler(
+        entry_points=[
+            CommandHandler("boarditems", cmd_boarditems),
+            CallbackQueryHandler(board_callback,
+                                 pattern=f"^{re.escape(CB_BOARD_PREFIX)}"),
+        ],
+        states={
+            BI_MENU: [CallbackQueryHandler(
+                board_callback, pattern=f"^{re.escape(CB_BOARD_PREFIX)}")],
+            BI_EDIT_VALUE: _skippable(bi_skip_edit, bi_edit_value),
+            BI_NEXT_DUE: _skippable(bi_skip_next_due, bi_next_due),
+        },
+        fallbacks=[CommandHandler("cancel", cancel_conversation)],
+        allow_reentry=True,
+    )
+
+
+def add_board_item_conversation() -> ConversationHandler:
+    """/addboarditem — action and due date are required; the rest are optional.
+
+    Notify-days, description and URL are each skippable, so an officer can add
+    a bare deadline in two answers and fill the detail in later via /boarditems.
+    """
+    return ConversationHandler(
+        entry_points=[CommandHandler("addboarditem", cmd_addboarditem)],
+        states={
+            AB_ACTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, ab_action)],
+            AB_DUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ab_due)],
+            AB_NOTIFY: _skippable(ab_skip_notify, ab_notify),
+            AB_DESC: _skippable(ab_skip_desc, ab_desc),
+            AB_URL: _skippable(ab_skip_url, ab_url),
+            AB_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, ab_confirm)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_conversation)],
+        allow_reentry=True,
+    )
