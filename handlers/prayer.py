@@ -44,7 +44,15 @@ from permissions import user_info
 from settings import TZ, activity
 from telegram import Update
 from telegram.error import TelegramError
-from telegram.ext import ContextTypes, ConversationHandler
+from telegram.ext import (
+    CommandHandler,
+    ContextTypes,
+    ConversationHandler,
+    MessageHandler,
+    filters,
+)
+
+from handlers.shared import cancel_conversation
 from telegram.helpers import escape_markdown
 
 logger = logging.getLogger(__name__)
@@ -514,3 +522,44 @@ async def _notify_other_prayer_admins(bot, req: dict[str, Any], actor_id: int,
         except TelegramError as exc:
             logger.warning("Could not notify prayer admin %s: %s", chat_id, exc)
     return sent
+
+
+# ---------------------------------------------------------------------------
+# Conversation assembly
+# ---------------------------------------------------------------------------
+#
+# Built here rather than in bot.main(). See handlers/events_admin.py for why
+# these are functions and not module-level constants, and why allow_reentry is
+# set on both.
+
+
+def prayer_conversation() -> ConversationHandler:
+    """/prayer — a member writes a request, then confirms it.
+
+    This is the conversation that was silently broken for a time by a
+    registration-order mistake in main(): the catch-all free-text handler had
+    been registered first, so it swallowed the member's request and discarded
+    it with no error. Nothing about the conversation itself was wrong, which is
+    why it took so long to find.
+    """
+    return ConversationHandler(
+        entry_points=[CommandHandler("prayer", cmd_prayer)],
+        states={
+            PR_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, pr_text)],
+            PR_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, pr_confirm)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_conversation)],
+        allow_reentry=True,
+    )
+
+
+def respond_prayer_conversation() -> ConversationHandler:
+    """/respondprayer — a prayer-team member writes the reply to send back."""
+    return ConversationHandler(
+        entry_points=[CommandHandler("respondprayer", cmd_respondprayer)],
+        states={
+            RESP_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, resp_text)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_conversation)],
+        allow_reentry=True,
+    )

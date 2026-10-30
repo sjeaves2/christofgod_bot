@@ -43,7 +43,17 @@ from telegram import (
     Update,
 )
 from telegram.error import BadRequest, TelegramError
-from telegram.ext import ApplicationHandlerStop, ContextTypes, ConversationHandler
+from telegram.ext import (
+    ApplicationHandlerStop,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    ConversationHandler,
+    MessageHandler,
+    filters,
+)
+
+from handlers.shared import cancel_conversation
 from telegram.helpers import escape_markdown
 
 logger = logging.getLogger(__name__)
@@ -199,27 +209,6 @@ async def _register_official_if_known(
                 changed = True
     if changed:
         permissions._save_officials()
-
-
-async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Shared /cancel fallback for every ConversationHandler.
-
-    Replaces `lambda u, c: ConversationHandler.END`, which looked harmless but
-    never worked: PTB awaits every callback, and awaiting the integer END raises
-    TypeError. So /cancel errored in all 13 conversations and — because the
-    exception meant the state was never returned — left the user stuck in the
-    conversation they were trying to leave. Several prompts tell people to use
-    it, so this was a promise the bot could not keep.
-
-    Clearing user_data matters too: it holds only conversation scratch here, and
-    leaving a half-finished draft behind would leak it into the next one.
-    """
-    uid, uname, dname = user_info(update)
-    _, lang = await get_user_prefs(uid)
-    context.user_data.clear()
-    activity.log_command("cancel", uid, uname, dname)
-    await update.message.reply_text(t("action_cancelled", lang))
-    return ConversationHandler.END
 
 
 async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -794,3 +783,50 @@ DEEP_LINK_FOLLOW_UPS = {
     "privacy": cmd_privacy,
     "help": cmd_help,
 }
+
+
+# ---------------------------------------------------------------------------
+# Conversation assembly
+# ---------------------------------------------------------------------------
+#
+# Built here rather than in bot.main(). See handlers/events_admin.py for why
+# these are functions and not module-level constants, and why allow_reentry is
+# set on both.
+
+
+def set_timezone_conversation() -> ConversationHandler:
+    """/settimezone — tap a common zone, or type any IANA name.
+
+    The one state accepts BOTH kinds of reply, which is why it is not the
+    single-handler shape the other conversations use: the keyboard lists a
+    handful of zones, and anyone outside them types their own.
+    """
+    return ConversationHandler(
+        entry_points=[CommandHandler("settimezone", cmd_settimezone)],
+        states={
+            TZ_SELECT: [
+                CallbackQueryHandler(tz_button, pattern=f"^{re.escape(CB_TZ_PREFIX)}"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, tz_typed),
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_conversation)],
+        allow_reentry=True,
+    )
+
+
+def language_conversation() -> ConversationHandler:
+    """/language — tap one of the available languages.
+
+    Taps only: the set is fixed and small, so there is nothing to type.
+    """
+    return ConversationHandler(
+        entry_points=[CommandHandler("language", cmd_language)],
+        states={
+            LANG_SELECT: [
+                CallbackQueryHandler(lang_select,
+                                     pattern=f"^{re.escape(CB_LANG_PREFIX)}"),
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_conversation)],
+        allow_reentry=True,
+    )
