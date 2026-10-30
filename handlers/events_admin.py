@@ -19,7 +19,16 @@ from hebrew_calendar import service_phases
 from permissions import admin_only, user_info
 from settings import DEFAULT_NOTIF_MIN, activity
 from telegram import Update
-from telegram.ext import Application, ContextTypes, ConversationHandler
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+    ConversationHandler,
+    MessageHandler,
+    filters,
+)
+
+from handlers.shared import cancel_conversation
 
 logger = logging.getLogger(__name__)
 
@@ -426,3 +435,97 @@ async def sl_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     activity.log_command("setservicelink", uid, uname, dname, details=detail)
     await reply_markdown(update.message, action_msg)
     return ConversationHandler.END
+
+
+# ---------------------------------------------------------------------------
+# Conversation assembly
+# ---------------------------------------------------------------------------
+#
+# Built here rather than in bot.main(), which previously imported all 36 of
+# this module's state constants and step callbacks purely to reassemble these
+# four handlers. main() now registers them and nothing more, so the order it
+# registers in — which decides which handler receives an update — is readable
+# in one block.
+#
+# Functions, not module-level constants: building at import time would make
+# importing this module construct handlers as a side effect, which breaks test
+# isolation and fires PTB's per_message advisory at import rather than at build.
+#
+# allow_reentry=True on every one. Without it, retyping the entry command while
+# the conversation is already running is answered with "⛔ Unknown command" and
+# the user stays stuck: PTB will not re-fire an entry point for an active
+# conversation, the state handlers are TEXT & ~COMMAND so they ignore it, and it
+# falls through to the unknown-command catch-all. /cancel was the only way out,
+# and nothing said so. Observed 2026-09-17 while re-entering service links.
+
+
+def _text_state(callback) -> list:
+    """The one state shape this module uses throughout: a single free-text step.
+
+    All 16 states across these four conversations are `TEXT & ~COMMAND`
+    dispatching to one callback — no /skip steps, no callback-query steps.
+    Naming the shape makes the conversations readable as their step sequence,
+    which is the thing worth checking, and makes a state that is NOT this
+    shape visible rather than lost in identical boilerplate.
+    """
+    return [MessageHandler(filters.TEXT & ~filters.COMMAND, callback)]
+
+
+def add_event_conversation() -> ConversationHandler:
+    """/addevent — name, date, time, duration, description, URL, notify, confirm."""
+    return ConversationHandler(
+        entry_points=[CommandHandler("addevent", cmd_addevent)],
+        states={
+            AE_NAME: _text_state(ae_name),
+            AE_DATE: _text_state(ae_date),
+            AE_TIME: _text_state(ae_time),
+            AE_DURATION: _text_state(ae_duration),
+            AE_DESC: _text_state(ae_desc),
+            AE_URL: _text_state(ae_url),
+            AE_NOTIF: _text_state(ae_notif),
+            AE_CONFIRM: _text_state(ae_confirm),
+        },
+        fallbacks=[CommandHandler("cancel", cancel_conversation)],
+        allow_reentry=True,
+    )
+
+
+def modify_event_conversation() -> ConversationHandler:
+    """/modifyevent — pick an event, pick a field, supply the new value."""
+    return ConversationHandler(
+        entry_points=[CommandHandler("modifyevent", cmd_modifyevent)],
+        states={
+            ME_SELECT: _text_state(me_select),
+            ME_FIELD: _text_state(me_field),
+            ME_VALUE: _text_state(me_value),
+        },
+        fallbacks=[CommandHandler("cancel", cancel_conversation)],
+        allow_reentry=True,
+    )
+
+
+def delete_event_conversation() -> ConversationHandler:
+    """/deleteevent — pick an event, confirm, then optionally annotate why."""
+    return ConversationHandler(
+        entry_points=[CommandHandler("deleteevent", cmd_deleteevent)],
+        states={
+            DE_SELECT: _text_state(de_select),
+            DE_CONFIRM: _text_state(de_confirm),
+            DE_ANNOT: _text_state(de_annot),
+        },
+        fallbacks=[CommandHandler("cancel", cancel_conversation)],
+        allow_reentry=True,
+    )
+
+
+def set_service_link_conversation() -> ConversationHandler:
+    """/setservicelink — pick the service, supply the join URL."""
+    return ConversationHandler(
+        entry_points=[CommandHandler("setservicelink", cmd_setservicelink)],
+        states={
+            SL_SELECT: _text_state(sl_select),
+            SL_URL: _text_state(sl_url),
+        },
+        fallbacks=[CommandHandler("cancel", cancel_conversation)],
+        allow_reentry=True,
+    )

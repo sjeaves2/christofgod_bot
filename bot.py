@@ -31,7 +31,6 @@ from telegram.ext import (
     ChatMemberHandler,
     CommandHandler,
     ContextTypes,
-    ConversationHandler,
     MessageHandler,
     filters,
 )
@@ -63,127 +62,46 @@ from permissions import (
 # the same push plus a stored, translatable, expiring record. The delivery
 # engine below (target selection, send, retry) is still very much in use — it
 # is what actually pushes an announcement out.
-from handlers.broadcast import (
-    BC_RETRY,
-    BC_SELECT,
-    CB_BC_PREFIX,
-    bc_retry,
-    bc_select,
-)
 from handlers.announcements import (
-    AN_BODY,
-    AN_CONFIRM,
-    AN_EXPIRES,
-    AN_MEDIA,
-    AN_LINK,
-    AN_TITLE,
-    DA_SELECT,
-    an_body,
-    an_confirm,
-    an_expires,
-    an_media,
-    an_skip_media,
-    an_link,
-    an_skip_link,
-    an_title,
-    cmd_addannouncement,
+    add_announcement_conversation,
+    delete_announcement_conversation,
     cmd_announcements,
-    cmd_delannouncement,
     cmd_listannouncements,
-    da_select,
     purge_old_announcements,
 )
 from handlers.events_admin import (
-    AE_CONFIRM,
-    AE_DATE,
-    AE_DESC,
-    AE_DURATION,
-    AE_NAME,
-    AE_NOTIF,
-    AE_TIME,
-    AE_URL,
-    DE_ANNOT,
-    DE_CONFIRM,
-    DE_SELECT,
-    ME_FIELD,
-    ME_SELECT,
-    ME_VALUE,
-    SL_SELECT,
-    SL_URL,
-    ae_confirm,
-    ae_date,
-    ae_desc,
-    ae_duration,
-    ae_name,
-    ae_notif,
-    ae_time,
-    ae_url,
-    cmd_addevent,
-    cmd_deleteevent,
-    cmd_modifyevent,
-    cmd_setservicelink,
-    de_annot,
-    de_confirm,
-    de_select,
-    me_field,
-    me_select,
-    me_value,
-    sl_select,
-    sl_url,
+    add_event_conversation,
+    delete_event_conversation,
+    modify_event_conversation,
+    set_service_link_conversation,
 )
 from handlers.appointments import (
-    CB_APSEL_PREFIX,
-    CB_CANCEL_PREFIX,
-    CB_RESCHED_PREFIX,
-    AP_CONFIRM,
-    AP_DATE,
-    AP_DESC,
-    AP_OFFICIAL,
-    AP_TIME,
-    CA_CONFIRM,
-    CA_SELECT,
+    appointment_conversation,
+    cancel_appointment_conversation,
+    reschedule_conversation,
     CB_APPT_PREFIX,
-    RS_NEWTIME,
-    RS_SELECT,
-    ap_confirm,
-    ap_date,
-    ap_desc,
-    ap_official,
-    ap_time,
     appointment_reminder_job,
     appt_callback,
     archive_old_appointments,
-    ca_confirm,
-    ca_select,
-    cmd_appointment,
-    cmd_cancelappointment,
     cmd_enable_appt_proxies,
     cmd_myappointments,
-    cmd_reschedule,
     handle_counter_propose_message,
     purge_archived_appointments,
-    rs_newtime,
-    rs_select,
 )
 from handlers.user_basics import (
-    CB_LANG_PREFIX,
+    language_conversation,
+    set_timezone_conversation,
     CB_NOTIFPREF_PREFIX,
-    CB_TZ_PREFIX,
-    LANG_SELECT,
-    TZ_SELECT,
     _commands_text,
     _register_official_if_known,
-    cancel_conversation,
     cmd_adminhelp,
     cmd_donate,
     cmd_events,
     cmd_export_calendar,
     cmd_help,
-    cmd_language,
     cmd_listevents,
     cmd_notifications,
     cmd_privacy,
-    cmd_settimezone,
     cmd_start,
     cmd_stop,
     cmd_unknown,
@@ -191,10 +109,7 @@ from handlers.user_basics import (
     ignore_edited_messages,
     cmd_usercount,
     cmd_userlist,
-    lang_select,
     notif_prefs_callback,
-    tz_button,
-    tz_typed,
 )
 from common import (
     get_user_prefs,
@@ -213,50 +128,20 @@ from handlers.backup import (
     nightly_backup_job,
 )
 from handlers.prayer import (
-    PR_CONFIRM,
-    PR_TEXT,
-    RESP_TEXT,
+    prayer_conversation,
+    respond_prayer_conversation,
     cmd_dismissprayer,
-    cmd_prayer,
     cmd_prayerrequests,
-    cmd_respondprayer,
-    pr_confirm,
-    pr_text,
     purge_old_stubs,
-    resp_text,
 )
 from handlers.board import (
+    add_board_item_conversation,
+    board_items_conversation,
     BOARD_NOTICE_TIME,
-    AB_ACTION,
-    AB_CONFIRM,
-    AB_DESC,
-    AB_DUE,
-    AB_NOTIFY,
-    AB_URL,
-    BI_EDIT_VALUE,
-    BI_MENU,
-    BI_NEXT_DUE,
-    CB_BOARD_PREFIX,
     CB_BOFF_PREFIX,
-    ab_action,
-    ab_confirm,
-    ab_desc,
-    ab_due,
-    ab_notify,
-    ab_skip_desc,
-    ab_skip_notify,
-    ab_skip_url,
-    ab_url,
-    bi_edit_value,
-    bi_next_due,
-    bi_skip_edit,
-    bi_skip_next_due,
-    board_callback,
     board_notice_job,
     board_officer_callback,
-    cmd_addboarditem,
     cmd_boardcalendar,
-    cmd_boarditems,
     cmd_setboardofficer,
     purge_deleted_board_items,
 )
@@ -697,118 +582,16 @@ def main() -> None:
         .build()
     )
 
-    # --- Conversations ---
-    add_event_conv = ConversationHandler(
-        entry_points=[CommandHandler("addevent", cmd_addevent)],
-        states={
-            AE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ae_name)],
-            AE_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ae_date)],
-            AE_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ae_time)],
-            AE_DURATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, ae_duration)],
-            AE_DESC: [MessageHandler(filters.TEXT & ~filters.COMMAND, ae_desc)],
-            AE_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, ae_url)],
-            AE_NOTIF: [MessageHandler(filters.TEXT & ~filters.COMMAND, ae_notif)],
-            AE_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, ae_confirm)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel_conversation)],
-        allow_reentry=True,
-    )
-
-    modify_event_conv = ConversationHandler(
-        entry_points=[CommandHandler("modifyevent", cmd_modifyevent)],
-        states={
-            ME_SELECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, me_select)],
-            ME_FIELD: [MessageHandler(filters.TEXT & ~filters.COMMAND, me_field)],
-            ME_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, me_value)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel_conversation)],
-        allow_reentry=True,
-    )
-
-    delete_event_conv = ConversationHandler(
-        entry_points=[CommandHandler("deleteevent", cmd_deleteevent)],
-        states={
-            DE_SELECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, de_select)],
-            DE_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, de_confirm)],
-            DE_ANNOT: [MessageHandler(filters.TEXT & ~filters.COMMAND, de_annot)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel_conversation)],
-        allow_reentry=True,
-    )
-
-    # allow_reentry=True on every conversation below.
-    #
-    # Without it, retyping the entry command while the conversation is already
-    # running is answered with "⛔ Unknown command." and the user stays stuck:
-    # PTB will not re-fire an entry point for an active conversation, the state
-    # handlers are TEXT & ~COMMAND so they ignore it, and it falls through to
-    # the unknown-command catch-all. /cancel was the only way out, and nothing
-    # said so. Observed 2026-09-17 while re-entering service links.
-    set_service_link_conv = ConversationHandler(
-        entry_points=[CommandHandler("setservicelink", cmd_setservicelink)],
-        states={
-            SL_SELECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, sl_select)],
-            SL_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, sl_url)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel_conversation)],
-        allow_reentry=True,
-    )
-
-    appointment_conv = ConversationHandler(
-        entry_points=[CommandHandler("appointment", cmd_appointment)],
-        states={
-            AP_OFFICIAL: [CallbackQueryHandler(
-                ap_official, pattern=f"^{re.escape(CB_APSEL_PREFIX)}")],
-            AP_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ap_date)],
-            AP_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ap_time)],
-            AP_DESC: [MessageHandler(filters.TEXT & ~filters.COMMAND, ap_desc)],
-            AP_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, ap_confirm)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel_conversation)],
-        allow_reentry=True,
-    )
-
-    cancel_appt_conv = ConversationHandler(
-        entry_points=[CommandHandler("cancelappointment", cmd_cancelappointment)],
-        states={
-            CA_SELECT: [CallbackQueryHandler(ca_select, pattern=f"^{re.escape(CB_CANCEL_PREFIX)}")],
-            CA_CONFIRM: [CallbackQueryHandler(
-                ca_confirm, pattern=f"^{re.escape(CB_CANCEL_PREFIX)}")],
-        },
-        fallbacks=[CommandHandler("cancel", cancel_conversation)],
-        allow_reentry=True,
-    )
-
-    reschedule_conv = ConversationHandler(
-        entry_points=[CommandHandler("reschedule", cmd_reschedule)],
-        states={
-            RS_SELECT: [CallbackQueryHandler(
-                rs_select, pattern=f"^{re.escape(CB_RESCHED_PREFIX)}")],
-            RS_NEWTIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, rs_newtime)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel_conversation)],
-        allow_reentry=True,
-    )
-
-    settimezone_conv = ConversationHandler(
-        entry_points=[CommandHandler("settimezone", cmd_settimezone)],
-        states={TZ_SELECT: [
-            CallbackQueryHandler(tz_button, pattern=f"^{re.escape(CB_TZ_PREFIX)}"),
-            MessageHandler(filters.TEXT & ~filters.COMMAND, tz_typed),
-        ]},
-        fallbacks=[CommandHandler("cancel", cancel_conversation)],
-        allow_reentry=True,
-    )
-
-    language_conv = ConversationHandler(
-        entry_points=[CommandHandler("language", cmd_language)],
-        states={LANG_SELECT: [CallbackQueryHandler(
-            lang_select, pattern=f"^{re.escape(CB_LANG_PREFIX)}")]},
-        fallbacks=[CommandHandler("cancel", cancel_conversation)],
-        allow_reentry=True,
-    )
-
     # --- Register handlers ---
+    #
+    # ORDER IS LOAD-BEARING. PTB runs only the FIRST matching handler per
+    # group, and group 0 ends with two handlers that match almost anything, so
+    # anything registered after them is dead code that still looks registered.
+    # /prayer was silently broken this way once. The conversations are built in
+    # their own feature modules; this sequence is the part that decides which
+    # handler receives an update, and tests/test_handler_registration_order.py
+    # pins it.
+
     # Log/observe the bot being added to or removed from groups/channels.
     app.add_handler(ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
 
@@ -844,137 +627,37 @@ def main() -> None:
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("backup", cmd_backup))
 
-    app.add_handler(add_event_conv)
-    app.add_handler(modify_event_conv)
-    app.add_handler(delete_event_conv)
-    app.add_handler(set_service_link_conv)
+    app.add_handler(add_event_conversation())
+    app.add_handler(modify_event_conversation())
+    app.add_handler(delete_event_conversation())
+    app.add_handler(set_service_link_conversation())
     app.add_handler(CommandHandler("myappointments", cmd_myappointments))
     app.add_handler(CommandHandler("enable_appt_proxies", cmd_enable_appt_proxies))
-    app.add_handler(appointment_conv)
-    app.add_handler(cancel_appt_conv)
-    app.add_handler(reschedule_conv)
-    app.add_handler(settimezone_conv)
-    app.add_handler(language_conv)
+    app.add_handler(appointment_conversation())
+    app.add_handler(cancel_appointment_conversation())
+    app.add_handler(reschedule_conversation())
+    app.add_handler(set_timezone_conversation())
+    app.add_handler(language_conversation())
     app.add_handler(CommandHandler("notifications", cmd_notifications))
     app.add_handler(CommandHandler("privacy", cmd_privacy))
     app.add_handler(CommandHandler("donate", cmd_donate))
     app.add_handler(CommandHandler("announcements", cmd_announcements))
     app.add_handler(CommandHandler("listannouncements", cmd_listannouncements))
 
-    add_announcement_conv = ConversationHandler(
-        entry_points=[CommandHandler("addannouncement", cmd_addannouncement)],
-        states={
-            AN_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, an_title)],
-            AN_BODY: [MessageHandler(filters.TEXT & ~filters.COMMAND, an_body)],
-            AN_MEDIA: [
-                CommandHandler("skip", an_skip_media),
-                MessageHandler(filters.PHOTO | filters.Document.ALL, an_media),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, an_media),
-            ],
-            AN_LINK: [
-                CommandHandler("skip", an_skip_link),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, an_link),
-            ],
-            AN_EXPIRES: [MessageHandler(filters.TEXT & ~filters.COMMAND, an_expires)],
-            AN_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, an_confirm)],
-            # After saving, the flow re-uses the broadcast target selection.
-            BC_SELECT: [CallbackQueryHandler(bc_select, pattern=f"^{re.escape(CB_BC_PREFIX)}")],
-            BC_RETRY: [CallbackQueryHandler(bc_retry, pattern=f"^{re.escape(CB_BC_PREFIX)}retry:")],
-        },
-        fallbacks=[CommandHandler("cancel", cancel_conversation)],
-        allow_reentry=True,
-    )
-    app.add_handler(add_announcement_conv)
-
-    del_announcement_conv = ConversationHandler(
-        entry_points=[CommandHandler("delannouncement", cmd_delannouncement)],
-        states={
-            DA_SELECT: [MessageHandler(filters.TEXT & ~filters.COMMAND, da_select)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel_conversation)],
-        allow_reentry=True,
-    )
-    app.add_handler(del_announcement_conv)
+    app.add_handler(add_announcement_conversation())
+    app.add_handler(delete_announcement_conversation())
     app.add_handler(CallbackQueryHandler(
         notif_prefs_callback, pattern=f"^{re.escape(CB_NOTIFPREF_PREFIX)}"))
 
     app.add_handler(CallbackQueryHandler(appt_callback, pattern=f"^{re.escape(CB_APPT_PREFIX)}"))
 
-    prayer_conv = ConversationHandler(
-        entry_points=[CommandHandler("prayer", cmd_prayer)],
-        states={
-            PR_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, pr_text)],
-            PR_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, pr_confirm)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel_conversation)],
-        allow_reentry=True,
-    )
-    app.add_handler(prayer_conv)
-
-    respond_prayer_conv = ConversationHandler(
-        entry_points=[CommandHandler("respondprayer", cmd_respondprayer)],
-        states={
-            RESP_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, resp_text)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel_conversation)],
-        allow_reentry=True,
-    )
-    app.add_handler(respond_prayer_conv)
+    app.add_handler(prayer_conversation())
+    app.add_handler(respond_prayer_conversation())
     app.add_handler(CommandHandler("prayerrequests", cmd_prayerrequests))
     app.add_handler(CommandHandler("dismissprayer", cmd_dismissprayer))
 
-    # Board compliance items. The callback router is an ENTRY POINT as well as
-    # a state handler: user_data does not survive a restart, and every deploy
-    # restarts the bot, so without this a keyboard already on an officer's
-    # screen would go dead and tapping it would do nothing at all. As an entry
-    # point the tap re-enters the conversation at the right place instead.
-    board_items_conv = ConversationHandler(
-        entry_points=[
-            CommandHandler("boarditems", cmd_boarditems),
-            CallbackQueryHandler(board_callback,
-                                 pattern=f"^{re.escape(CB_BOARD_PREFIX)}"),
-        ],
-        states={
-            BI_MENU: [CallbackQueryHandler(
-                board_callback, pattern=f"^{re.escape(CB_BOARD_PREFIX)}")],
-            BI_EDIT_VALUE: [
-                CommandHandler("skip", bi_skip_edit),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, bi_edit_value),
-            ],
-            BI_NEXT_DUE: [
-                CommandHandler("skip", bi_skip_next_due),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, bi_next_due),
-            ],
-        },
-        fallbacks=[CommandHandler("cancel", cancel_conversation)],
-        allow_reentry=True,
-    )
-    app.add_handler(board_items_conv)
-
-    add_board_item_conv = ConversationHandler(
-        entry_points=[CommandHandler("addboarditem", cmd_addboarditem)],
-        states={
-            AB_ACTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, ab_action)],
-            AB_DUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ab_due)],
-            AB_NOTIFY: [
-                CommandHandler("skip", ab_skip_notify),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, ab_notify),
-            ],
-            AB_DESC: [
-                CommandHandler("skip", ab_skip_desc),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, ab_desc),
-            ],
-            AB_URL: [
-                CommandHandler("skip", ab_skip_url),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, ab_url),
-            ],
-            AB_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, ab_confirm)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel_conversation)],
-        allow_reentry=True,
-    )
-    app.add_handler(add_board_item_conv)
-
+    app.add_handler(board_items_conversation())
+    app.add_handler(add_board_item_conversation())
     app.add_handler(CommandHandler("boardcalendar", cmd_boardcalendar))
     app.add_handler(CommandHandler("setboardofficer", cmd_setboardofficer))
     app.add_handler(CallbackQueryHandler(
