@@ -1,0 +1,57 @@
+# Every handler bot.main() registers, in registration order, one per line as
+# `group: descriptor`.
+#
+# GENERATED — do not hand-edit. Regenerate with:
+#     python -m tests.test_handler_registration_order
+#
+# Regenerate it only alongside a DELIBERATE change to the wiring, in the same
+# commit. Registration order decides which handler receives an update (PTB
+# runs only the first match per group), so a diff here is a behaviour change,
+# never a cosmetic one. See tests/test_handler_registration_order.py.
+0: ChatMember(member_types=-1 -> on_my_chat_member)
+-1: Message(nudge_group_to_private)
+-1: Message(ignore_edited_messages)
+-1: Message(_log_command_invocation)
+0: Command(/start -> cmd_start)
+0: Message(handle_contact)
+0: Command(/stop -> cmd_stop)
+0: Command(/help -> cmd_help)
+0: Command(/events -> cmd_events)
+0: Command(/exportcalendar -> cmd_export_calendar)
+0: Command(/adminhelp -> cmd_adminhelp)
+0: Command(/usercount -> cmd_usercount)
+0: Command(/userlist -> cmd_userlist)
+0: Command(/listevents -> cmd_listevents)
+0: Command(/stats -> cmd_stats)
+0: Command(/backup -> cmd_backup)
+0: Conversation(entry=[Command(/addevent -> cmd_addevent)] states={0=[Message(ae_name)];1=[Message(ae_date)];2=[Message(ae_time)];3=[Message(ae_duration)];4=[Message(ae_desc)];5=[Message(ae_url)];6=[Message(ae_notif)];7=[Message(ae_confirm)]} fallbacks=[Command(/cancel -> cancel_conversation)] reentry=True)
+0: Conversation(entry=[Command(/modifyevent -> cmd_modifyevent)] states={0=[Message(me_select)];1=[Message(me_field)];2=[Message(me_value)]} fallbacks=[Command(/cancel -> cancel_conversation)] reentry=True)
+0: Conversation(entry=[Command(/deleteevent -> cmd_deleteevent)] states={0=[Message(de_select)];1=[Message(de_confirm)];2=[Message(de_annot)]} fallbacks=[Command(/cancel -> cancel_conversation)] reentry=True)
+0: Conversation(entry=[Command(/setservicelink -> cmd_setservicelink)] states={0=[Message(sl_select)];1=[Message(sl_url)]} fallbacks=[Command(/cancel -> cancel_conversation)] reentry=True)
+0: Command(/myappointments -> cmd_myappointments)
+0: Command(/enable_appt_proxies -> cmd_enable_appt_proxies)
+0: Conversation(entry=[Command(/appointment -> cmd_appointment)] states={0=[CallbackQuery(^apsel: -> ap_official)];1=[Message(ap_date)];2=[Message(ap_time)];3=[Message(ap_desc)];4=[Message(ap_confirm)]} fallbacks=[Command(/cancel -> cancel_conversation)] reentry=True)
+0: Conversation(entry=[Command(/cancelappointment -> cmd_cancelappointment)] states={0=[CallbackQuery(^ca: -> ca_select)];1=[CallbackQuery(^ca: -> ca_confirm)]} fallbacks=[Command(/cancel -> cancel_conversation)] reentry=True)
+0: Conversation(entry=[Command(/reschedule -> cmd_reschedule)] states={0=[CallbackQuery(^rs: -> rs_select)];1=[Message(rs_newtime)]} fallbacks=[Command(/cancel -> cancel_conversation)] reentry=True)
+0: Conversation(entry=[Command(/settimezone -> cmd_settimezone)] states={0=[CallbackQuery(^tz: -> tz_button),Message(tz_typed)]} fallbacks=[Command(/cancel -> cancel_conversation)] reentry=True)
+0: Conversation(entry=[Command(/language -> cmd_language)] states={0=[CallbackQuery(^lang: -> lang_select)]} fallbacks=[Command(/cancel -> cancel_conversation)] reentry=True)
+0: Command(/notifications -> cmd_notifications)
+0: Command(/privacy -> cmd_privacy)
+0: Command(/donate -> cmd_donate)
+0: Command(/announcements -> cmd_announcements)
+0: Command(/listannouncements -> cmd_listannouncements)
+0: Conversation(entry=[Command(/addannouncement -> cmd_addannouncement)] states={0=[CallbackQuery(^bc: -> bc_select)];1=[CallbackQuery(^bc:retry: -> bc_retry)];3=[Message(an_title)];4=[Message(an_body)];5=[Command(/skip -> an_skip_media),Message(an_media),Message(an_media)];6=[Command(/skip -> an_skip_link),Message(an_link)];7=[Message(an_expires)];8=[Message(an_confirm)]} fallbacks=[Command(/cancel -> cancel_conversation)] reentry=True)
+0: Conversation(entry=[Command(/delannouncement -> cmd_delannouncement)] states={8=[Message(da_select)]} fallbacks=[Command(/cancel -> cancel_conversation)] reentry=True)
+0: CallbackQuery(^np: -> notif_prefs_callback)
+0: CallbackQuery(^appt: -> appt_callback)
+0: Conversation(entry=[Command(/prayer -> cmd_prayer)] states={40=[Message(pr_text)];41=[Message(pr_confirm)]} fallbacks=[Command(/cancel -> cancel_conversation)] reentry=True)
+0: Conversation(entry=[Command(/respondprayer -> cmd_respondprayer)] states={43=[Message(resp_text)]} fallbacks=[Command(/cancel -> cancel_conversation)] reentry=True)
+0: Command(/prayerrequests -> cmd_prayerrequests)
+0: Command(/dismissprayer -> cmd_dismissprayer)
+0: Conversation(entry=[Command(/boarditems -> cmd_boarditems),CallbackQuery(^bi: -> board_callback)] states={60=[CallbackQuery(^bi: -> board_callback)];61=[Command(/skip -> bi_skip_edit),Message(bi_edit_value)];62=[Command(/skip -> bi_skip_next_due),Message(bi_next_due)]} fallbacks=[Command(/cancel -> cancel_conversation)] reentry=True)
+0: Conversation(entry=[Command(/addboarditem -> cmd_addboarditem)] states={63=[Message(ab_action)];64=[Message(ab_due)];65=[Command(/skip -> ab_skip_notify),Message(ab_notify)];66=[Command(/skip -> ab_skip_desc),Message(ab_desc)];67=[Command(/skip -> ab_skip_url),Message(ab_url)];68=[Message(ab_confirm)]} fallbacks=[Command(/cancel -> cancel_conversation)] reentry=True)
+0: Command(/boardcalendar -> cmd_boardcalendar)
+0: Command(/setboardofficer -> cmd_setboardofficer)
+0: CallbackQuery(^bo: -> board_officer_callback)
+0: Message(handle_counter_propose_message)
+0: Message(cmd_unknown)
