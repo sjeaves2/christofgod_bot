@@ -556,7 +556,12 @@ def _register_jobs(app: Application) -> None:
 
 
 async def post_init(app: Application) -> None:
+    # Held alerts first, before anything else can fail: if the watchdog exited
+    # the process over a sustained outage, the alert explaining why is sitting
+    # on disk and this is the first moment it can be delivered.
+    await error_reporting.flush_pending_alerts(app.bot)
     # A restart usually means new code, so last run's traces are stale.
+    # (reset_error_log leaves the held alerts alone — deliberately.)
     error_reporting.reset_error_log()
     await schedule_all_upcoming(app)
     await alert_on_bad_service_links(app)
