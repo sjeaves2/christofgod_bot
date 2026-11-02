@@ -102,9 +102,36 @@ _console_handler.setLevel(LOG_LEVEL)
 #
 # Rotated files are named bot.log.YYYY-MM-DD, so searching history means
 # `grep logs/bot.log*` rather than `grep logs/bot.log`.
+#
+# utc=True, and NOT because anyone wants UTC log names
+# -----------------------------------------------------
+# Rotating on LOCAL midnight wedges permanently at the autumn DST transition,
+# and did: logs/bot.log on the server held 2026-10-31, 11-01 and 11-02 in one
+# file, and bot.log.2026-10-31 was never created.
+#
+# doRollover() derives the rotated file's name by stepping back one interval
+# from rolloverAt and then applying a DST correction to keep the suffix on the
+# right calendar day. Across fall-back that correction is -3600s, which turns
+# Oct 31 00:00 EDT into Oct 30 23:00 EDT, so the suffix came out 2026-10-30 —
+# the file the PREVIOUS rotation had already written. doRollover then takes its
+#
+#     if os.path.exists(dfn): return      # "Already rolled over."
+#
+# branch and returns WITHOUT advancing rolloverAt, so every later write
+# recomputes the same dead name. Not a delayed rotation: a stuck one, until the
+# process restarts. Three deploys on 2026-11-02 cleared it by accident.
+#
+# Both DST corrections in logging.handlers are guarded by `if not self.utc`, so
+# utc=True deletes the whole class of fault instead of detecting it. Spring
+# forward was always harmless (+3600s keeps the same calendar day); only
+# autumn broke, once a year, silently.
+#
+# The cost is that the boundary and the SUFFIX are UTC: bot.log.2026-11-02
+# covers 19:00 Nov 1 to 19:00 Nov 2 church time. Timestamps INSIDE the file
+# are unchanged church-local, which is what matters when reading one.
 _file_handler = TimedRotatingFileHandler(
     _log_file, when="midnight", backupCount=RUNTIME_LOG_RETENTION,
-    encoding="utf-8")
+    encoding="utf-8", utc=True)
 _file_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
 _file_handler.setLevel(LOG_LEVEL)
 
