@@ -146,6 +146,7 @@ from handlers.board import (
     purge_deleted_board_items,
 )
 from handlers.stats import cmd_stats
+from handlers.worship import song_list_conversation
 
 logger = logging.getLogger(__name__)
 
@@ -667,6 +668,8 @@ def main() -> None:
     app.add_handler(CommandHandler("setboardofficer", cmd_setboardofficer))
     app.add_handler(CallbackQueryHandler(
         board_officer_callback, pattern=f"^{re.escape(CB_BOFF_PREFIX)}"))
+
+    app.add_handler(song_list_conversation())
 
     # Catch-all free-text handler. MUST come after every ConversationHandler:
     # PTB runs only the first matching handler per group, and this one matches
