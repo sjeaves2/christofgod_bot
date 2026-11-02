@@ -30,7 +30,7 @@ def _raise(kind=ValueError, msg="something broke"):
 
 def _reset():
     er._alert_state.clear()
-    er._recent.clear()
+    er._episodes.clear()
 
 
 class TestClassification:
@@ -77,23 +77,65 @@ class TestTransientHold:
         send, _ = er.should_alert(_raise(NetworkError, "Bad Gateway"))
         assert send is False
 
-    def test_alerts_once_threshold_reached(self):
-        _reset()
-        from telegram.error import NetworkError
-        results = [er.should_alert(_raise(NetworkError, "Bad Gateway"))[0]
-                   for _ in range(er.TRANSIENT_THRESHOLD)]
-        assert results[:-1] == [False] * (er.TRANSIENT_THRESHOLD - 1)
-        assert results[-1] is True
-
-    def test_occurrences_outside_window_do_not_accumulate(self):
+    def test_alerts_once_the_condition_has_persisted(self):
         _reset()
         from telegram.error import NetworkError
         now = er._now()
-        old = now - er.TRANSIENT_WINDOW - timedelta(minutes=1)
-        for _ in range(er.TRANSIENT_THRESHOLD - 1):
-            er.should_alert(_raise(NetworkError, "Bad Gateway"), now=old)
-        send, _ = er.should_alert(_raise(NetworkError, "Bad Gateway"), now=now)
-        assert send is False, "stale occurrences must not count toward the threshold"
+        assert er.should_alert(_raise(NetworkError, "Bad Gateway"), now=now)[0] is False
+        # Kept alive at half EPISODE_GAP so it stays ONE episode. A fraction,
+        # never a subtraction: a step computed as EPISODE_GAP minus a constant
+        # becomes zero if EPISODE_GAP is ever shortened past it, and this loop
+        # would then spin forever instead of failing — which is exactly what a
+        # mutation to EPISODE_GAP made it do.
+        step = er.EPISODE_GAP / 2
+        assert step > timedelta(0), "step must advance or this loop cannot end"
+        t = now
+        send = False
+        for _ in range(1000):
+            if t - now >= er.SUSTAINED_FOR:
+                break
+            t += step
+            send, _ = er.should_alert(_raise(NetworkError, "Bad Gateway"), now=t)
+        else:
+            raise AssertionError(
+                f"never reached {er.SUSTAINED_FOR} stepping {step}")
+        assert send is True, (
+            f"an episode lasting {t - now} should alert at {er.SUSTAINED_FOR}")
+
+    def test_a_dense_short_burst_never_alerts(self):
+        """The real 2026-11-02 cluster: six Bad Gateways in fourteen seconds.
+        Under the old count rule this alerted; it is a harmless scheduled blip
+        at Telegram and the bot recovered on its own."""
+        _reset()
+        from telegram.error import NetworkError
+        now = er._now()
+        for offset in (0, 1, 3, 5, 9, 14):
+            send, _ = er.should_alert(_raise(NetworkError, "Bad Gateway"),
+                                      now=now + timedelta(seconds=offset))
+            assert send is False, f"alerted after only {offset}s of trouble"
+
+    def test_a_long_quiet_gap_starts_a_new_episode(self):
+        """Otherwise two unrelated blips an hour apart weld into one 'episode'
+        that alerts about a problem which is not happening."""
+        _reset()
+        from telegram.error import NetworkError
+        now = er._now()
+        er.should_alert(_raise(NetworkError, "Bad Gateway"), now=now)
+        later = now + er.EPISODE_GAP + timedelta(minutes=57)
+        send, _ = er.should_alert(_raise(NetworkError, "Bad Gateway"), now=later)
+        assert send is False
+        assert er.episode_duration(_raise(NetworkError, "Bad Gateway"),
+                                   later) < er.SUSTAINED_FOR
+
+    def test_occurrence_count_alone_cannot_trigger_an_alert(self):
+        """The property that replaced the threshold: no number of errors in
+        the same instant is enough, because none of them is duration."""
+        _reset()
+        from telegram.error import NetworkError
+        now = er._now()
+        for _ in range(200):
+            send, _ = er.should_alert(_raise(NetworkError, "Bad Gateway"), now=now)
+            assert send is False
 
     def test_real_bug_alerts_on_first_occurrence(self):
         _reset()
@@ -300,7 +342,7 @@ class TestResetErrorLog:
         assert er._alert_state
         with patch.object(er, "ERRORS_LOG", tmp_path / "errors.log"):
             er.reset_error_log()
-        assert er._alert_state == {} and er._recent == {}
+        assert er._alert_state == {} and er._episodes == {}
 
     def test_alerting_resumes_after_reset(self, tmp_path):
         """Post-restart, the first occurrence must alert again rather than be
@@ -624,3 +666,113 @@ class TestHeldAlertsKeepTheirTraces:
     def test_retain_with_no_ids_keeps_nothing(self, tmp_path):
         text = "===== ERR-ONE  stamp =====\nbody\n"
         assert er._retain_traces(text, set()) == ""
+
+
+class TestEpisodeTracking:
+    """The duration rule's own unit, checked directly rather than only through
+    should_alert, so a failure says which half is wrong.
+    """
+
+    def test_a_lone_occurrence_is_zero_length(self):
+        """This is what keeps a single error silent, now that there is no
+        count threshold to do it."""
+        _reset()
+        from telegram.error import NetworkError
+        assert er.episode_duration(_raise(NetworkError, "x"), er._now()) == timedelta(0)
+
+    def test_duration_grows_with_the_episode(self):
+        _reset()
+        from telegram.error import NetworkError
+        now = er._now()
+        er.episode_duration(_raise(NetworkError, "x"), now)
+        d = er.episode_duration(_raise(NetworkError, "x"), now + timedelta(minutes=2))
+        assert d == timedelta(minutes=2)
+
+    def test_a_gap_longer_than_episode_gap_resets_the_clock(self):
+        _reset()
+        from telegram.error import NetworkError
+        now = er._now()
+        er.episode_duration(_raise(NetworkError, "x"), now)
+        after = now + er.EPISODE_GAP + timedelta(seconds=1)
+        assert er.episode_duration(_raise(NetworkError, "x"), after) == timedelta(0)
+
+    def test_a_gap_inside_episode_gap_extends_the_episode(self):
+        _reset()
+        from telegram.error import NetworkError
+        now = er._now()
+        er.episode_duration(_raise(NetworkError, "x"), now)
+        inside = now + er.EPISODE_GAP - timedelta(seconds=1)
+        assert er.episode_duration(_raise(NetworkError, "x"), inside) > timedelta(0)
+
+    def test_distinct_fingerprints_track_separately(self):
+        _reset()
+        from telegram.error import NetworkError, TimedOut
+        now = er._now()
+        er.episode_duration(_raise(NetworkError, "x"), now)
+        later = now + timedelta(minutes=4)
+        er.episode_duration(_raise(NetworkError, "x"), later)
+        assert er.episode_duration(_raise(TimedOut, "y"), later) == timedelta(0)
+
+    def test_reset_clears_episode_state(self, tmp_path):
+        """A restart means the old episode is over, so its age must not be
+        inherited — a post-restart error would otherwise look like a condition
+        that had already persisted and alert immediately.
+
+        Armed with a TRANSIENT error on purpose: the sibling test in
+        TestResetErrorLog uses a ValueError, which never touches _episodes, so
+        it passed happily while reset left episode state behind.
+        """
+        _reset()
+        from telegram.error import NetworkError
+        er.episode_duration(_raise(NetworkError, "Bad Gateway"), er._now())
+        assert er._episodes, "this test must arm the state it checks"
+        with patch.object(er, "ERRORS_LOG", tmp_path / "errors.log"):
+            er.reset_error_log()
+        assert er._episodes == {}
+
+    def test_alerting_does_not_resume_instantly_after_a_restart(self):
+        """The consequence of the above, stated as behaviour."""
+        _reset()
+        from telegram.error import NetworkError
+        now = er._now()
+        for i in range(10):
+            er.should_alert(_raise(NetworkError, "Bad Gateway"),
+                            now=now + timedelta(seconds=30 * i))
+        er._episodes.clear()          # as reset_error_log does on restart
+        er._alert_state.clear()
+        send, _ = er.should_alert(_raise(NetworkError, "Bad Gateway"),
+                                  now=now + timedelta(minutes=10))
+        assert send is False, (
+            "after a restart the first transient error must start a fresh "
+            "episode, not inherit the previous run's duration")
+
+    def test_the_count_is_still_tracked_for_the_message(self):
+        _reset()
+        from telegram.error import NetworkError
+        now = er._now()
+        for i in range(3):
+            er.episode_duration(_raise(NetworkError, "x"), now + timedelta(seconds=i))
+        fp = er.fingerprint(_raise(NetworkError, "x"))
+        assert er._episodes[fp]["count"] == 3
+
+    def test_sustained_for_is_inside_the_watchdog_grace(self):
+        """A sustained outage must be reported BEFORE network_watchdog
+        restarts the process over it, or the report races the restart."""
+        from network_watchdog import FAILURE_GRACE
+        assert er.SUSTAINED_FOR < FAILURE_GRACE
+
+    def test_episode_gap_exceeds_the_worst_measured_blip(self):
+        """The longest nightly Telegram blip on record ran 1m 59s. If
+        EPISODE_GAP were shorter, a single blip would fragment into several
+        episodes and none would ever reach SUSTAINED_FOR."""
+        assert er.EPISODE_GAP > timedelta(seconds=119)
+
+    def test_the_alert_text_describes_duration_not_a_count(self):
+        _reset()
+        from telegram.error import NetworkError
+        now = er._now()
+        exc = _raise(NetworkError, "Bad Gateway")
+        er.episode_duration(exc, now)
+        text = er.build_alert("ERR-1", exc)
+        assert "minutes" in text
+        assert "Brief blips are not reported" in text
