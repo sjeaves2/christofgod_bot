@@ -1,11 +1,23 @@
 name: Tests
 
-# Run the test suite on every push and pull request.
+# Run the test suite on main, and on every pull request.
+#
+# `push: ["**"]` together with `pull_request` ran the WHOLE workflow TWICE for
+# every commit on a PR branch — six jobs per commit instead of three, with
+# identical SHAs. Measured 2026-11-02: commit 444de36b produced a push run at
+# 20:46:33 and a pull_request run at 20:46:55, both green, both complete.
+#
+# `push: [main]` keeps post-merge verification on the branch that is deployed
+# from, and `pull_request` covers everything before it. The cost is that
+# pushing a branch with no PR open gets no CI until the PR exists — seconds, in
+# practice, because the push and the PR go up together.
+#
+# Tags are unaffected: a `branches` filter never matched them, so `git push
+# origin v0.25.0` did not trigger this workflow before and does not now.
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
-    branches: ["**"]
   schedule:
     # Mondays 06:00 UTC. An advisory is published against code that has not
     # changed, so waiting for the next commit means waiting indefinitely — this
