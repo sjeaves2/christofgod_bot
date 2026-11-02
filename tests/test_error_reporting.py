@@ -320,3 +320,307 @@ class TestResetErrorLog:
             er.write_error_log("ERR-NEW1", _raise(ValueError, "fresh"))
         text = log.read_text()
         assert "ERR-NEW1" in text and "old" not in text
+
+
+class _Pending:
+    """Redirect the held-alert file into tmp_path for the duration of a test."""
+
+    def __init__(self, tmp_path):
+        self.path = tmp_path / "pending_alerts.json"
+
+    def __enter__(self):
+        self._patch = patch.object(er, "PENDING_ALERTS", self.path)
+        self._patch.start()
+        return self.path
+
+    def __exit__(self, *exc):
+        self._patch.stop()
+
+
+def _ops_bot(fail=False):
+    bot = MagicMock()
+    bot.send_message = AsyncMock(
+        side_effect=RuntimeError("Bad Gateway") if fail else None)
+    return bot
+
+
+def _as_ops(users=None):
+    """Patch context so chat_id 7 is the one reachable ops admin."""
+    async def _users():
+        return users if users is not None else [{"chat_id": 7, "username": "bishop"}]
+    return (patch("storage.get_all_users", side_effect=_users),
+            patch.object(permissions, "OPS_USERNAMES", {"bishop"}),
+            patch.object(permissions, "_ops_chat_ids", set()))
+
+
+def _hold(path, error_id="ERR-HELD1", text="⚠️ Bot error ERR-HELD1\nValueError: boom",
+          age=timedelta(0)):
+    """Write one held alert straight to disk, aged by *age*."""
+    import json
+    queued_at = (er._now() - age).isoformat()
+    existing = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+    existing.append({"error_id": error_id, "queued_at": queued_at, "text": text})
+    path.write_text(json.dumps(existing), encoding="utf-8")
+
+
+class TestHoldingUndeliverableAlerts:
+    """The 2026-10-27 failure: the alert about the network went out over the
+    network that was broken, the send raised, and report_exception logged a
+    warning and dropped it. It must be held instead.
+    """
+
+    async def _report(self, tmp_path, exc, fail):
+        bot = _ops_bot(fail=fail)
+        users, ops_names, ops_ids = _as_ops()
+        with _Pending(tmp_path) as pending, \
+             patch.object(er, "ERRORS_LOG", tmp_path / "errors.log"), \
+             users, ops_names, ops_ids:
+            error_id = await er.report_exception(bot, exc, note="user 7")
+            held = er._load_pending()
+        return error_id, bot, pending, held
+
+    async def test_a_failed_send_is_held(self, tmp_path):
+        _reset()
+        error_id, bot, pending, held = await self._report(
+            tmp_path, _raise(ValueError, "boom"), fail=True)
+        bot.send_message.assert_awaited()            # it really tried
+        assert pending.exists(), "the alert reached nobody and was not held"
+        assert [e["error_id"] for e in held] == [error_id]
+        assert "boom" in held[0]["text"]
+
+    async def test_a_delivered_alert_is_not_held(self, tmp_path):
+        _reset()
+        _, bot, pending, held = await self._report(
+            tmp_path, _raise(ValueError, "boom"), fail=False)
+        bot.send_message.assert_awaited_once()
+        assert held == [] and not pending.exists()
+
+    async def test_a_suppressed_alert_is_not_held(self, tmp_path):
+        """Nothing was built or attempted, so there is nothing to retry — a
+        single transient blip must not become a queued DM."""
+        _reset()
+        from telegram.error import NetworkError
+        _, bot, _, held = await self._report(
+            tmp_path, _raise(NetworkError, "Bad Gateway"), fail=True)
+        bot.send_message.assert_not_awaited()
+        assert held == []
+
+    async def test_the_held_text_is_the_real_alert(self, tmp_path):
+        """A placeholder would pass every other test here and tell the admin
+        nothing."""
+        _reset()
+        error_id, _, _, held = await self._report(
+            tmp_path, _raise(ValueError, "boom"), fail=True)
+        assert error_id in held[0]["text"]
+        assert "ValueError: boom" in held[0]["text"]
+        assert "errors.log" in held[0]["text"]
+
+    def test_the_queue_keeps_the_oldest_on_overflow(self, tmp_path):
+        """The first occurrence carries the context; later ones are usually the
+        same fault repeating."""
+        with _Pending(tmp_path):
+            for i in range(er.MAX_PENDING + 5):
+                er.hold_alert(f"ERR-{i:04d}", f"alert {i}")
+            held = er._load_pending()
+        assert len(held) == er.MAX_PENDING
+        assert held[0]["error_id"] == "ERR-0000"
+        assert held[-1]["error_id"] == f"ERR-{er.MAX_PENDING - 1:04d}"
+
+    def test_reset_error_log_does_not_discard_held_alerts(self, tmp_path):
+        """A restart is the LIKELIEST reason one is sitting there — the
+        watchdog exits the process after a sustained outage. Clearing it at
+        startup would discard exactly what this feature exists to keep."""
+        with _Pending(tmp_path) as pending:
+            _hold(pending)
+            with patch.object(er, "ERRORS_LOG", tmp_path / "errors.log"):
+                er.reset_error_log()
+            assert len(er._load_pending()) == 1
+
+    def test_a_corrupt_queue_does_not_raise(self, tmp_path):
+        with _Pending(tmp_path) as pending:
+            pending.write_text("{not json", encoding="utf-8")
+            assert er._load_pending() == []
+            er.hold_alert("ERR-NEW", "fresh alert")     # must still work
+            assert [e["error_id"] for e in er._load_pending()] == ["ERR-NEW"]
+
+    def test_entries_without_a_usable_stamp_are_dropped(self, tmp_path):
+        import json
+        with _Pending(tmp_path) as pending:
+            pending.write_text(json.dumps(
+                [{"error_id": "ERR-BAD", "queued_at": "not-a-date", "text": "x"}]),
+                encoding="utf-8")
+            assert er._fresh(er._load_pending(), er._now()) == []
+
+
+class TestFlushingHeldAlerts:
+    async def _flush(self, tmp_path, fail=False, users=None):
+        bot = _ops_bot(fail=fail)
+        u, ops_names, ops_ids = _as_ops(users)
+        with u, ops_names, ops_ids:
+            sent = await er.flush_pending_alerts(bot)
+            held = er._load_pending()
+        return sent, bot, held
+
+    async def test_delivers_and_empties_the_queue(self, tmp_path):
+        with _Pending(tmp_path) as pending:
+            _hold(pending)
+            sent, bot, held = await self._flush(tmp_path)
+            assert sent == 1
+            bot.send_message.assert_awaited_once()
+            assert bot.send_message.await_args[0][0] == 7
+            assert held == [] and not pending.exists()
+
+    async def test_the_retry_says_it_is_delayed_and_when(self, tmp_path):
+        """Without this the admin reads a two-hour-old traceback as a live
+        incident and goes hunting a fault that already ended."""
+        with _Pending(tmp_path) as pending:
+            _hold(pending, age=timedelta(hours=2))
+            _, bot, _ = await self._flush(tmp_path)
+        text = bot.send_message.await_args[0][1]
+        assert "Delayed alert" in text
+        assert "could not reach" in text
+        stamp = (er._now() - timedelta(hours=2)).strftime("%a %H:%M")
+        assert stamp in text, f"expected the original time {stamp} in: {text!r}"
+        assert "ValueError: boom" in text, "the original alert must survive"
+
+    async def test_plain_text_on_retry_too(self, tmp_path):
+        with _Pending(tmp_path) as pending:
+            _hold(pending)
+            _, bot, _ = await self._flush(tmp_path)
+        assert "parse_mode" not in bot.send_message.await_args.kwargs
+
+    async def test_a_still_failing_send_keeps_the_alert(self, tmp_path):
+        """The original bug was emptying the queue against a dead connection.
+        A failed retry must leave the entry exactly where it was."""
+        with _Pending(tmp_path) as pending:
+            _hold(pending)
+            sent, bot, held = await self._flush(tmp_path, fail=True)
+            assert sent == 0
+            bot.send_message.assert_awaited()
+            assert len(held) == 1 and held[0]["error_id"] == "ERR-HELD1"
+            assert pending.exists()
+
+    async def test_stops_at_the_first_failure_and_keeps_the_rest(self, tmp_path):
+        """One success then a failure: the delivered one goes, the failing one
+        and everything after it stay, in order."""
+        with _Pending(tmp_path) as pending:
+            _hold(pending, "ERR-FIRST")
+            _hold(pending, "ERR-SECOND")
+            _hold(pending, "ERR-THIRD")
+            bot = MagicMock()
+            calls = {"n": 0}
+
+            async def _send(chat_id, text):
+                calls["n"] += 1
+                if calls["n"] > 1:
+                    raise RuntimeError("Bad Gateway")
+
+            bot.send_message = AsyncMock(side_effect=_send)
+            u, ops_names, ops_ids = _as_ops()
+            with u, ops_names, ops_ids:
+                sent = await er.flush_pending_alerts(bot)
+                held = er._load_pending()
+        assert sent == 1
+        assert [e["error_id"] for e in held] == ["ERR-SECOND", "ERR-THIRD"]
+
+    async def test_expired_alerts_are_dropped_unsent(self, tmp_path):
+        with _Pending(tmp_path) as pending:
+            _hold(pending, age=er.PENDING_MAX_AGE + timedelta(minutes=1))
+            sent, bot, held = await self._flush(tmp_path)
+        assert sent == 0
+        bot.send_message.assert_not_awaited()
+        assert held == []
+
+    async def test_a_fresh_alert_is_not_dropped_as_expired(self, tmp_path):
+        """Guards the boundary from the other side: if the age check were
+        inverted or the window zero, everything would silently expire."""
+        with _Pending(tmp_path) as pending:
+            _hold(pending, age=er.PENDING_MAX_AGE - timedelta(minutes=1))
+            sent, bot, _ = await self._flush(tmp_path)
+        assert sent == 1
+        bot.send_message.assert_awaited_once()
+
+    async def test_no_recipient_keeps_the_queue(self, tmp_path):
+        """A retry with nobody to send to must not consume the alert."""
+        with _Pending(tmp_path) as pending:
+            _hold(pending)
+            sent, bot, held = await self._flush(tmp_path, users=[])
+        assert sent == 0
+        bot.send_message.assert_not_awaited()
+        assert len(held) == 1
+
+    async def test_an_empty_queue_sends_nothing(self, tmp_path):
+        with _Pending(tmp_path):
+            sent, bot, _ = await self._flush(tmp_path)
+        assert sent == 0
+        bot.send_message.assert_not_awaited()
+
+    async def test_end_to_end_outage_then_recovery(self, tmp_path):
+        """The whole point, in one test: an alert that cannot get out during an
+        outage is delivered once the network returns."""
+        _reset()
+        with _Pending(tmp_path), \
+             patch.object(er, "ERRORS_LOG", tmp_path / "errors.log"):
+            u, ops_names, ops_ids = _as_ops()
+            down = _ops_bot(fail=True)
+            with u, ops_names, ops_ids:
+                error_id = await er.report_exception(down, _raise(ValueError, "boom"))
+            u, ops_names, ops_ids = _as_ops()
+            back = _ops_bot(fail=False)
+            with u, ops_names, ops_ids:
+                sent = await er.flush_pending_alerts(back)
+                remaining = er._load_pending()
+        assert sent == 1
+        assert error_id in back.send_message.await_args[0][1]
+        assert remaining == []
+
+
+class TestHeldAlertsKeepTheirTraces:
+    """Every alert ends "Full trace: logs/errors.log (search ERR-XXXXXX)".
+    A restart clears errors.log, so an alert held ACROSS a restart would send
+    the admin to an empty file — the one case where last run's traces are not
+    stale, because nobody has seen them yet.
+    """
+
+    def test_the_held_alerts_trace_survives_the_reset(self, tmp_path):
+        log = tmp_path / "errors.log"
+        with _Pending(tmp_path) as pending, patch.object(er, "ERRORS_LOG", log):
+            er.write_error_log("ERR-KEEP01", _raise(ValueError, "held fault"))
+            er.write_error_log("ERR-GONE01", _raise(KeyError, "already reported"))
+            _hold(pending, "ERR-KEEP01")
+            er.reset_error_log()
+            text = log.read_text()
+        assert "ERR-KEEP01" in text and "held fault" in text
+        assert "Traceback" in text, "the trace itself must be kept, not just the id"
+        assert "ERR-GONE01" not in text, "delivered traces are still cleared"
+
+    def test_nothing_held_still_clears_everything(self, tmp_path):
+        """The normal case must not regress into never pruning the log."""
+        log = tmp_path / "errors.log"
+        with _Pending(tmp_path), patch.object(er, "ERRORS_LOG", log):
+            er.write_error_log("ERR-AAA111", _raise(ValueError, "x"))
+            discarded = er.reset_error_log()
+            assert log.read_text() == ""
+        assert discarded > 0
+
+    def test_the_reported_byte_count_excludes_what_was_kept(self, tmp_path):
+        log = tmp_path / "errors.log"
+        with _Pending(tmp_path) as pending, patch.object(er, "ERRORS_LOG", log):
+            er.write_error_log("ERR-KEEP01", _raise(ValueError, "held"))
+            before = log.stat().st_size
+            _hold(pending, "ERR-KEEP01")
+            discarded = er.reset_error_log()
+            after = log.stat().st_size
+        assert after == before, "nothing should have been removed"
+        assert discarded == 0, f"claimed {discarded} bytes discarded but kept all"
+
+    def test_retain_keeps_whole_blocks_not_header_lines(self, tmp_path):
+        text = ("===== ERR-ONE  stamp =====\nmessage: one\nbody one\n\n"
+                "===== ERR-TWO  stamp =====\nmessage: two\nbody two\n\n")
+        kept = er._retain_traces(text, {"ERR-TWO"})
+        assert "body two" in kept
+        assert "body one" not in kept and "ERR-ONE" not in kept
+
+    def test_retain_with_no_ids_keeps_nothing(self, tmp_path):
+        text = "===== ERR-ONE  stamp =====\nbody\n"
+        assert er._retain_traces(text, set()) == ""

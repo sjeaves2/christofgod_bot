@@ -130,6 +130,8 @@ class TestTheWeeklyJobDoesNotRunAtStartup:
         assert "post_init" in captured, "main() no longer registers a post_init"
         with patch.object(botmod, "schedule_all_upcoming", AsyncMock()), \
              patch.object(botmod, "alert_on_bad_service_links", AsyncMock()), \
+             patch.object(botmod.error_reporting, "flush_pending_alerts",
+                          AsyncMock(return_value=0)), \
              patch.object(botmod.error_reporting, "reset_error_log",
                           lambda *a, **k: 0):
             asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
