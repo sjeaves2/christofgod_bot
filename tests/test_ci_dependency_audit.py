@@ -12,6 +12,7 @@ undo later without noticing.
 
 from __future__ import annotations
 
+import fnmatch
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,16 @@ WORKFLOW = REPO / ".github" / "workflows" / "tests.yml"
 @pytest.fixture(scope="module")
 def wf():
     return yaml.safe_load(WORKFLOW.read_text())
+
+
+@pytest.fixture(scope="module")
+def triggers(wf):
+    """The `on:` block.
+
+    PyYAML resolves the bare key `on` to the boolean True (YAML 1.1), so it
+    cannot simply be looked up by name.
+    """
+    return wf[True] if True in wf else wf["on"]
 
 
 @pytest.fixture(scope="module")
@@ -95,16 +106,14 @@ class TestTheTwoMistakesThatWereMade:
 
 
 class TestItRunsWithoutACommit:
-    def test_there_is_a_schedule(self, wf):
+    def test_there_is_a_schedule(self, triggers):
         """An advisory lands against unchanged code. Waiting for the next push
         means waiting indefinitely."""
-        triggers = wf[True] if True in wf else wf["on"]
         assert "schedule" in triggers, (
             "without a schedule this only runs when someone happens to commit"
         )
 
-    def test_the_schedule_is_at_least_weekly(self, wf):
-        triggers = wf[True] if True in wf else wf["on"]
+    def test_the_schedule_is_at_least_weekly(self, triggers):
         cron = triggers["schedule"][0]["cron"]
         day_of_month, month, _day_of_week = cron.split()[2:5]
         # day-of-month and month must both be wildcards: pinning either makes
@@ -124,3 +133,78 @@ class TestTheWorkflowStillParses:
         assert "test" in wf["jobs"]
         assert "pytest" in "\n".join(s.get("run", "")
                                      for s in wf["jobs"]["test"]["steps"])
+
+
+def _matches(triggers, event: str, branch: str) -> bool:
+    """Would *event* fire, given the branch its `branches` filter examines?
+
+    An absent filter matches every branch, and fnmatch's `*` crosses `/`,
+    which is what Actions' `**` means.
+
+    The caller supplies the right branch for the event, because the two are
+    NOT the same thing — see _push_fires and _pr_fires below.
+    """
+    if event not in triggers:
+        return False
+    patterns = (triggers[event] or {}).get("branches")
+    if patterns is None:
+        return True
+    return any(fnmatch.fnmatch(branch, p) for p in patterns)
+
+
+def _push_fires(triggers, pushed_branch: str) -> bool:
+    """`push.branches` filters the branch being PUSHED."""
+    return _matches(triggers, "push", pushed_branch)
+
+
+def _pr_fires(triggers, base: str = "main") -> bool:
+    """`pull_request.branches` filters the BASE branch — the PR's target — not
+    the branch the commits are on.
+
+    Worth spelling out: an earlier version of this helper passed a feature
+    branch to both events, which made `pull_request: branches: [main]` look
+    like "PRs get no CI" when in fact it covers every PR in this repository,
+    since they all target main. A control mutation that was expected to pass
+    failed, which is how the conflation surfaced.
+    """
+    return _matches(triggers, "pull_request", base)
+
+
+class TestOneCommitDoesNotRunTheWorkflowTwice:
+    """`push: ["**"]` alongside `pull_request` ran everything TWICE for every
+    commit on a PR branch — six jobs per commit instead of three, identical
+    SHAs. Measured 2026-11-02: 444de36b produced a push run at 20:46:33 and a
+    pull_request run at 20:46:55, both green and both complete.
+
+    Asked as "which events fire?" rather than "what does the YAML say?", so
+    these fail for any trigger shape that reintroduces the duplication, not
+    only for the exact one that caused it.
+    """
+
+    def test_a_pr_branch_commit_fires_exactly_one_event(self, triggers):
+        """A commit on a feature branch with a PR open against main: the push
+        must NOT start a run, because the pull_request event already does."""
+        fired = []
+        if _push_fires(triggers, "some-feature-branch"):
+            fired.append("push")
+        if _pr_fires(triggers, base="main"):
+            fired.append("pull_request")
+        assert fired == ["pull_request"], (
+            f"a commit on a PR branch fires {fired or 'nothing'}; two events "
+            "means the whole workflow runs twice for one commit")
+
+    def test_pull_requests_are_still_checked(self, triggers):
+        """The dangerous over-correction: dropping pull_request would leave
+        PRs with no CI at all, and a failure would only surface after merge."""
+        assert _pr_fires(triggers, base="main")
+
+    def test_main_is_still_verified_after_a_merge(self, triggers):
+        """main is what deploy/update.sh fast-forwards to, so it is the one
+        branch that must be checked on push as well as in the PR."""
+        assert _push_fires(triggers, "main")
+
+    def test_pushing_a_tag_does_not_start_a_run(self, triggers):
+        """Releases are tagged by hand several times a day; a `tags:` filter
+        would spend a full CI run on each one, re-testing a commit that was
+        already green on main."""
+        assert "tags" not in (triggers.get("push") or {})
