@@ -20,11 +20,15 @@ the whole point of the change is those two behaviours.
 
 from __future__ import annotations
 
+import contextlib
 import logging
+import os
 import re
 import sys
+import time
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -32,10 +36,16 @@ REPO = Path(__file__).resolve().parents[1]
 
 
 def _handler(tmp_path, backup_count=3):
-    """A handler configured exactly as settings.py configures the real one."""
+    """A handler configured exactly as settings.py configures the real one.
+
+    `utc=True` is load-bearing, not incidental — see TestDstTransition and the
+    comment in settings.py. TestTheFixtureMatchesProduction below keeps this
+    honest, because a fixture that drifts from the thing it stands in for
+    tests nothing.
+    """
     return TimedRotatingFileHandler(
         tmp_path / "bot.log", when="midnight", backupCount=backup_count,
-        encoding="utf-8")
+        encoding="utf-8", utc=True)
 
 
 def _emit(handler, text):
@@ -217,3 +227,142 @@ class TestThePrunerIsGone:
         source = (REPO / "settings.py").read_text(encoding="utf-8")
         assert "9.1 seconds" in source or "9 seconds" in source
         assert "45 MB" in source
+
+
+class TestTheFixtureMatchesProduction:
+    """_handler() stands in for the real one, so any setting that differs is a
+    test that proves nothing about production."""
+
+    def test_the_real_handler_rotates_on_utc(self):
+        import settings
+        h = settings._file_handler
+        assert h.utc is True, (
+            "local-midnight rotation wedges permanently at the autumn DST "
+            "transition; see the comment in settings.py")
+
+    def test_the_fixture_agrees_with_the_real_handler(self, tmp_path):
+        import settings
+        real = settings._file_handler
+        fixture = _handler(tmp_path)
+        try:
+            assert fixture.when == real.when
+            assert fixture.utc == real.utc
+            assert fixture.interval == real.interval
+        finally:
+            fixture.close()
+
+
+class TestDstTransition:
+    """2026-11-01: rotation stopped and stayed stopped.
+
+    doRollover() names the rotated file by stepping back one interval from
+    rolloverAt and applying a DST correction. Across fall-back that -3600s
+    correction turned Oct 31 00:00 EDT into Oct 30 23:00 EDT, so the suffix
+    came out as the file the PREVIOUS rotation had already written. doRollover
+    then returns on `if os.path.exists(dfn)` WITHOUT advancing rolloverAt, so
+    every later write recomputes the same dead name — stuck, not delayed.
+
+    These tests drive real rollovers with the clock moved, because the bug is
+    invisible to any assertion about the handler's attributes.
+    """
+
+    TZ = "America/New_York"
+
+    @staticmethod
+    def _at(y, mo, d, h, mi, s=0):
+        return time.mktime((y, mo, d, h, mi, s, 0, 0, -1))
+
+    @contextlib.contextmanager
+    def _timezone(self):
+        """Run in a zone that observes US DST, whatever the host is set to."""
+        old = os.environ.get("TZ")
+        os.environ["TZ"] = self.TZ
+        time.tzset()
+        try:
+            yield
+        finally:
+            if old is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = old
+            time.tzset()
+
+    def _rotations_across_fall_back(self, tmp_path, utc: bool):
+        """Emit one record a day from Oct 30 to Nov 4 2026; count rotations."""
+        with self._timezone():
+            log = tmp_path / "bot.log"
+            log.write_text("previous run\n", encoding="utf-8")
+            started = self._at(2026, 10, 30, 14, 36)
+            os.utime(log, (started, started))
+            h = TimedRotatingFileHandler(log, when="midnight", backupCount=45,
+                                         encoding="utf-8", utc=utc)
+            try:
+                for day, hour in ((31, 3), (1, 3), (2, 3), (3, 3), (4, 3)):
+                    month = 10 if day == 31 else 11
+                    when = self._at(2026, month, day, hour, 0)
+                    with mock.patch("time.time", return_value=when):
+                        _emit(h, f"{month}-{day}")
+            finally:
+                h.close()
+            return sorted(p.name for p in tmp_path.iterdir()
+                          if p.name != "bot.log")
+
+    def test_local_midnight_rotation_wedges(self, tmp_path):
+        """The bug itself, reproduced. Not a guard on our code — a guard on the
+        REASON our code passes utc=True. If CPython ever fixes this, this test
+        fails and the comment in settings.py can be revisited.
+        """
+        rotated = self._rotations_across_fall_back(tmp_path, utc=False)
+        assert rotated == ["bot.log.2026-10-30"], (
+            f"expected the known stdlib wedge, got {rotated}. If rotation now "
+            "continues past 2026-11-01, local-midnight rotation has been fixed "
+            "upstream and settings.py's utc=True may no longer be needed.")
+
+    def test_utc_rotation_keeps_going_across_the_transition(self, tmp_path):
+        """The fix: five writes on five days produce rotations throughout."""
+        rotated = self._rotations_across_fall_back(tmp_path, utc=True)
+        assert len(rotated) >= 4, (
+            f"rotation stopped across the DST transition: {rotated}")
+        assert "bot.log.2026-11-01" in rotated, rotated
+        assert "bot.log.2026-11-02" in rotated, rotated
+
+    def test_utc_rotation_is_unaffected_by_the_host_timezone(self, tmp_path):
+        """utc=True must mean the same thing on the laptop and on the server."""
+        results = []
+        for zone in ("America/New_York", "UTC", "Pacific/Auckland"):
+            old = os.environ.get("TZ")
+            os.environ["TZ"] = zone
+            time.tzset()
+            try:
+                sub = tmp_path / zone.replace("/", "_")
+                sub.mkdir()
+                results.append(self._rotations_across_fall_back(sub, utc=True))
+            finally:
+                if old is None:
+                    os.environ.pop("TZ", None)
+                else:
+                    os.environ["TZ"] = old
+                time.tzset()
+        assert results[0] == results[1] == results[2], results
+
+    def test_spring_forward_was_never_broken(self, tmp_path):
+        """Stated so nobody 'fixes' the wrong transition later: +3600s keeps
+        the same calendar day, so the suffix was always right."""
+        with self._timezone():
+            log = tmp_path / "bot.log"
+            log.write_text("x\n", encoding="utf-8")
+            started = self._at(2027, 3, 12, 14, 0)
+            os.utime(log, (started, started))
+            h = TimedRotatingFileHandler(log, when="midnight", backupCount=45,
+                                         encoding="utf-8", utc=False)
+            try:
+                for mo, day in ((3, 13), (3, 14), (3, 15), (3, 16)):
+                    with mock.patch("time.time",
+                                    return_value=self._at(2027, mo, day, 3, 0)):
+                        _emit(h, f"{mo}-{day}")
+            finally:
+                h.close()
+            rotated = sorted(p.name for p in tmp_path.iterdir()
+                             if p.name != "bot.log")
+        assert len(rotated) >= 3, (
+            f"spring forward is not the broken transition; got {rotated}")
