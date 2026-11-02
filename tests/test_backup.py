@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import handlers.backup as bk
 import permissions
+from telegram.error import TelegramError as TelegramErrorForTests
 
 TZ = pytz.timezone("America/New_York")
 
@@ -240,10 +241,15 @@ class TestSchedule:
     async def test_job_delegates_to_send_backup(self):
         ctx = MagicMock()
         ctx.bot = MagicMock()
+        ctx.job.data = None
         send = AsyncMock(return_value=1)
         with patch.object(bk, "send_backup", send):
             await bk.nightly_backup_job(ctx)
-        send.assert_awaited_once_with(ctx.bot)
+        send.assert_awaited_once()
+        assert send.await_args[0][0] is ctx.bot
+        # The nightly run is attempt 1, so it must NOT force: skipping an
+        # unchanged data/ is the whole point of the fingerprint.
+        assert send.await_args.kwargs["force"] is False
 
 
 class TestManualCommand:
@@ -474,3 +480,287 @@ class TestSendRespectsChangeDetection:
              patch.object(bk, "send_backup", send):
             await bk.cmd_backup(upd, MagicMock())
         assert send.await_args.kwargs.get("force") is True
+
+
+class TestDeliveryFailureIsRetried:
+    """2026-11-01: the upload to the one reachable ops admin failed with
+    `Timed Out`. Nothing was lost — the stale fingerprint made the next
+    night's run resend — but recovery took 24 hours and nobody was told.
+    """
+
+    @staticmethod
+    def _ctx(attempt=None):
+        ctx = MagicMock()
+        ctx.bot = MagicMock()
+        ctx.job.data = None if attempt is None else {"attempt": attempt}
+        ctx.job_queue = MagicMock()
+        ctx.job_queue.run_once = MagicMock()
+        return ctx
+
+    async def _run(self, tmp_path, fail=True, attempt=None):
+        bot_error = TelegramErrorForTests("Timed Out") if fail else None
+        ctx = self._ctx(attempt)
+        ctx.bot.send_document = AsyncMock(side_effect=bot_error)
+        u, ops_u, ops_c = _ops()
+        with patch.object(bk, "DATA_DIR", _data_dir(tmp_path)), \
+             u, ops_u, ops_c, \
+             patch.object(bk, "save_backup_state", MagicMock()), \
+             patch.object(bk, "load_backup_state", MagicMock(return_value={})), \
+             patch.object(bk.activity, "log_error") as log_error, \
+             patch.object(bk.error_reporting, "report_exception",
+                          AsyncMock(return_value="ERR-TEST01")) as report:
+            await bk.nightly_backup_job(ctx)
+        return ctx, report, log_error
+
+    async def test_a_failed_delivery_schedules_a_retry(self, tmp_path):
+        ctx, _report, _log = await self._run(tmp_path)
+        ctx.job_queue.run_once.assert_called_once()
+        kwargs = ctx.job_queue.run_once.call_args.kwargs
+        assert kwargs["when"] == bk.RETRY_DELAY
+        assert kwargs["data"] == {"attempt": 2}
+        assert ctx.job_queue.run_once.call_args[0][0] is bk.nightly_backup_job
+
+    async def test_a_successful_delivery_schedules_nothing(self, tmp_path):
+        """The retry must be a consequence of failure, not of running."""
+        ctx, _report, _log = await self._run(tmp_path, fail=False)
+        ctx.job_queue.run_once.assert_not_called()
+        ctx.bot.send_document.assert_awaited_once()
+
+    async def test_the_failure_is_reported_to_ops(self, tmp_path):
+        """Through error_reporting, not just the activity log: the cause is
+        usually the network, and its held-alert queue survives that."""
+        ctx, report, _log = await self._run(tmp_path)
+        report.assert_awaited_once()
+        assert report.await_args[0][1] is ctx.bot.send_document.side_effect
+        assert "backup" in report.await_args.kwargs["note"]
+        assert "attempt 1" in report.await_args.kwargs["note"]
+
+    async def test_the_retry_carries_the_next_attempt_number(self, tmp_path):
+        ctx, report, _log = await self._run(tmp_path, attempt=2)
+        assert ctx.job_queue.run_once.call_args.kwargs["data"] == {"attempt": 3}
+        assert "attempt 2" in report.await_args.kwargs["note"]
+
+    async def test_the_chain_stops_at_the_attempt_limit(self, tmp_path):
+        """Otherwise a real outage becomes an endless chain of doomed uploads
+        every fifteen minutes."""
+        ctx, _report, log_error = await self._run(tmp_path,
+                                                 attempt=bk.RETRY_ATTEMPTS)
+        ctx.job_queue.run_once.assert_not_called()
+        messages = " ".join(str(c[0][0]) for c in log_error.call_args_list)
+        assert "undelivered after" in messages
+        assert "tomorrow" in messages, (
+            "the log must say the nightly run is still the backstop")
+
+    async def test_the_retry_forces_the_send(self, tmp_path):
+        """A retry must not re-ask whether a backup is needed — the run that
+        failed already decided that, and a 'skipped' would end the chain
+        looking like success."""
+        ctx = self._ctx(attempt=2)
+        ctx.bot.send_document = AsyncMock()
+        send = AsyncMock(return_value=1)
+        with patch.object(bk, "send_backup", send):
+            await bk.nightly_backup_job(ctx)
+        assert send.await_args.kwargs["force"] is True
+
+    async def test_a_missing_job_queue_does_not_raise(self, tmp_path):
+        ctx = self._ctx()
+        ctx.job_queue = None
+        ctx.bot.send_document = AsyncMock(side_effect=TelegramErrorForTests("x"))
+        u, ops_u, ops_c = _ops()
+        with patch.object(bk, "DATA_DIR", _data_dir(tmp_path)), u, ops_u, ops_c, \
+             patch.object(bk, "load_backup_state", MagicMock(return_value={})), \
+             patch.object(bk.error_reporting, "report_exception", AsyncMock()):
+            await bk.nightly_backup_job(ctx)      # must not raise
+
+    async def test_a_broken_reporter_does_not_stop_the_retry(self, tmp_path):
+        """Telling ops and retrying are independent; losing the DM must not
+        also cost the retry."""
+        ctx = self._ctx()
+        ctx.bot.send_document = AsyncMock(side_effect=TelegramErrorForTests("x"))
+        u, ops_u, ops_c = _ops()
+        with patch.object(bk, "DATA_DIR", _data_dir(tmp_path)), u, ops_u, ops_c, \
+             patch.object(bk, "load_backup_state", MagicMock(return_value={})), \
+             patch.object(bk.error_reporting, "report_exception",
+                          AsyncMock(side_effect=RuntimeError("no network"))):
+            await bk.nightly_backup_job(ctx)
+        ctx.job_queue.run_once.assert_called_once()
+
+    async def test_a_successful_retry_is_recorded_as_such(self, tmp_path):
+        ctx = self._ctx(attempt=2)
+        send = AsyncMock(return_value=1)
+        with patch.object(bk, "send_backup", send), \
+             patch.object(bk.activity, "log_command") as log_command:
+            await bk.nightly_backup_job(ctx)
+        details = " ".join(str(c.kwargs.get("details", ""))
+                           for c in log_command.call_args_list)
+        assert "retry 2" in details
+
+
+class TestSendBackupReportsDeliveryFailure:
+    """send_backup's callback is what lets the job tell "nothing to do" apart
+    from "could not deliver" — a return of 0 alone cannot."""
+
+    async def test_the_callback_fires_only_when_nothing_was_delivered(self, tmp_path):
+        calls = []
+
+        async def _failed(exc):
+            calls.append(exc)
+
+        bot = _bot()
+        u, ops_u, ops_c = _ops()
+        with patch.object(bk, "DATA_DIR", _data_dir(tmp_path)), u, ops_u, ops_c:
+            sent = await bk.send_backup(bot, on_delivery_failure=_failed)
+        assert sent == 1 and calls == []
+
+    async def test_the_callback_receives_the_send_exception(self, tmp_path):
+        calls = []
+
+        async def _failed(exc):
+            calls.append(exc)
+
+        boom = TelegramErrorForTests("Timed Out")
+        bot = _bot()
+        bot.send_document = AsyncMock(side_effect=boom)
+        u, ops_u, ops_c = _ops()
+        with patch.object(bk, "DATA_DIR", _data_dir(tmp_path)), u, ops_u, ops_c, \
+             patch.object(bk.activity, "log_error"):
+            sent = await bk.send_backup(bot, on_delivery_failure=_failed)
+        assert sent == 0
+        assert calls == [boom]
+
+    async def test_a_skipped_backup_does_not_fire_the_callback(self, tmp_path):
+        """"Nothing changed" is not a delivery failure, and retrying it would
+        send a backup the fingerprint says is unnecessary."""
+        calls = []
+
+        async def _failed(exc):
+            calls.append(exc)
+
+        bot = _bot()
+        u, ops_u, ops_c = _ops()
+        with patch.object(bk, "DATA_DIR", _data_dir(tmp_path)), u, ops_u, ops_c:
+            fingerprint, _ = bk.data_fingerprint()
+            with patch.object(bk, "load_backup_state", MagicMock(return_value={
+                    "fingerprint": fingerprint,
+                    "sent_at": bk.now_tz().isoformat()})):
+                sent = await bk.send_backup(bot, on_delivery_failure=_failed)
+        assert sent == 0 and calls == []
+
+    async def test_a_non_telegram_failure_is_caught_too(self, tmp_path):
+        """The docstring promises this never raises. TelegramError alone would
+        let a bare httpx or OS-level failure escape and contradict it."""
+        calls = []
+
+        async def _failed(exc):
+            calls.append(exc)
+
+        bot = _bot()
+        bot.send_document = AsyncMock(side_effect=OSError("socket gone"))
+        u, ops_u, ops_c = _ops()
+        with patch.object(bk, "DATA_DIR", _data_dir(tmp_path)), u, ops_u, ops_c, \
+             patch.object(bk.activity, "log_error"):
+            sent = await bk.send_backup(bot, on_delivery_failure=_failed)
+        assert sent == 0
+        assert isinstance(calls[0], OSError)
+
+    async def test_no_callback_is_fine(self, tmp_path):
+        """/backup passes none: the admin who typed it gets a reply instead."""
+        bot = _bot()
+        bot.send_document = AsyncMock(side_effect=TelegramErrorForTests("x"))
+        u, ops_u, ops_c = _ops()
+        with patch.object(bk, "DATA_DIR", _data_dir(tmp_path)), u, ops_u, ops_c, \
+             patch.object(bk.activity, "log_error"):
+            assert await bk.send_backup(bot) == 0      # must not raise
+
+
+class TestAnExhaustedBackupActuallyAlerts:
+    """The gap the first version of this fix left: report_exception holds
+    transient network errors until 5 occurrences in 5 minutes, and three
+    retries 15 minutes apart never reach that. Reporting the raw TimedOut
+    would have alerted nobody — the original bug in a smaller costume.
+    """
+
+    def test_the_exhaustion_error_is_not_classified_transient(self):
+        import error_reporting as er
+        exc = bk.BackupUndelivered(f"all {bk.RETRY_ATTEMPTS} delivery attempts failed")
+        assert er.is_transient(exc) is False, (
+            "if this is transient it is held back and nobody is told")
+
+    def test_a_raw_timeout_would_have_been_held(self):
+        """Proves the problem is real rather than theoretical, so the extra
+        exception type is not ceremony."""
+        import error_reporting as er
+        from telegram.error import TimedOut
+        er._alert_state.clear()
+        er._recent.clear()
+        assert er.is_transient(TimedOut()) is True
+        send, _ = er.should_alert(TimedOut())
+        assert send is False
+
+    def test_the_exhaustion_alert_actually_sends(self):
+        import error_reporting as er
+        er._alert_state.clear()
+        er._recent.clear()
+        exc = bk.BackupUndelivered("all 3 delivery attempts failed")
+        send, _ = er.should_alert(exc)
+        assert send is True, "an exhausted backup must alert on first occurrence"
+
+    async def test_the_reported_exhaustion_survives_a_bad_gateway_cause(self, tmp_path):
+        """TRANSIENT_MESSAGES matches on message CONTENT, so a cause of "Bad
+        Gateway" copied into the message would reclassify the exhaustion as
+        transient and suppress it again.
+
+        Asserted against the object the production path actually builds. An
+        earlier version of this test constructed its own exception and so
+        passed happily while the real message leaked the cause.
+        """
+        import error_reporting as er
+        ctx = TestDeliveryFailureIsRetried._ctx(attempt=bk.RETRY_ATTEMPTS)
+        ctx.bot.send_document = AsyncMock(
+            side_effect=TelegramErrorForTests("Bad Gateway"))
+        u, ops_u, ops_c = _ops()
+        with patch.object(bk, "DATA_DIR", _data_dir(tmp_path)), u, ops_u, ops_c, \
+             patch.object(bk, "load_backup_state", MagicMock(return_value={})), \
+             patch.object(bk.activity, "log_error"), \
+             patch.object(bk.error_reporting, "report_exception",
+                          AsyncMock()) as report:
+            await bk.nightly_backup_job(ctx)
+        reported = report.await_args[0][1]
+        assert er.is_transient(reported) is False, (
+            f"the exhaustion alert is classified transient and will be "
+            f"suppressed: {reported!r}")
+        er._alert_state.clear()
+        er._recent.clear()
+        assert er.should_alert(reported)[0] is True
+
+    async def test_exhaustion_reports_the_distinct_type(self, tmp_path):
+        ctx = TestDeliveryFailureIsRetried._ctx(attempt=bk.RETRY_ATTEMPTS)
+        ctx.bot.send_document = AsyncMock(side_effect=TelegramErrorForTests("Timed Out"))
+        u, ops_u, ops_c = _ops()
+        with patch.object(bk, "DATA_DIR", _data_dir(tmp_path)), u, ops_u, ops_c, \
+             patch.object(bk, "load_backup_state", MagicMock(return_value={})), \
+             patch.object(bk.activity, "log_error"), \
+             patch.object(bk.error_reporting, "report_exception",
+                          AsyncMock()) as report:
+            await bk.nightly_backup_job(ctx)
+        reported = report.await_args[0][1]
+        assert isinstance(reported, bk.BackupUndelivered), type(reported)
+        assert "Telegram" in report.await_args.kwargs["note"] or \
+               "Error" in report.await_args.kwargs["note"], \
+               "the note must still name the underlying cause"
+
+    async def test_an_intermediate_attempt_reports_the_raw_error(self, tmp_path):
+        """The hold is correct there: a blip the next retry fixes should wake
+        nobody."""
+        boom = TelegramErrorForTests("Timed Out")
+        ctx = TestDeliveryFailureIsRetried._ctx()
+        ctx.bot.send_document = AsyncMock(side_effect=boom)
+        u, ops_u, ops_c = _ops()
+        with patch.object(bk, "DATA_DIR", _data_dir(tmp_path)), u, ops_u, ops_c, \
+             patch.object(bk, "load_backup_state", MagicMock(return_value={})), \
+             patch.object(bk.activity, "log_error"), \
+             patch.object(bk.error_reporting, "report_exception",
+                          AsyncMock()) as report:
+            await bk.nightly_backup_job(ctx)
+        assert report.await_args[0][1] is boom
+        assert not isinstance(report.await_args[0][1], bk.BackupUndelivered)
