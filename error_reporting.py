@@ -19,10 +19,31 @@ Alert messages are sent as PLAIN TEXT (no parse_mode): a traceback is full of
 underscores, asterisks and backticks, and Markdown parsing would reject the
 whole message — the exact failure mode that once silently dropped appointment
 requests.
+
+Undeliverable alerts are held, not dropped
+------------------------------------------
+An alert about a network failure travels over the network that is failing, so
+the alerts that matter most are the ones least able to get out. On 2026-10-27
+the fifth Telegram 502 in nine seconds crossed TRANSIENT_THRESHOLD, the DM was
+attempted, and the send failed with `Bad Gateway` — the admin was never told,
+because this module logged a warning and moved on.
+
+So an alert that reaches nobody is now queued to PENDING_ALERTS and retried by
+`flush_pending_alerts`, which runs on every successful watchdog probe and once
+at startup.
+
+The startup leg is not redundant. `network_watchdog` deliberately exits the
+process after a sustained outage so systemd restarts it, which means an
+in-memory queue would be destroyed by exactly the outages worth alerting
+about. The queue is on disk for that reason alone.
+
+It lives under logs/ rather than data/ because handlers/backup.py globs all of
+data/ into the nightly backup DM, and this is transient ops state, not a store.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import traceback
 import uuid
@@ -45,6 +66,18 @@ from telegram.error import (
 logger = logging.getLogger(__name__)
 
 ERRORS_LOG = LOGS_DIR / "errors.log"
+# Alerts that could not be delivered, waiting for connectivity to come back.
+PENDING_ALERTS = LOGS_DIR / "pending_alerts.json"
+
+# Cap on held alerts. A bot that has generated more than this while offline has
+# one fault repeating, and the oldest entries describe it just as well as the
+# newest; keeping the OLDEST is what matters, because the first occurrence is
+# the one with the useful context.
+MAX_PENDING = 10
+# Held alerts older than this are dropped unsent. An admin reading "the bot
+# failed" two days after the fact cannot act on it, and errors.log still has
+# the trace, so the message would be noise rather than news.
+PENDING_MAX_AGE = timedelta(hours=24)
 
 # Repeats of the same fingerprint stay silent for this long after an alert.
 ALERT_COOLDOWN = timedelta(minutes=30)
@@ -234,6 +267,130 @@ async def ops_chat_ids() -> set:
     return ids
 
 
+def _load_pending() -> list[dict[str, Any]]:
+    """Held alerts, oldest first. Returns [] rather than raising, always.
+
+    A corrupt or half-written file must not break error reporting — this code
+    path only ever runs when something has already gone wrong.
+    """
+    try:
+        if not PENDING_ALERTS.exists():
+            return []
+        data = json.loads(PENDING_ALERTS.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        logger.warning("Could not read %s (%s); discarding held alerts.",
+                       PENDING_ALERTS.name, exc)
+        return []
+    if not isinstance(data, list):
+        return []
+    return [e for e in data
+            if isinstance(e, dict) and isinstance(e.get("text"), str)]
+
+
+def _store_pending(entries: list[dict[str, Any]]) -> None:
+    """Replace the held-alert file, or delete it when nothing is left."""
+    try:
+        PENDING_ALERTS.parent.mkdir(parents=True, exist_ok=True)
+        if not entries:
+            PENDING_ALERTS.unlink(missing_ok=True)
+            return
+        PENDING_ALERTS.write_text(json.dumps(entries, indent=1),
+                                  encoding="utf-8")
+    except OSError as exc:
+        logger.warning("Could not write %s: %s", PENDING_ALERTS, exc)
+
+
+def _fresh(entries: list[dict[str, Any]],
+           now: datetime) -> list[dict[str, Any]]:
+    """Drop entries past PENDING_MAX_AGE, and any with an unreadable stamp."""
+    kept = []
+    for entry in entries:
+        try:
+            queued_at = datetime.fromisoformat(entry["queued_at"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if now - queued_at <= PENDING_MAX_AGE:
+            kept.append(entry)
+    return kept
+
+
+def hold_alert(error_id: str, text: str, now: datetime | None = None) -> None:
+    """Queue an alert that reached nobody, for retry once the network returns."""
+    now = now or _now()
+    entries = _fresh(_load_pending(), now)
+    entries.append({"error_id": error_id,
+                    "queued_at": now.isoformat(),
+                    "text": text})
+    # Keep the OLDEST on overflow: the first occurrence carries the context,
+    # and the later ones are usually the same fault repeating.
+    _store_pending(entries[:MAX_PENDING])
+    logger.warning("Alert %s could not be delivered; held for retry (%d "
+                   "pending).", error_id, min(len(entries), MAX_PENDING))
+
+
+def _delayed_text(entry: dict[str, Any]) -> str:
+    """The held alert, labelled with when it actually happened.
+
+    Without this an admin reads a stale traceback as a live incident and goes
+    looking for a fault that ended hours ago.
+    """
+    try:
+        when = datetime.fromisoformat(entry["queued_at"]).strftime("%a %H:%M")
+    except (KeyError, TypeError, ValueError):
+        when = "earlier"
+    header = (f"⏳ Delayed alert from {when} — the bot could not reach "
+              "Telegram at the time.")
+    text = f"{header}\n\n{entry['text']}"
+    if len(text) > MAX_DM_CHARS:
+        text = text[:MAX_DM_CHARS] + "\n… (truncated — see logs/errors.log)"
+    return text
+
+
+async def flush_pending_alerts(bot) -> int:
+    """Deliver held alerts; returns how many went out. Never raises.
+
+    Stops at the first failure and keeps that entry and everything after it:
+    if one send fails the network is still bad, and emptying the queue against
+    a dead connection is how the original bug lost its alerts.
+    """
+    entries = _load_pending()
+    if not entries:
+        return 0
+
+    now = _now()
+    entries = _fresh(entries, now)
+    if not entries:
+        _store_pending([])
+        logger.info("Held alerts expired unsent (older than %s).",
+                    PENDING_MAX_AGE)
+        return 0
+
+    recipients = await ops_chat_ids()
+    if not recipients:
+        _store_pending(entries)     # prune, but keep waiting for a recipient
+        return 0
+
+    sent = 0
+    for index, entry in enumerate(entries):
+        text = _delayed_text(entry)
+        delivered = False
+        for chat_id in recipients:
+            try:
+                await bot.send_message(chat_id, text)
+                delivered = True
+            except Exception as send_exc:   # noqa: BLE001 - must not raise
+                logger.warning("Retry of held alert %s to %s failed: %s",
+                               entry.get("error_id"), chat_id, send_exc)
+        if not delivered:
+            _store_pending(entries[index:])
+            return sent
+        sent += 1
+
+    _store_pending([])
+    logger.info("Delivered %d held alert(s) after connectivity returned.", sent)
+    return sent
+
+
 async def report_exception(bot, exc: BaseException, note: str = "") -> str | None:
     """Record an exception and alert ops admins when the noise rules allow.
 
@@ -257,14 +414,38 @@ async def report_exception(bot, exc: BaseException, note: str = "") -> str | Non
         return error_id
 
     text = build_alert(error_id, exc, note, suppressed)
+    delivered = False
     for chat_id in recipients:
         try:
             # Plain text on purpose: tracebacks are not valid Markdown.
             await bot.send_message(chat_id, text)
+            delivered = True
         except Exception as send_exc:     # noqa: BLE001 - alerting must not raise
             logger.warning("Could not alert ops admin %s about %s: %s",
                            chat_id, error_id, send_exc)
+    if not delivered:
+        # Reached nobody. Hold it rather than drop it — see the module
+        # docstring; this is the path that lost the 2026-10-27 alert.
+        hold_alert(error_id, text)
     return error_id
+
+
+def _retain_traces(text: str, error_ids: set) -> str:
+    """The blocks of *text* belonging to *error_ids*; "" when none apply.
+
+    write_error_log delimits each trace with a `===== ERR-XXXXXX  ... =====`
+    header line, which is what this splits on.
+    """
+    if not error_ids or not text:
+        return ""
+    kept: list[str] = []
+    keeping = False
+    for line in text.splitlines(keepends=True):
+        if line.startswith("===== ERR-"):
+            keeping = any(eid and eid in line for eid in error_ids)
+        if keeping:
+            kept.append(line)
+    return "".join(kept)
 
 
 def reset_error_log() -> int:
@@ -274,6 +455,17 @@ def reset_error_log() -> int:
     bugs that are either fixed or about to recur with fresh line numbers —
     keeping them only makes the file harder to read. Returns the bytes discarded
     (logged, so the size is not lost even though the content is).
+
+    PENDING_ALERTS is deliberately NOT cleared here. A restart is the most
+    likely reason an alert is still sitting there — the watchdog exits the
+    process after a sustained outage — so clearing it at startup would discard
+    precisely the alerts this is meant to preserve. post_init flushes it.
+
+    The traces those held alerts point at are kept too. Every alert ends with
+    "Full trace: logs/errors.log (search ERR-XXXXXX)", and clearing the file
+    wholesale would send the admin to an empty log — the one case where last
+    run's traces are NOT stale, because the alert about them has not been
+    delivered yet.
     """
     _alert_state.clear()
     _recent.clear()
@@ -281,7 +473,13 @@ def reset_error_log() -> int:
         if not ERRORS_LOG.exists():
             return 0
         size = ERRORS_LOG.stat().st_size
-        ERRORS_LOG.write_text("", encoding="utf-8")
+        retained = _retain_traces(ERRORS_LOG.read_text(encoding="utf-8"),
+                                  {e.get("error_id") for e in _load_pending()})
+        ERRORS_LOG.write_text(retained, encoding="utf-8")
+        size -= len(retained.encode("utf-8"))
+        if retained:
+            logger.info("Kept the trace(s) behind %d undelivered alert(s).",
+                        len(_load_pending()))
         if size:
             logger.info("Cleared %s (%d bytes) from the previous run.", ERRORS_LOG.name, size)
         return size
