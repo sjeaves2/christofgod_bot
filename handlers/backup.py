@@ -81,9 +81,9 @@ RETRY_JOB = "backup_delivery_retry"
 class BackupUndelivered(Exception):
     """Every delivery attempt failed. Constructed for reporting, never raised.
 
-    A distinct type because error_reporting holds transient network errors
-    back until TRANSIENT_THRESHOLD occurrences in TRANSIENT_WINDOW (5 in 5
-    minutes), and three retries RETRY_DELAY apart can never reach that — so
+    A distinct type because error_reporting holds a transient network error
+    back until the condition has persisted for SUSTAINED_FOR, and three
+    retries RETRY_DELAY apart are separate episodes, not one long one — so
     reporting the raw TimedOut would have alerted nobody, which is the bug
     being fixed rather than a smaller version of it.
 
