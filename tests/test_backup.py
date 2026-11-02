@@ -692,7 +692,7 @@ class TestAnExhaustedBackupActuallyAlerts:
         import error_reporting as er
         from telegram.error import TimedOut
         er._alert_state.clear()
-        er._recent.clear()
+        er._episodes.clear()
         assert er.is_transient(TimedOut()) is True
         send, _ = er.should_alert(TimedOut())
         assert send is False
@@ -700,7 +700,7 @@ class TestAnExhaustedBackupActuallyAlerts:
     def test_the_exhaustion_alert_actually_sends(self):
         import error_reporting as er
         er._alert_state.clear()
-        er._recent.clear()
+        er._episodes.clear()
         exc = bk.BackupUndelivered("all 3 delivery attempts failed")
         send, _ = er.should_alert(exc)
         assert send is True, "an exhausted backup must alert on first occurrence"
@@ -730,7 +730,7 @@ class TestAnExhaustedBackupActuallyAlerts:
             f"the exhaustion alert is classified transient and will be "
             f"suppressed: {reported!r}")
         er._alert_state.clear()
-        er._recent.clear()
+        er._episodes.clear()
         assert er.should_alert(reported)[0] is True
 
     async def test_exhaustion_reports_the_distinct_type(self, tmp_path):
