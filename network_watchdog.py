@@ -26,6 +26,14 @@ Design notes
   for a blip would be worse than the blip.
 * `NetworkWatchdog` holds no I/O so the decision rule can be tested directly;
   `watchdog_job` is the thin shell that talks to the network.
+* A successful probe is also the bot's only reliable signal that connectivity
+  has RETURNED, so it is where held ops alerts get retried. The probe runs
+  whether or not anyone is talking to the bot, which a passive signal would
+  not. See error_reporting.flush_pending_alerts.
+
+  The dependency runs one way only — error_reporting knows nothing about this
+  module — and tests/test_resilience.py pins that, because a cycle here would
+  surface at import on the server rather than in CI.
 """
 
 from __future__ import annotations
@@ -36,6 +44,7 @@ from datetime import datetime, timedelta
 from telegram.error import NetworkError, TelegramError
 from telegram.ext import ContextTypes
 
+import error_reporting
 from common import now_tz
 from settings import activity
 
@@ -145,6 +154,24 @@ async def watchdog_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.info("Telegram reachable again after %s.", _human(recovered_after))
         activity.log_error(
             f"Recovered: Telegram was unreachable for {_human(recovered_after)}")
+
+    # Unconditional, not only after a recorded outage: an alert can fail to
+    # send for reasons this watchdog never saw as a probe failure (a blip
+    # between two successful probes), and flushing an empty queue costs one
+    # stat() a minute.
+    await _retry_held_alerts(context)
+
+
+async def _retry_held_alerts(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Deliver any alert that could not get out while the network was down.
+
+    Swallows everything: the watchdog's own job is to keep the bot alive, and
+    failing at retrying an alert must never cost a probe cycle.
+    """
+    try:
+        await error_reporting.flush_pending_alerts(context.bot)
+    except Exception as exc:   # noqa: BLE001 - see docstring
+        logger.warning("Could not retry held alerts: %s", exc)
 
 
 def _give_up(context: ContextTypes.DEFAULT_TYPE, elapsed: timedelta,
