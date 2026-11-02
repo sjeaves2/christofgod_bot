@@ -11,20 +11,51 @@ Two noise controls keep an unattended bot from spamming its admins:
     repeats inside ALERT_COOLDOWN are counted silently and rolled up into the
     next alert ("+14 more since 21:35").
 
-  * Transient-network hold. A single NetworkError/TimedOut/BadGateway is a
-    normal blip that resolves itself, so those alert only once they reach
-    TRANSIENT_THRESHOLD occurrences inside TRANSIENT_WINDOW.
+  * Transient-network hold, measured in DURATION, not occurrences. A
+    NetworkError/TimedOut/BadGateway alerts only once the condition has
+    PERSISTED for SUSTAINED_FOR. See below for why counting was wrong.
 
 Alert messages are sent as PLAIN TEXT (no parse_mode): a traceback is full of
 underscores, asterisks and backticks, and Markdown parsing would reject the
 whole message — the exact failure mode that once silently dropped appointment
 requests.
 
+Why duration and not a count
+----------------------------
+The rule used to be "5 occurrences inside 5 minutes". Two months of production
+data showed what that actually selects for. Telegram runs something scheduled
+at 01:11–01:12 UTC: 60 of 61 recorded Bad Gateway events landed in that
+75-second window between 2026-09-05 and 2026-11-02, and the local clock
+following the DST change on 2026-11-01 while the UTC time did not move
+confirmed it is their schedule, not anything here.
+
+Those bursts are dense and short — six errors in fourteen seconds on
+2026-11-02 — so a count threshold is really a measure of how FAST errors
+arrive, and a burst clears it while being completely harmless. Four such
+nights crossed it. The longest outage any of them caused was 1m 59s, PTB's
+polling loop recovered by itself every time, and the congregation never saw
+anything.
+
+What is worth waking an admin for is a condition that PERSISTS. So an episode
+is tracked instead: occurrences no more than EPISODE_GAP apart are one
+episode, and an episode alerts once it has lasted SUSTAINED_FOR. A fourteen-
+second burst can never qualify however many errors it contains, and a genuine
+outage qualifies even if it produces few errors.
+
+A count floor is not needed: one occurrence is an episode of zero length, so a
+lone error never alerts.
+
+This is deliberately NOT read from network_watchdog, which measures outage
+duration precisely and would be the obvious source. network_watchdog imports
+this module, so reaching back for it would close a cycle;
+tests/test_resilience.py pins the one-way dependency. The occurrence
+timestamps needed are already here.
+
 Undeliverable alerts are held, not dropped
 ------------------------------------------
 An alert about a network failure travels over the network that is failing, so
 the alerts that matter most are the ones least able to get out. On 2026-10-27
-the fifth Telegram 502 in nine seconds crossed TRANSIENT_THRESHOLD, the DM was
+the fifth Telegram 502 in nine seconds passed the transient hold, the DM was
 attempted, and the send failed with `Bad Gateway` — the admin was never told,
 because this module logged a warning and moved on.
 
@@ -47,7 +78,6 @@ import json
 import logging
 import traceback
 import uuid
-from collections import deque
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -83,8 +113,19 @@ PENDING_MAX_AGE = timedelta(hours=24)
 ALERT_COOLDOWN = timedelta(minutes=30)
 # Transient network errors must occur this many times within this window
 # before they are considered worth waking anyone for.
-TRANSIENT_WINDOW = timedelta(minutes=5)
-TRANSIENT_THRESHOLD = 5
+#
+# How long a transient condition must PERSIST before it is worth an alert.
+# Chosen against the production record: the worst nightly Telegram blip ran
+# 1m 59s and needed nobody, while the 2026-09-04 outage ran 87 minutes and
+# needed somebody. Five minutes is clear of the first and well inside the
+# second, and it is half network_watchdog's FAILURE_GRACE, so a sustained
+# outage is reported before the watchdog restarts the process over it.
+SUSTAINED_FOR = timedelta(minutes=5)
+# Quiet gap after which the next occurrence starts a NEW episode rather than
+# extending the old one. Longer than the longest measured blip (1m 59s), so
+# two separate blips an hour apart are never welded into one long "episode"
+# that would alert about a problem that is not happening.
+EPISODE_GAP = timedelta(minutes=3)
 # Frames of traceback included in the DM (the deepest ones carry the line
 # numbers that actually locate the bug).
 DM_FRAMES = 4
@@ -110,8 +151,10 @@ _NetworkError = NetworkError
 
 # fingerprint -> {"last_alert": datetime, "suppressed": int}
 _alert_state: dict[str, dict[str, Any]] = {}
-# fingerprint -> deque[datetime] of recent occurrences (transient throttling)
-_recent: dict[str, deque] = {}
+# fingerprint -> {"started": datetime, "last_seen": datetime, "count": int}
+# The current episode of a transient condition. See "Why duration and not a
+# count" in the module docstring.
+_episodes: dict[str, dict[str, Any]] = {}
 
 
 def _now() -> datetime:
@@ -188,6 +231,27 @@ def write_error_log(error_id: str, exc: BaseException, note: str = "") -> None:
         logger.error("Could not write %s: %s", ERRORS_LOG, write_exc)
 
 
+def episode_duration(exc: BaseException, now: datetime) -> timedelta:
+    """Record this occurrence and return how long its episode has now run.
+
+    An episode is a run of occurrences of the same fingerprint no more than
+    EPISODE_GAP apart. A longer silence means the condition cleared, so the
+    next occurrence starts a fresh episode at zero rather than inheriting the
+    age of an unrelated earlier one.
+
+    The first occurrence of an episode returns zero, which is what keeps a
+    lone error silent without needing a separate count threshold.
+    """
+    fp = fingerprint(exc)
+    episode = _episodes.get(fp)
+    if episode is None or now - episode["last_seen"] > EPISODE_GAP:
+        episode = {"started": now, "count": 0}
+    episode["last_seen"] = now
+    episode["count"] += 1
+    _episodes[fp] = episode
+    return now - episode["started"]
+
+
 def should_alert(exc: BaseException, now: datetime | None = None) -> tuple[bool, int]:
     """Decide whether to alert for *exc*; returns (send_alert, suppressed_count).
 
@@ -197,14 +261,9 @@ def should_alert(exc: BaseException, now: datetime | None = None) -> tuple[bool,
     now = now or _now()
     fp = fingerprint(exc)
 
-    # Transient connectivity errors: only speak up once they persist.
-    if is_transient(exc):
-        seen = _recent.setdefault(fp, deque())
-        seen.append(now)
-        while seen and now - seen[0] > TRANSIENT_WINDOW:
-            seen.popleft()
-        if len(seen) < TRANSIENT_THRESHOLD:
-            return False, 0
+    # Transient connectivity errors: only speak up once they have PERSISTED.
+    if is_transient(exc) and episode_duration(exc, now) < SUSTAINED_FOR:
+        return False, 0
 
     state = _alert_state.get(fp)
     if state is not None and now - state["last_alert"] < ALERT_COOLDOWN:
@@ -228,8 +287,12 @@ def build_alert(error_id: str, exc: BaseException, note: str = "",
     if note:
         lines.append(f"Context: {note}")
     if is_transient(exc):
-        lines.append(f"(transient network errors — {TRANSIENT_THRESHOLD}+ "
-                     f"in {int(TRANSIENT_WINDOW.total_seconds() // 60)} minutes)")
+        minutes = int(SUSTAINED_FOR.total_seconds() // 60)
+        episode = _episodes.get(fingerprint(exc)) or {}
+        lines.append(
+            f"(network trouble lasting over {minutes} minutes — "
+            f"{episode.get('count', 0)} occurrence(s) so far. Brief blips are "
+            "not reported.)")
     if suppressed:
         lines.append(f"(+{suppressed} more of this error since the last alert)")
 
@@ -468,7 +531,7 @@ def reset_error_log() -> int:
     delivered yet.
     """
     _alert_state.clear()
-    _recent.clear()
+    _episodes.clear()
     try:
         if not ERRORS_LOG.exists():
             return 0
