@@ -1,0 +1,47 @@
+# What every `appt:` tap does, one path per line. GENERATED — do not hand-edit.
+#
+# Regenerate with:
+#     python -m tests.test_appt_callback_dispatch
+#
+# Only alongside a DELIBERATE change, in the same commit. appt_callback is a
+# pipeline: four stages can intercept a tap before any verb runs, and the
+# order between them is load-bearing. effects= is F)inalize N)otify-requester
+# G)negotiation-started R)eschedule-handler. Datetimes are masked to <WHEN>;
+# see tests/test_appt_callback_dispatch.py.
+#
+# Two numbers here read oddly and are correct:
+#
+#   saved=2 on `decline` — the negotiator claim writes, then the verb writes
+#   again. Two round trips to disk for one tap.
+#
+#   saved=0 on `accept_counter` despite status=confirmed — that branch
+#   delegates persistence to _finalize_appointment, which this file records as
+#   called rather than running. So saved= counts the router's OWN writes, not
+#   every write a tap causes.
+malformed-no-id [confirm] -> saved=0 status=pending effects=---- cp=- user_data=- text=⚠️ That button no longer works. It is probably from an older message. Send /myappointments to see your appointments and their current status.
+appt-missing [confirm:NOPE] -> saved=0 status=pending effects=---- cp=- user_data=- text=⚠️ Appointment not found.
+rs_accept-on-confirmed [rs_accept:TARGET] -> saved=0 status=confirmed effects=---R cp=- user_data=- text=<nothing sent>
+rs_decline-on-confirmed [rs_decline:TARGET] -> saved=0 status=confirmed effects=---R cp=- user_data=- text=<nothing sent>
+terminal-confirmed [confirm:TARGET] -> saved=0 status=confirmed effects=---- cp=- user_data=- text=ℹ️ Appointment TARGET has already been confirmed. No further action taken.
+terminal-declined [decline:TARGET] -> saved=0 status=declined effects=---- cp=- user_data=- text=ℹ️ Appointment TARGET has already been declined. No further action taken.
+terminal-cancelled [counter:TARGET] -> saved=0 status=cancelled effects=---- cp=- user_data=- text=ℹ️ Appointment TARGET has already been cancelled. No further action taken.
+past-counter [counter:TARGET] -> saved=0 status=pending effects=---- cp=- user_data=- text=⚠️ This appointment's time has already passed; it can no longer be rescheduled.
+past-decline_counter [decline_counter:TARGET] -> saved=0 status=pending effects=---- cp=- user_data=- text=⚠️ This appointment's time has already passed; it can no longer be rescheduled.
+past-confirm-is-allowed [confirm:TARGET] -> saved=1 status=confirmed effects=F-G- cp=- user_data=- text=✅ You confirmed the appointment (ID: TARGET).
+unauthorized-actor [confirm:TARGET] -> saved=0 status=pending effects=---- cp=- user_data=- text=⚠️ You're not authorized to act on this appointment.
+claim-by-first-actor [decline:TARGET] -> saved=2 status=declined effects=-NG- cp=- user_data=- text=❌ You declined the appointment (ID: TARGET).
+already-claimed-by-other [confirm:TARGET] -> saved=0 status=pending effects=---- cp=- user_data=- text=ℹ️ This appointment is already being handled by Someone Else.
+user-side-verb-skips-auth [accept_counter:TARGET] -> saved=0 status=confirmed effects=F--- cp=- user_data=- text=✅ You accepted the suggested time (ID: TARGET).
+confirm [confirm:TARGET] -> saved=1 status=confirmed effects=F-G- cp=- user_data=- text=✅ You confirmed the appointment (ID: TARGET).
+confirm-clash [confirm:TARGET] -> saved=1 status=pending effects=--G- cp=- user_data=- text=⚠️ That time overlaps the requester's appointment with Bishop X (ID: CLASH). Not confirmed — suggest a different time instead.
+decline [decline:TARGET] -> saved=2 status=declined effects=-NG- cp=- user_data=- text=❌ You declined the appointment (ID: TARGET).
+counter [counter:TARGET] -> saved=1 status=pending effects=--G- cp=['TARGET'] user_data=['cp_appt_TARGET'] text=Suggest a new date/time for appointment TARGET. Reply with: YYYY-MM-DD HH:MM
+accept_counter [accept_counter:TARGET] -> saved=0 status=confirmed effects=F--- cp=- user_data=- text=✅ You accepted the suggested time (ID: TARGET).
+accept_counter-past [accept_counter:TARGET] -> saved=0 status=pending effects=---- cp=- user_data=- text=⚠️ That suggested time has already passed. Please suggest a new time.
+accept_counter-clash [accept_counter:TARGET] -> saved=0 status=pending effects=---- cp=- user_data=- text=⚠️ That time overlaps your appointment with Bishop X (ID: CLASH). It was not confirmed — please suggest a different time.
+decline_counter [decline_counter:TARGET] -> saved=0 status=pending effects=---- cp=['TARGET'] user_data=- text=Suggest a different date/time (or type 'cancel' to cancel the request): YYYY-MM-DD HH:MM
+accept_user_counter [accept_user_counter:TARGET] -> saved=1 status=confirmed effects=F-G- cp=- user_data=- text=✅ You confirmed the appointment with the user's suggested time.
+accept_user_counter-past [accept_user_counter:TARGET] -> saved=1 status=pending effects=--G- cp=- user_data=- text=⚠️ That suggested time has already passed. Please suggest a new time.
+accept_user_counter-clash [accept_user_counter:TARGET] -> saved=1 status=pending effects=--G- cp=- user_data=- text=⚠️ That time overlaps the requester's appointment with Bishop X (ID: CLASH). Not confirmed.
+decline_user_counter [decline_user_counter:TARGET] -> saved=2 status=declined effects=-NG- cp=- user_data=- text=❌ Request cancelled.
+unknown-verb [teleport:TARGET] -> saved=0 status=pending effects=---- cp=- user_data=- text=⚠️ That button no longer works. It is probably from an older message. Send /myappointments to see your appointments and their current status.
