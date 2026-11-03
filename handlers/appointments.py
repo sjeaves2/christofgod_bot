@@ -727,12 +727,130 @@ async def _notify_negotiation_started(
             pass
 
 
+def _replace_appt(appts: list[dict], appt: dict) -> None:
+    """Write *appt* back over its entry in *appts*, in place.
+
+    AT EVERY CALL SITE HERE THIS IS A NO-OP, and saying so is more useful than
+    pretending otherwise. `appt` comes from
+    `next(a for a in appts if a["id"] == appt_id)`, so it IS the object in the
+    list: mutating it is already visible there and the assignment changes
+    nothing. Gutting the loop survives the entire dispatch snapshot, because
+    there is no behaviour to observe.
+
+    It is kept, and extracted rather than deleted, for two reasons. It is the
+    contract the save path assumes — records are loaded as a list and saved as
+    a list, so a caller holding a COPY must put it back — and that case is
+    what the direct tests in tests/test_appt_callback_dispatch.py pin, since
+    no test driving the router can. And deleting nine copies of a defensive
+    loop in the same commit that restructures the branches around them would
+    mix a behaviour question into a pure move.
+
+    This loop was written out nine times in this module. Six are in other
+    functions and are left alone: they are covered by the suite but not by
+    appt_callback_dispatch.snapshot, and a mechanical change is worth making
+    under a pin rather than beside one. A tenth site, in
+    cmd_cancelappointment, sets a status field instead of replacing the record
+    and is deliberately NOT this function.
+    """
+    for index, existing in enumerate(appts):
+        if existing["id"] == appt["id"]:
+            appts[index] = appt
+
+
+async def _decline_appt(context: ContextTypes.DEFAULT_TYPE, query,
+                        appt: dict, appts: list[dict], *,
+                        official_text: str, requester_text: str) -> None:
+    """Mark *appt* declined, persist it, and tell both sides.
+
+    Shared by `decline` (the official refuses the requested time) and
+    `decline_user_counter` (the official refuses the time the requester
+    suggested). Those two differed only in their wording, and the wording is
+    the parameter.
+    """
+    appt["status"] = "declined"
+    _replace_appt(appts, appt)
+    await storage.save_appointments(appts)
+    await query.edit_message_text(official_text)
+    await send_markdown(context.bot, appt["user_chat_id"], requester_text)
+
+
+async def _confirm_proposed_time(context: ContextTypes.DEFAULT_TYPE, query,
+                                 appt: dict, appts: list[dict],
+                                 proposed: str, *, check_past: bool,
+                                 clash_text, ok_text: str) -> None:
+    """Confirm *appt* at *proposed*, unless it is past or clashes.
+
+    Shared by the three branches that settle on a time: `confirm` (the
+    requested time), `accept_counter` (the official's suggestion, accepted by
+    the requester) and `accept_user_counter` (the requester's suggestion,
+    accepted by the official). They differed in which field holds the time,
+    the wording, and one guard — so those are the parameters.
+
+    check_past is False for `confirm` alone, which accepts a requested time
+    that has already passed. That is existing behaviour, pinned by the
+    "past-confirm-is-allowed" line of the dispatch snapshot, and preserved
+    here rather than quietly tightened; it is worth a second look, but not in
+    a commit whose claim is that nothing changed.
+
+    clash_text is a callable rather than a template because the three
+    messages differ in more than the values — one says "your appointment" and
+    the others "the requester's appointment".
+    """
+    if check_past and _datetime_is_past(proposed):
+        await query.edit_message_text(
+            "⚠️ That suggested time has already passed. "
+            "Please suggest a new time."
+        )
+        return
+    clash = _confirmed_overlap(appts, appt, proposed)
+    if clash:
+        await query.edit_message_text(clash_text(clash))
+        return
+    appt["status"] = "confirmed"
+    appt["confirmed_datetime"] = proposed
+    await _finalize_appointment(context, appt, appts)
+    await query.edit_message_text(ok_text)
+
+
+async def _unknown_appt_callback(query, data: str) -> None:
+    """Answer a tap that no branch handles, and leave a trace.
+
+    Until 2026-11-03 appt_callback had no else: the if/elif chain simply ran
+    off the end. That is invisible rather than harmless — _answer_cb has
+    already cleared the user's spinner, so the tap looks accepted. Someone
+    tapping "✅ Confirm" on a stale keyboard would reasonably believe the
+    appointment was confirmed when nothing had happened, and no log line was
+    written either, so there was nothing to find afterwards.
+    (board_callback has logged this case all along; appointments did not.)
+
+    The wording must cover both causes, because from here they are
+    indistinguishable: a keyboard older than a deploy that changed the verbs,
+    or a bug in the bot. So it says what is true — the button no longer works
+    — and points at /myappointments, which shows the real current state. It
+    does NOT say "try again": the button will never work.
+    """
+    logger.warning("Unrecognised appointment callback %r", data)
+    await query.edit_message_text(
+        "⚠️ That button no longer works.\n\n"
+        "It is probably from an older message. Send /myappointments to see "
+        "your appointments and their current status."
+    )
+
+
 async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await _answer_cb(query)
     data: str = query.data
-    parts = data[len(CB_APPT_PREFIX):].split(":")
-    action, appt_id = parts[0], parts[1]
+    # partition, not split(":")[1], which raised IndexError on a verb carrying
+    # no id. Nothing builds such a callback today — every button here appends
+    # ":{appt_id}" — so this is not a live fault. It is the shape of one:
+    # board_callback already has id-less verbs (close, list, completed) and
+    # parses with partition for exactly this reason, so the first id-less verb
+    # added here would have crashed rather than routed.
+    action, _, appt_id = data[len(CB_APPT_PREFIX):].partition(":")
+    if not action or not appt_id:
+        await _unknown_appt_callback(query, data)
+        return
 
     appts = await storage.get_appointments()
     appt = next((a for a in appts if a["id"] == appt_id), None)
@@ -755,8 +873,6 @@ async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "No further action taken."
         )
         return
-
-    user_chat_id = appt["user_chat_id"]
 
     # Can't start rescheduling an appointment whose time has already passed.
     if action in ("counter", "decline_counter") and _appt_is_past(appt):
@@ -781,9 +897,7 @@ async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             appt["negotiator_chat_id"] = actor_id
             appt["negotiator_name"] = name or "The official"
             appt["negotiator_is_proxy"] = is_proxy
-            for i, a in enumerate(appts):
-                if a["id"] == appt_id:
-                    appts[i] = appt
+            _replace_appt(appts, appt)
             await storage.save_appointments(appts)
             await _notify_negotiation_started(context, off, appt, actor_id)
         elif negotiator != actor_id:
@@ -794,29 +908,22 @@ async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             return
 
     if action == "confirm":
-        clash = _confirmed_overlap(appts, appt, appt["requested_datetime"])
-        if clash:
-            await query.edit_message_text(
+        await _confirm_proposed_time(
+            context, query, appt, appts, appt["requested_datetime"],
+            check_past=False,
+            clash_text=lambda clash: (
                 f"⚠️ That time overlaps the requester's appointment with "
-                f"{md(clash['official_name'])} (ID: {clash['id']}). Not confirmed — "
-                "suggest a different time instead."
-            )
-            return
-        appt["status"] = "confirmed"
-        appt["confirmed_datetime"] = appt["requested_datetime"]
-        await _finalize_appointment(context, appt, appts)
-        await query.edit_message_text(f"✅ You confirmed the appointment (ID: {appt_id}).")
+                f"{md(clash['official_name'])} (ID: {clash['id']}). "
+                "Not confirmed — suggest a different time instead."),
+            ok_text=f"✅ You confirmed the appointment (ID: {appt_id}).")
 
     elif action == "decline":
-        appt["status"] = "declined"
-        for i, a in enumerate(appts):
-            if a["id"] == appt_id:
-                appts[i] = appt
-        await storage.save_appointments(appts)
-        await query.edit_message_text(f"❌ You declined the appointment (ID: {appt_id}).")
-        await send_markdown(context.bot, user_chat_id,
-            f"❌ Your appointment request (ID: `{appt_id}`) has been declined."
-            + _requester_proxy_note(appt))
+        await _decline_appt(
+            context, query, appt, appts,
+            official_text=f"❌ You declined the appointment (ID: {appt_id}).",
+            requester_text=(
+                f"❌ Your appointment request (ID: `{appt_id}`) has been "
+                "declined." + _requester_proxy_note(appt)))
 
     elif action == "counter":
         # Official wants to suggest a different time
@@ -832,24 +939,16 @@ async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         # We handle the next message in a fallback handler
 
     elif action == "accept_counter":
-        # User accepts counter-proposed time
-        proposed = appt.get("counter_datetime", appt["requested_datetime"])
-        if _datetime_is_past(proposed):
-            await query.edit_message_text(
-                "⚠️ That suggested time has already passed. Please suggest a new time."
-            )
-            return
-        clash = _confirmed_overlap(appts, appt, proposed)
-        if clash:
-            await query.edit_message_text(
-                f"⚠️ That time overlaps your appointment with {md(clash['official_name'])} "
-                f"(ID: {clash['id']}). It was not confirmed — please suggest a different time."
-            )
-            return
-        appt["status"] = "confirmed"
-        appt["confirmed_datetime"] = proposed
-        await _finalize_appointment(context, appt, appts)
-        await query.edit_message_text(f"✅ You accepted the suggested time (ID: {appt_id}).")
+        # The requester accepts the time the official suggested.
+        await _confirm_proposed_time(
+            context, query, appt, appts,
+            appt.get("counter_datetime", appt["requested_datetime"]),
+            check_past=True,
+            clash_text=lambda clash: (
+                f"⚠️ That time overlaps your appointment with "
+                f"{md(clash['official_name'])} (ID: {clash['id']}). It was "
+                "not confirmed — please suggest a different time."),
+            ok_text=f"✅ You accepted the suggested time (ID: {appt_id}).")
 
     elif action == "decline_counter":
         # User declines the counter-proposal → let them suggest a new time
@@ -863,35 +962,30 @@ async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
 
     elif action == "accept_user_counter":
-        # Official accepts user's counter-proposed time
-        proposed = appt.get("user_counter_datetime", appt["requested_datetime"])
-        if _datetime_is_past(proposed):
-            await query.edit_message_text(
-                "⚠️ That suggested time has already passed. Please suggest a new time."
-            )
-            return
-        clash = _confirmed_overlap(appts, appt, proposed)
-        if clash:
-            await query.edit_message_text(
+        # The official accepts the time the requester suggested.
+        await _confirm_proposed_time(
+            context, query, appt, appts,
+            appt.get("user_counter_datetime", appt["requested_datetime"]),
+            check_past=True,
+            clash_text=lambda clash: (
                 f"⚠️ That time overlaps the requester's appointment with "
-                f"{md(clash['official_name'])} (ID: {clash['id']}). Not confirmed."
-            )
-            return
-        appt["status"] = "confirmed"
-        appt["confirmed_datetime"] = proposed
-        await _finalize_appointment(context, appt, appts)
-        await query.edit_message_text(
-            "✅ You confirmed the appointment with the user's suggested time.")
+                f"{md(clash['official_name'])} (ID: {clash['id']}). "
+                "Not confirmed."),
+            ok_text=("✅ You confirmed the appointment with the user's "
+                     "suggested time."))
 
     elif action == "decline_user_counter":
-        appt["status"] = "declined"
-        for i, a in enumerate(appts):
-            if a["id"] == appt_id:
-                appts[i] = appt
-        await storage.save_appointments(appts)
-        await query.edit_message_text("❌ Request cancelled.")
-        await send_markdown(context.bot, user_chat_id,
-            f"Your appointment request (ID: `{appt_id}`) has been cancelled.")
+        await _decline_appt(
+            context, query, appt, appts,
+            official_text="❌ Request cancelled.",
+            requester_text=(f"Your appointment request (ID: `{appt_id}`) "
+                            "has been cancelled."))
+
+    else:
+        # Reached only for a verb no branch claims. Note where this sits: the
+        # guards above run FIRST, so an unknown verb on an already-confirmed
+        # appointment is answered by the terminal-status guard, not here.
+        await _unknown_appt_callback(query, data)
 
 
 async def _finalize_appointment(
