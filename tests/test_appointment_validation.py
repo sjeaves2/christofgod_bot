@@ -737,6 +737,122 @@ class TestCallbackOverlapGuard:
 # Past-appointment guards (can't cancel/reschedule an appointment in the past)
 # ---------------------------------------------------------------------------
 
+class TestUnrecognisedCallback:
+    """A tap no branch handles must say so, not vanish.
+
+    appt_callback's if/elif chain had no else, so an unknown verb ran off the
+    end: nothing sent, nothing logged. _answer_cb has already cleared the
+    spinner by then, so the tap LOOKS accepted — someone tapping "✅ Confirm"
+    on a stale keyboard would believe the appointment was confirmed.
+    board_callback has logged this case all along.
+    """
+
+    def _pending(self, appt_id="TARGET", **extra):
+        slot = _ahead(10, hour=10, minute=0, second=0, microsecond=0)
+        appt = {
+            "id": appt_id, "user_chat_id": 111, "user_username": "requester",
+            "user_display_name": "Test User", "official_id": "off1",
+            "official_name": "Pastor Test",
+            "requested_datetime": slot.isoformat(),
+            "confirmed_datetime": None, "description": "x",
+            "status": "pending", "duration_minutes": 30,
+        }
+        appt.update(extra)
+        return appt
+
+    async def _run(self, raw_suffix, appts):
+        """Drive appt_callback with RAW callback data, malformed included."""
+        ctx = _make_context()
+        query = MagicMock()
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+        query.data = f"{ha.CB_APPT_PREFIX}{raw_suffix}"
+        query.message.chat_id = 999
+        query.from_user.id = 999
+        query.from_user.username = None
+        upd = MagicMock()
+        upd.callback_query = query
+
+        get_calls = []
+
+        async def _fake_get():
+            get_calls.append(1)
+            return [a.copy() for a in appts]
+
+        # _finalize_appointment is patched for the same reason the sibling
+        # harness patches it: the real one sends an .ics through the bot, which
+        # is a MagicMock here. Routing is what these tests are about.
+        with patch("storage.get_appointments", side_effect=_fake_get), \
+             patch("storage.save_appointments", new=AsyncMock()), \
+             patch("permissions.OFFICIALS", _officials()), \
+             patch("handlers.appointments._finalize_appointment", new=AsyncMock()):
+            await ha.appt_callback(upd, ctx)
+        return query, get_calls
+
+    async def test_an_unknown_verb_is_answered_not_ignored(self):
+        """The regression guard. Before the fix nothing was sent at all, so
+        asserting that SOMETHING is sent is what kills the old behaviour."""
+        query, _ = await self._run("teleport:TARGET", [self._pending()])
+        query.edit_message_text.assert_awaited_once()
+        said = query.edit_message_text.await_args[0][0]
+        assert "no longer works" in said
+
+    async def test_it_points_at_the_command_that_shows_real_state(self):
+        """From here the cause is unknowable — a keyboard older than a deploy,
+        or a bug. So it tells the user where the truth is."""
+        query, _ = await self._run("teleport:TARGET", [self._pending()])
+        said = query.edit_message_text.await_args[0][0]
+        assert "/myappointments" in said
+
+    async def test_it_does_not_tell_the_user_to_try_again(self):
+        """The button will never work. "Try again" would be a lie that costs
+        the user a second tap and the same silence."""
+        query, _ = await self._run("teleport:TARGET", [self._pending()])
+        said = query.edit_message_text.await_args[0][0].lower()
+        assert "try again" not in said
+
+    async def test_it_is_logged(self, caplog):
+        """Nothing was written before, so there was nothing to find after."""
+        with caplog.at_level("WARNING"):
+            await self._run("teleport:TARGET", [self._pending()])
+        assert any("Unrecognised appointment callback" in r.message
+                   for r in caplog.records)
+
+    async def test_a_verb_with_no_id_does_not_raise(self):
+        """The parse was split(":")[1], which raised IndexError on an id-less
+        verb. Nothing builds one today — every button appends ":{appt_id}" —
+        but board_callback already HAS id-less verbs (close, list, completed),
+        so the first one added here would have crashed rather than routed."""
+        query, _ = await self._run("confirm", [self._pending()])
+        query.edit_message_text.assert_awaited_once()
+        assert "no longer works" in query.edit_message_text.await_args[0][0]
+
+    async def test_a_malformed_callback_never_reaches_storage(self):
+        """It cannot name an appointment, so loading them is wasted work — and
+        reading the store is how a bad verb would otherwise get as far as the
+        side-effecting guards."""
+        _query, get_calls = await self._run("confirm", [self._pending()])
+        assert get_calls == []
+
+    async def test_an_unknown_verb_on_a_terminal_appointment_hits_that_guard(self):
+        """Pins the documented ordering: the guards run BEFORE dispatch, so
+        this is answered by the terminal-status guard, not by the unknown
+        handler. If that ever inverts, the idempotency guard has moved."""
+        query, _ = await self._run(
+            "teleport:TARGET", [self._pending(status="confirmed")])
+        said = query.edit_message_text.await_args[0][0].lower()
+        assert "already" in said
+        assert "no longer works" not in said
+
+    async def test_a_known_verb_still_routes(self):
+        """The parse changed from split to partition; the normal path must be
+        untouched. A pending confirm reaches the confirm branch."""
+        query, get_calls = await self._run("confirm:TARGET", [self._pending()])
+        assert get_calls == [1]
+        said = query.edit_message_text.await_args[0][0]
+        assert "no longer works" not in said
+
+
 class TestPastGuards:
     def test_appt_is_past_true(self):
         from handlers.appointments import _appt_is_past

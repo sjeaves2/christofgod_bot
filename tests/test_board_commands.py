@@ -348,6 +348,41 @@ class TestRouter:
         upd = _cb_update("bi:wat:AAA11111")
         assert await hb.board_callback(upd, _ctx()) == hb.BI_MENU
 
+    async def test_an_unrecognised_callback_is_answered_not_ignored(self, monkeypatch):
+        """It logged and sent nothing, so the officer saw silence — and
+        _answer_cb has already cleared the spinner, so the tap looked
+        accepted. Asserting that SOMETHING is sent is what kills that."""
+        self._officer_store(monkeypatch)
+        upd = _cb_update("bi:wat:AAA11111")
+        await hb.board_callback(upd, _ctx())
+        assert "no longer works" in sent_text(upd)
+
+    async def test_an_unrecognised_callback_offers_a_way_back(self, monkeypatch):
+        """The conversation is still alive and still in BI_MENU, so a button
+        beats naming a command — one tap instead of typing. Same shape as the
+        vanished-item branch."""
+        self._officer_store(monkeypatch)
+        upd = _cb_update("bi:wat:AAA11111")
+        await hb.board_callback(upd, _ctx())
+        data = [b.callback_data
+                for row in sent_markup(upd).inline_keyboard for b in row]
+        assert data == [f"{hb.CB_BOARD_PREFIX}list"]
+
+    async def test_an_unrecognised_callback_still_logs(self, monkeypatch, caplog):
+        """The log line predates the reply; adding the reply must not lose it,
+        because it carries the callback_data that identifies the stale verb."""
+        self._officer_store(monkeypatch)
+        with caplog.at_level("WARNING"):
+            await hb.board_callback(_cb_update("bi:wat:AAA11111"), _ctx())
+        assert any("Unrecognised board callback" in r.message
+                   and "bi:wat:AAA11111" in r.message for r in caplog.records)
+
+    async def test_an_unrecognised_callback_writes_nothing(self, monkeypatch):
+        """A verb nobody claims must not touch the store on its way out."""
+        store = self._officer_store(monkeypatch)
+        await hb.board_callback(_cb_update("bi:wat:AAA11111"), _ctx())
+        assert store.item_saves == 0
+
 
 # ---------------------------------------------------------------------------
 # Completing, rolling forward, deleting
