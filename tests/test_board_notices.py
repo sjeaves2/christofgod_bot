@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 import sys
-from datetime import date, timedelta
+from datetime import timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -27,13 +27,32 @@ from telegram.error import Forbidden, TelegramError
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import board_items as bi
+from common import now_tz
 import handlers.board as hb
 import permissions
 
 
+
+def _today():
+    """Today in CHURCH time — the clock the bot itself uses.
+
+    NOT `_today()`. Every date decision in handlers/board.py goes through
+    `now_tz().date()` (America/New_York), while `_today()` follows the
+    machine's timezone. On a UTC runner those differ for the five hours
+    between 19:00 and midnight church time, and a fixture built on one clock
+    then contradicts an assertion made on the other.
+
+    That is not hypothetical: on 2026-11-03 at 01:12 UTC — 20:12 the previous
+    evening in church time — six tests in this suite failed on CI with
+    "assert '10 days' in ... in 11 days". The bot was right; the tests were
+    mixing clocks. Any CI run in that window had always been going to fail,
+    and none had happened to land there before.
+    """
+    return now_tz().date()
+
 def _item(**over):
     base = {"id": "AAA11111", "action": "Renew logo registration",
-            "due": (date.today() + timedelta(days=10)).isoformat(),
+            "due": (_today() + timedelta(days=10)).isoformat(),
             "notify_days": 60, "status": "pending", "description": "",
             "url": "", "history": []}
     base.update(over)
@@ -106,7 +125,7 @@ class TestDelivery:
         assert sorted(recipients(bot)) == [111, 222]
 
     async def test_the_notice_names_the_action_and_the_date(self, monkeypatch):
-        due = (date.today() + timedelta(days=10)).isoformat()
+        due = (_today() + timedelta(days=10)).isoformat()
         FakeStore(items=[_item(due=due)]).install(monkeypatch)
         bot = FakeBot()
         await hb.board_notice_job(_ctx(bot))
@@ -118,11 +137,11 @@ class TestDelivery:
     async def test_a_due_item_is_marked_notified(self, monkeypatch):
         store = FakeStore().install(monkeypatch)
         await hb.board_notice_job(_ctx(FakeBot()))
-        assert store.items[0]["last_notified"] == date.today().isoformat()
+        assert store.items[0]["last_notified"] == _today().isoformat()
         assert store.saves == 1
 
     async def test_an_item_not_yet_due_a_notice_is_left_alone(self, monkeypatch):
-        far_off = _item(due=(date.today() + timedelta(days=200)).isoformat())
+        far_off = _item(due=(_today() + timedelta(days=200)).isoformat())
         store = FakeStore(items=[far_off]).install(monkeypatch)
         bot = FakeBot()
         await hb.board_notice_job(_ctx(bot))
@@ -150,8 +169,8 @@ class TestDelivery:
 
     async def test_several_due_items_are_all_sent_and_saved_once(self, monkeypatch):
         store = FakeStore(items=[
-            _item(id="A", action="First", due=(date.today() + timedelta(days=3)).isoformat()),
-            _item(id="B", action="Second", due=(date.today() + timedelta(days=9)).isoformat()),
+            _item(id="A", action="First", due=(_today() + timedelta(days=3)).isoformat()),
+            _item(id="B", action="Second", due=(_today() + timedelta(days=9)).isoformat()),
         ]).install(monkeypatch)
         bot = FakeBot()
         await hb.board_notice_job(_ctx(bot))
@@ -164,9 +183,9 @@ class TestDelivery:
         file order, which is the order they happened to be added in."""
         FakeStore(items=[
             _item(id="L", action="Later one",
-                  due=(date.today() + timedelta(days=18)).isoformat()),
+                  due=(_today() + timedelta(days=18)).isoformat()),
             _item(id="S", action="Sooner one",
-                  due=(date.today() + timedelta(days=2)).isoformat()),
+                  due=(_today() + timedelta(days=2)).isoformat()),
         ], officers=(111,)).install(monkeypatch)
         bot = FakeBot()
         await hb.board_notice_job(_ctx(bot))
@@ -182,7 +201,7 @@ class TestDelivery:
 
     async def test_an_overdue_item_keeps_being_sent(self, monkeypatch):
         """The one failure mode that would make this feature harmful."""
-        overdue = _item(due=(date.today() - timedelta(days=4)).isoformat())
+        overdue = _item(due=(_today() - timedelta(days=4)).isoformat())
         FakeStore(items=[overdue]).install(monkeypatch)
         bot = FakeBot()
         await hb.board_notice_job(_ctx(bot))
@@ -207,7 +226,7 @@ class TestFailureHandling:
         day after, for as long as the fourth stays blocked."""
         store = FakeStore(officers=(111, 222)).install(monkeypatch)
         await hb.board_notice_job(_ctx(FakeBot(fail_for=(222,))))
-        assert store.items[0]["last_notified"] == date.today().isoformat()
+        assert store.items[0]["last_notified"] == _today().isoformat()
 
     async def test_a_total_failure_does_not_mark_the_item(self, monkeypatch):
         """Telegram unreachable. The notice must not be recorded as delivered —
@@ -226,8 +245,8 @@ class TestFailureHandling:
 
     async def test_a_failure_on_one_item_does_not_stop_the_next(self, monkeypatch):
         store = FakeStore(items=[
-            _item(id="A", action="First", due=(date.today() + timedelta(days=3)).isoformat()),
-            _item(id="B", action="Second", due=(date.today() + timedelta(days=9)).isoformat()),
+            _item(id="A", action="First", due=(_today() + timedelta(days=3)).isoformat()),
+            _item(id="B", action="Second", due=(_today() + timedelta(days=9)).isoformat()),
         ], officers=(111,)).install(monkeypatch)
 
         bot = FakeBot()
@@ -247,7 +266,7 @@ class TestFailureHandling:
         assert "Second" in bot.sent[0][1]
         by_id = {i["id"]: i for i in store.items}
         assert "last_notified" not in by_id["A"]
-        assert by_id["B"]["last_notified"] == date.today().isoformat()
+        assert by_id["B"]["last_notified"] == _today().isoformat()
 
     async def test_no_officers_sends_nothing_and_marks_nothing(self, monkeypatch):
         """Obligations tracked and nobody told. Nothing is marked, so the
@@ -304,7 +323,7 @@ class TestNoticeButton:
 
     def test_an_unacceptable_link_is_shown_as_text_instead(self):
         """An officer pasted it for a reason; dropping it silently is worse."""
-        text = hb.render_notice(_item(url="ask Pastor for the_link"), date.today())
+        text = hb.render_notice(_item(url="ask Pastor for the_link"), _today())
         assert r"the\_link" in text
 
     async def test_a_rejected_button_falls_back_to_a_plain_notice(self, monkeypatch):
@@ -338,7 +357,7 @@ class TestNoticeButton:
 
         bot.send_message = picky
         await hb.board_notice_job(_ctx(bot))
-        assert store.items[0]["last_notified"] == date.today().isoformat()
+        assert store.items[0]["last_notified"] == _today().isoformat()
 
 
 # ---------------------------------------------------------------------------
@@ -350,18 +369,18 @@ class TestNoticeMarkdown:
     NASTY = "Renew 501(c)(3) *and* file Form_990"
 
     def test_the_action_is_escaped(self):
-        text = hb.render_notice(_item(action=self.NASTY), date.today())
+        text = hb.render_notice(_item(action=self.NASTY), _today())
         assert r"Form\_990" in text
         assert text.count("*") % 2 == 0, text
 
     def test_the_description_is_escaped(self):
         text = hb.render_notice(_item(description="EIN 12_3456789 *draft*"),
-                                date.today())
+                                _today())
         assert r"12\_3456789" in text
         assert text.count("*") % 2 == 0, text
 
     def test_no_doubled_asterisks(self):
-        today = date.today()
+        today = _today()
         for offset in (-5, 0, 3, 30):
             text = hb.render_notice(
                 _item(due=(today + timedelta(days=offset)).isoformat()), today)
@@ -369,7 +388,7 @@ class TestNoticeMarkdown:
 
     def test_it_says_how_to_act_on_it(self):
         """A notice with no next step is a notice that gets ignored."""
-        assert "/boarditems" in hb.render_notice(_item(), date.today())
+        assert "/boarditems" in hb.render_notice(_item(), _today())
 
 
 # ---------------------------------------------------------------------------
@@ -466,13 +485,13 @@ class TestScheduling:
 
 class TestPurge:
     async def test_an_old_deletion_is_dropped(self, monkeypatch):
-        old = (date.today() - timedelta(days=bi.DELETED_PURGE_AFTER_DAYS + 1)).isoformat()
+        old = (_today() - timedelta(days=bi.DELETED_PURGE_AFTER_DAYS + 1)).isoformat()
         store = FakeStore(items=[_item(status="deleted", deleted_at=old)]).install(monkeypatch)
         assert await hb.purge_deleted_board_items() == 1
         assert store.items == []
 
     async def test_a_recent_deletion_is_kept(self, monkeypatch):
-        recent = (date.today() - timedelta(days=1)).isoformat()
+        recent = (_today() - timedelta(days=1)).isoformat()
         store = FakeStore(items=[_item(status="deleted",
                                        deleted_at=recent)]).install(monkeypatch)
         assert await hb.purge_deleted_board_items() == 0

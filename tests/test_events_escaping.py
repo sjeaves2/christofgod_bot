@@ -18,7 +18,7 @@ could have done the same at any time.
 from __future__ import annotations
 
 import sys
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -27,6 +27,8 @@ import pytz
 from telegram.error import BadRequest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from common import now_tz
 
 import handlers.user_basics as UB  # noqa: E402
 
@@ -45,8 +47,8 @@ PLACEHOLDER_URL = "https://example.test/j/1234567890?pwd=REPLACE_ME"
 def _event(name="God's Holy Convocation—Sabbath Eve", url="", announcements=()):
     return {
         "name": name,
-        "service_time": TZ.localize(datetime.now().replace(microsecond=0)) + timedelta(days=1),
-        "notification_time": TZ.localize(datetime.now().replace(microsecond=0)),
+        "service_time": now_tz().replace(microsecond=0) + timedelta(days=1),
+        "notification_time": now_tz().replace(microsecond=0),
         "url": url,
         "announcements": list(announcements),
         "type": "convocation",
