@@ -163,6 +163,24 @@ async def _run_one(label: str, suffix: str, appts: list,
         text = args[0] if args else kwargs.get("text", "")
 
     target = next((a for a in appts if a["id"] == "TARGET"), None)
+
+    # WHICH time was confirmed, named by the field it came from rather than
+    # printed. The absolute value cannot go in the snapshot (it would churn
+    # daily), but "status=confirmed" alone cannot tell accept_counter from
+    # accept_user_counter reading the wrong field — and landing an
+    # appointment at the wrong hour is the worst thing this router can do.
+    # A mutation swapping counter_datetime for user_counter_datetime survived
+    # the first version of this file.
+    confirmed_from = "-"
+    if target and target.get("confirmed_datetime"):
+        confirmed = target["confirmed_datetime"]
+        for field in ("counter_datetime", "user_counter_datetime",
+                      "requested_datetime"):
+            if target.get(field) == confirmed:
+                confirmed_from = field
+                break
+        else:
+            confirmed_from = "something-else"
     effects = "".join((
         "F" if finalize.await_count else "-",
         "N" if notify_user.await_count else "-",
@@ -172,6 +190,7 @@ async def _run_one(label: str, suffix: str, appts: list,
 
     return (f"{label} [{suffix}] -> saved={saves} "
             f"status={target['status'] if target else '-'} "
+            f"confirmed_from={confirmed_from} "
             f"effects={effects} "
             f"cp={sorted(ha._counter_propose_state) or '-'} "
             f"user_data={sorted(ctx.user_data) or '-'} "
