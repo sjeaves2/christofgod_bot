@@ -88,6 +88,66 @@ class TestEveryConversationAllowsReentry:
         )
 
 
+class TestReentryDoesNotLetAnEntryPointHijackLiveTaps:
+    """The price of allow_reentry=True, and a real production bug.
+
+    Because allow_reentry is set everywhere (see above), PTB checks ENTRY
+    POINTS BEFORE the state handlers on every update:
+
+        if state is None or self.allow_reentry:
+            for entry_point in self.entry_points:     # first
+        ...
+        for candidate in self.states.get(state, []):  # only after
+
+    So a CallbackQueryHandler among the entry points intercepts LIVE button
+    taps mid-conversation. /songlist shipped that way in v0.26.0: tapping a
+    song answered "the bot restarted since those buttons were drawn", while a
+    list was plainly in progress.
+
+    It is not banned outright, because board_items_conversation uses one
+    safely — its entry-point callback IS one of its state handlers, so
+    whichever branch PTB takes, the same function runs. THAT IDENTITY is the
+    load-bearing part, and it is what this test checks. A conversation with
+    per-button state handlers cannot satisfy it and must register its
+    dead-button handler outside the conversation instead.
+    """
+
+    @staticmethod
+    def _callback_names(handlers):
+        return {getattr(getattr(h, "callback", None), "__name__", "?")
+                for h in handlers}
+
+    def test_the_sweep_sees_the_wiring(self):
+        """Guards the test below against passing vacuously."""
+        assert len(_built_conversations()) >= 10
+
+    def test_no_callback_entry_point_can_shadow_a_state_handler(self):
+        from telegram.ext import CallbackQueryHandler
+
+        offenders = []
+        for conv in _built_conversations():
+            entries = [h for h in conv.entry_points
+                       if isinstance(h, CallbackQueryHandler)]
+            if not entries or not conv.allow_reentry:
+                continue
+            entry_cbs = self._callback_names(entries)
+            state_cbs = set()
+            for handlers in conv.states.values():
+                state_cbs |= self._callback_names(handlers)
+            hijackable = entry_cbs - state_cbs
+            if hijackable:
+                label = ",".join(sorted(
+                    x for h in conv.entry_points
+                    for x in (getattr(h, "commands", None) or []))) or conv.name
+                offenders.append(f"{label}: {sorted(hijackable)}")
+        assert not offenders, (
+            "these have a CallbackQueryHandler entry point whose callback is "
+            "NOT also a state handler, so with allow_reentry=True it will "
+            "intercept live button taps mid-conversation: "
+            f"{sorted(offenders)}"
+        )
+
+
 class TestReentryDispatch:
     """Behavioural: an ACTIVE conversation still matches its entry command."""
 
