@@ -727,12 +727,45 @@ async def _notify_negotiation_started(
             pass
 
 
+async def _unknown_appt_callback(query, data: str) -> None:
+    """Answer a tap that no branch handles, and leave a trace.
+
+    Until 2026-11-03 appt_callback had no else: the if/elif chain simply ran
+    off the end. That is invisible rather than harmless — _answer_cb has
+    already cleared the user's spinner, so the tap looks accepted. Someone
+    tapping "✅ Confirm" on a stale keyboard would reasonably believe the
+    appointment was confirmed when nothing had happened, and no log line was
+    written either, so there was nothing to find afterwards.
+    (board_callback has logged this case all along; appointments did not.)
+
+    The wording must cover both causes, because from here they are
+    indistinguishable: a keyboard older than a deploy that changed the verbs,
+    or a bug in the bot. So it says what is true — the button no longer works
+    — and points at /myappointments, which shows the real current state. It
+    does NOT say "try again": the button will never work.
+    """
+    logger.warning("Unrecognised appointment callback %r", data)
+    await query.edit_message_text(
+        "⚠️ That button no longer works.\n\n"
+        "It is probably from an older message. Send /myappointments to see "
+        "your appointments and their current status."
+    )
+
+
 async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await _answer_cb(query)
     data: str = query.data
-    parts = data[len(CB_APPT_PREFIX):].split(":")
-    action, appt_id = parts[0], parts[1]
+    # partition, not split(":")[1], which raised IndexError on a verb carrying
+    # no id. Nothing builds such a callback today — every button here appends
+    # ":{appt_id}" — so this is not a live fault. It is the shape of one:
+    # board_callback already has id-less verbs (close, list, completed) and
+    # parses with partition for exactly this reason, so the first id-less verb
+    # added here would have crashed rather than routed.
+    action, _, appt_id = data[len(CB_APPT_PREFIX):].partition(":")
+    if not action or not appt_id:
+        await _unknown_appt_callback(query, data)
+        return
 
     appts = await storage.get_appointments()
     appt = next((a for a in appts if a["id"] == appt_id), None)
@@ -892,6 +925,12 @@ async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await query.edit_message_text("❌ Request cancelled.")
         await send_markdown(context.bot, user_chat_id,
             f"Your appointment request (ID: `{appt_id}`) has been cancelled.")
+
+    else:
+        # Reached only for a verb no branch claims. Note where this sits: the
+        # guards above run FIRST, so an unknown verb on an already-confirmed
+        # appointment is answered by the terminal-status guard, not here.
+        await _unknown_appt_callback(query, data)
 
 
 async def _finalize_appointment(
