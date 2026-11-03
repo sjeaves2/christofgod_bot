@@ -53,7 +53,7 @@
 0: Command(/boardcalendar -> cmd_boardcalendar)
 0: Command(/setboardofficer -> cmd_setboardofficer)
 0: CallbackQuery(^bo: -> board_officer_callback)
-0: Conversation(entry=[Command(/songlist -> cmd_songlist)] states={0=[Command(/end -> sl_end),Command(/undo -> sl_undo),Message(sl_title)];1=[Command(/skip -> sl_skip_artist),Message(sl_artist)];2=[CallbackQuery(^sl:pick:\d+$ -> sl_pick),CallbackQuery(^sl:none$ -> sl_search_again),CallbackQuery(^sl:cancel$ -> sl_cancel)];3=[CallbackQuery(^sl:send$ -> sl_choose_recipient),CallbackQuery(^sl:remove$ -> sl_remove_menu),CallbackQuery(^sl:cancel$ -> sl_cancel)];4=[CallbackQuery(^sl:rm:\d+$ -> sl_remove),CallbackQuery(^sl:back$ -> sl_back_to_confirm),CallbackQuery(^sl:cancel$ -> sl_cancel)];5=[CallbackQuery(^sl:to:\d+$ -> sl_send),CallbackQuery(^sl:cancel$ -> sl_cancel)]} fallbacks=[Command(/cancel -> cancel_conversation)] reentry=True)
+0: Conversation(entry=[Command(/songlist -> cmd_songlist)] states={0=[Command(/end -> sl_end),Command(/undo -> sl_undo),Message(sl_query)];1=[CallbackQuery(^sl:pick:\d+$ -> sl_pick),CallbackQuery(^sl:none$ -> sl_search_again),CallbackQuery(^sl:cancel$ -> sl_cancel)];2=[CallbackQuery(^sl:send$ -> sl_choose_recipient),CallbackQuery(^sl:remove$ -> sl_remove_menu),CallbackQuery(^sl:cancel$ -> sl_cancel)];3=[CallbackQuery(^sl:rm:\d+$ -> sl_remove),CallbackQuery(^sl:back$ -> sl_back_to_confirm),CallbackQuery(^sl:cancel$ -> sl_cancel)];4=[CallbackQuery(^sl:to:\d+$ -> sl_send),CallbackQuery(^sl:cancel$ -> sl_cancel)]} fallbacks=[Command(/cancel -> cancel_conversation)] reentry=True)
 0: CallbackQuery(^sl: -> sl_stale_button)
 0: Message(handle_counter_propose_message)
 0: Message(cmd_unknown)

@@ -1,8 +1,17 @@
 """/songlist — build a worship song list and send it to another user.
 
-An admin types a song title, optionally an artist, and picks from Apple Music
-search results. Repeat until /end, confirm the list, choose a recipient, send.
-Typically ten or eleven songs.
+An admin types a song — name and, if known, artist, in ONE message — and picks
+from Apple Music search results. Repeat until /end, confirm the list, choose a
+recipient, send. Typically ten or eleven songs.
+
+ONE PROMPT, NOT TWO
+-------------------
+The first version asked for the title and then the artist separately, on the
+assumption that the search needed the two apart. It does not: the iTunes
+Search API's `term` is a general search across title, artist and album, the
+same as the Music app's search box. So the second prompt bought nothing and
+cost a round trip per song. It was removed on 2026-11-03 along with the
+title/artist concatenation it existed to feed.
 
 ENGLISH ONLY, like the rest of the admin surface
 ------------------------------------------------
@@ -27,10 +36,13 @@ which state — the thing a router hides.
 STALE BUTTONS AFTER A RESTART
 -----------------------------
 user_data does not survive a restart and every deploy restarts the bot, so a
-keyboard already on an admin's screen goes dead. board_items_conversation
-solved that by making its callback router an entry point, and the same applies
-here: a broad `^sl:` CallbackQueryHandler is an ENTRY POINT, so a tap with no
-conversation in progress says the list is gone instead of doing nothing at all.
+keyboard already on an admin's screen goes dead. A broad `^sl:` handler answers
+those taps instead of leaving them silent — but it is registered in bot.py
+AFTER this conversation, OUTSIDE it, and must never be moved into it as an
+entry point. board_items_conversation does exactly that and is fine; copying it
+here caused a production bug, because with allow_reentry=True PTB checks entry
+points BEFORE state handlers, so the broad pattern swallowed every live tap.
+See song_list_conversation() and stale_button_handler() for the full reason.
 
 A part-built list is NOT persisted. That was a deliberate choice: the
 alternative is a tenth YAML store to create, gitignore, keep out of the backup
@@ -68,7 +80,7 @@ from telegram.ext import (
 
 logger = logging.getLogger(__name__)
 
-SL_TITLE, SL_ARTIST, SL_PICK, SL_CONFIRM, SL_REMOVE, SL_RECIPIENT = range(6)
+SL_QUERY, SL_PICK, SL_CONFIRM, SL_REMOVE, SL_RECIPIENT = range(5)
 
 CB_SONG_PREFIX = "sl:"
 
@@ -223,59 +235,53 @@ async def cmd_songlist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     context.user_data[STATE_KEY] = {"songs": []}
     await update.message.reply_text(
         "🎵 Building a worship song list.\n\n"
-        "Send me the name of the first song. I will look it up on Apple Music "
-        "and show you what I find.\n\n"
+        "Send me the first song — the name, and the artist too if you know "
+        "it, in one message. For example:\n\n"
+        "    Amazing Grace CeCe Winans\n\n"
+        "The artist is optional, but it helps: a hymn is often recorded by "
+        "several people. I will look it up on Apple Music and show you what "
+        "I find.\n\n"
         "/end when the list is complete\n"
         "/undo to drop the last song\n"
         "/cancel to abandon the list\n\n"
         "Note: if the bot restarts while you are building the list, the list "
         "is lost and you will need to start again."
     )
-    return SL_TITLE
+    return SL_QUERY
 
 
-async def sl_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    title = (update.message.text or "").strip()
-    if not title:
+async def sl_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Search on whatever the admin typed, and offer the matches.
+
+    One prompt, not two. The Search API's `term` is a general search over
+    title, artist and album together — the same thing the Music app's own
+    search box does — so "Amazing Grace CeCe Winans" needs no splitting, no
+    rejoining, and no second question. See apple_music.search_songs.
+
+    The example in cmd_songlist's prompt is therefore load-bearing: it shows
+    the song and artist side by side with NO "by" between them, because the
+    API scores "by" as a search term like any other and it measurably moves
+    the ranking.
+    """
+    query = (update.message.text or "").strip()
+    if not query:
         await update.message.reply_text("Send me a song name, or /end.")
-        return SL_TITLE
-    _state(context)["pending_title"] = title
-    await update.message.reply_text(
-        f"🎤 Who performs “{title}”?\n\n"
-        "Send the artist's name, or /skip if you are not sure — I will search "
-        "on the title alone and show you the closest matches."
-    )
-    return SL_ARTIST
+        return SL_QUERY
 
-
-async def sl_artist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    return await _search_and_offer(update, context,
-                                   (update.message.text or "").strip())
-
-
-async def sl_skip_artist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    return await _search_and_offer(update, context, None)
-
-
-async def _search_and_offer(update: Update, context: ContextTypes.DEFAULT_TYPE,
-                            artist: str | None) -> int:
-    state = _state(context)
-    title = state.get("pending_title", "")
-    results = await apple_music.search_songs(title, artist)
+    results = await apple_music.search_songs(query)
     if not results:
         # search_songs never raises and returns [] for "nothing found" and for
         # "search is broken" alike, so this message must cover both without
         # claiming to know which it was.
         await update.message.reply_text(
-            f"🔍 I could not find anything for “{title}”"
-            + (f" by {artist}" if artist else "")
-            + ".\n\nCheck the spelling and send the song name again, or /end "
-              "to finish the list."
+            f"🔍 I could not find anything for “{query}”.\n\n"
+            "Check the spelling and send it again, or /end to finish the list."
         )
-        return SL_TITLE
-    state["results"] = results
+        return SL_QUERY
+
+    _state(context)["results"] = results
     await update.message.reply_text(
-        f"Found {len(results)} match(es) for “{title}”. Which one?",
+        f"Found {len(results)} match(es) for “{query}”. Which one?",
         reply_markup=results_keyboard(results),
     )
     return SL_PICK
@@ -291,17 +297,16 @@ async def sl_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         # Only reachable from a keyboard older than the current search.
         await query.edit_message_text(
             "That result is no longer on offer. Send the song name again.")
-        return SL_TITLE
+        return SL_QUERY
     song = results[index]
     state["songs"].append(song)
     state.pop("results", None)
-    state.pop("pending_title", None)
     count = len(state["songs"])
     await query.edit_message_text(
         f"✅ Added {count}. {song.title} by {song.artist}\n\n"
         "Send the next song name, /undo to drop this one, or /end to finish."
     )
-    return SL_TITLE
+    return SL_QUERY
 
 
 async def sl_search_again(update: Update,
@@ -313,7 +318,7 @@ async def sl_search_again(update: Update,
         "No problem. Send the song name again — adding the artist, or part of "
         "the title, usually helps."
     )
-    return SL_TITLE
+    return SL_QUERY
 
 
 async def sl_undo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -322,13 +327,13 @@ async def sl_undo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text(
             "Nothing to undo — the list is empty. Send a song name, or /cancel."
         )
-        return SL_TITLE
+        return SL_QUERY
     dropped = songs.pop()
     await update.message.reply_text(
         f"↩️ Removed “{dropped.title}” by {dropped.artist}. "
         f"{len(songs)} song(s) left.\n\nSend the next song name, or /end."
     )
-    return SL_TITLE
+    return SL_QUERY
 
 
 async def sl_end(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -579,14 +584,10 @@ def song_list_conversation() -> ConversationHandler:
     return ConversationHandler(
         entry_points=[CommandHandler("songlist", cmd_songlist)],
         states={
-            SL_TITLE: [
+            SL_QUERY: [
                 CommandHandler("end", sl_end),
                 CommandHandler("undo", sl_undo),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, sl_title),
-            ],
-            SL_ARTIST: [
-                CommandHandler("skip", sl_skip_artist),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, sl_artist),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, sl_query),
             ],
             SL_PICK: [
                 _cb_indexed(sl_pick, "pick"),
