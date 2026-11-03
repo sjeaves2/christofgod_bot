@@ -413,6 +413,35 @@ def test_the_two_categories_between_them_cover_every_refusal():
                 "_PIPELINE_STOPS or _VERB_REFUSALS")
 
 
+def test_replace_appt_writes_a_copy_back():
+    """_replace_appt cannot be tested through the router, so test it directly.
+
+    Every call site in appt_callback passes the SAME object that is already in
+    the list — `appt` comes from `next(a for a in appts ...)` — so the
+    assignment is a no-op there and a mutation gutting it survives the whole
+    dispatch snapshot. The function earns its place only for a caller holding
+    a COPY, which is the case pinned here.
+    """
+    original = _appt(status="pending")
+    appts = [original, _appt(id="OTHER")]
+    edited = copy.deepcopy(original)
+    edited["status"] = "declined"
+
+    ha._replace_appt(appts, edited)
+
+    assert appts[0]["status"] == "declined"
+    assert appts[0] is edited
+    assert appts[1]["id"] == "OTHER" and appts[1]["status"] == "pending"
+
+
+def test_replace_appt_leaves_an_unknown_id_alone():
+    """A record not in the list must not be appended or overwrite index 0."""
+    appts = [_appt(id="OTHER")]
+    ha._replace_appt(appts, _appt(id="GHOST", status="declined"))
+    assert len(appts) == 1
+    assert appts[0]["id"] == "OTHER" and appts[0]["status"] == "pending"
+
+
 def test_the_reschedule_pair_bypasses_the_terminal_guard():
     """The one ordering the code comments on, and the reason rs_* sits above
     the terminal guard: a reschedule acts on an ALREADY-confirmed appointment,
