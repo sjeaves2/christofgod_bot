@@ -399,7 +399,22 @@ async def board_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await edit_markdown(query, _edit_prompt(field, item))
         return BI_EDIT_VALUE
 
+    # Reached by a verb no branch claims — a keyboard older than a deploy that
+    # renamed one, or a bug. The log line has always been here; the reply has
+    # not, so the officer saw nothing at all while _answer_cb had already
+    # cleared the spinner, making the tap look accepted.
+    #
+    # Unlike appointments' equivalent this offers a way back rather than
+    # naming a command: the conversation is still alive and still in BI_MENU,
+    # so a button works and is one tap instead of typing. Same shape as the
+    # vanished-item branch above, for the same reason.
     logger.warning("Unrecognised board callback %r", query.data)
+    await edit_markdown(
+        query,
+        "⚠️ That button no longer works — it is probably from an older "
+        "message.",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
+            "← Back", callback_data=f"{CB_BOARD_PREFIX}list")]]))
     return BI_MENU
 
 
