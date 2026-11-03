@@ -36,6 +36,7 @@ admin should retype the title.
 
 from __future__ import annotations
 
+import html
 import logging
 from dataclasses import dataclass
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
@@ -86,16 +87,39 @@ class Song:
     def enumerated(self, index: int) -> str:
         """The exact shape asked for: index, title, "by Artist", link below.
 
-        Plain text, never Markdown. Song titles are full of parentheses,
-        ampersands and apostrophes — "Amazing Grace (My Chains Are Gone)" —
-        and this project has already lost messages to Markdown parse failures
-        once. Telegram turns a bare URL into a link by itself, so nothing is
-        gained by marking it up and a whole class of failure is avoided.
+        The title is bold, so the message must be sent with HTML parse_mode.
 
-        `url` has already been through clean_url(), so no tracking parameter
+        HTML AND NOT MARKDOWN, DELIBERATELY
+        -----------------------------------
+        This was plain text until 2026-11-03, because the project had lost
+        messages to Markdown parse failures and song titles are full of the
+        characters that cause them: "Amazing Grace (My Chains Are Gone)",
+        "10,000 Reasons (Bless the Lord) [Radio Version] [Live]". MarkdownV2
+        would need eighteen characters escaped, several of which appear in
+        almost every title.
+
+        HTML needs exactly three — & < > — which html.escape puts beyond
+        doubt. Parentheses, brackets, commas, dots and apostrophes are all
+        literal, so the titles that made Markdown dangerous are inert here.
+
+        quote=False on purpose: Telegram's HTML mode documents only those
+        three entities, so escaping apostrophes to &#x27; would be trusting
+        it to unescape something it never promised to. Titles like
+        "Ain't No Grave" are common enough for that to matter.
+
+        The URL is escaped too. Today clean_url leaves at most the single `i`
+        parameter, so there is never an & to escape — but that is a property
+        of KEPT_URL_PARAMS, not a law, and a second kept parameter would join
+        with & and silently break every link.
+
+        Telegram still turns the bare URL into a link by itself, so it is left
+        unmarked. `url` has been through clean_url(), so no tracking parameter
         reaches the recipient.
         """
-        return f"{index}. {self.title} by {self.artist}\n{self.url}"
+        title = html.escape(self.title, quote=False)
+        artist = html.escape(self.artist, quote=False)
+        url = html.escape(self.url, quote=False)
+        return f"{index}. <b>{title}</b> by {artist}\n{url}"
 
 
 #: The only query parameter kept on a track link. `i` is the TRACK id, not

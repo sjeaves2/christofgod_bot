@@ -305,7 +305,7 @@ class TestTheEnumeratedFormat:
 
     def test_index_title_artist_then_link_on_its_own_line(self):
         assert self.SONG.enumerated(1) == (
-            "1. Amazing Grace by CeCe Winans\n"
+            "1. <b>Amazing Grace</b> by CeCe Winans\n"
             "https://music.apple.com/us/album/amazing-grace/1?i=2")
 
     def test_the_index_is_the_one_given(self):
@@ -313,13 +313,15 @@ class TestTheEnumeratedFormat:
 
     def test_the_link_is_on_the_second_line(self):
         first, second = self.SONG.enumerated(3).split("\n")
-        assert first == "3. Amazing Grace by CeCe Winans"
+        assert first == "3. <b>Amazing Grace</b> by CeCe Winans"
         assert second == self.SONG.url
 
     def test_nothing_is_markdown_escaped(self):
-        """Sent as PLAIN text, so escaping would show literal backslashes to
-        the recipient. A title like "Amazing Grace (My Chains Are Gone)" must
-        appear exactly as Apple spells it."""
+        """Sent as HTML, so Markdown escaping would show literal backslashes
+        to the recipient. A title like "Amazing Grace (My Chains Are Gone)"
+        must appear exactly as Apple spells it — those parentheses are the
+        reason HTML was chosen over MarkdownV2, which would need them
+        escaped."""
         song = am.Song(title="Amazing Grace (My Chains Are Gone)",
                        artist="Chris Tomlin", album="x",
                        url="https://music.apple.com/1")
