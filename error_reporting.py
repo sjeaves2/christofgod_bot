@@ -111,9 +111,6 @@ PENDING_MAX_AGE = timedelta(hours=24)
 
 # Repeats of the same fingerprint stay silent for this long after an alert.
 ALERT_COOLDOWN = timedelta(minutes=30)
-# Transient network errors must occur this many times within this window
-# before they are considered worth waking anyone for.
-#
 # How long a transient condition must PERSIST before it is worth an alert.
 # Chosen against the production record: the worst nightly Telegram blip ran
 # 1m 59s and needed nobody, while the 2026-09-04 outage ran 87 minutes and

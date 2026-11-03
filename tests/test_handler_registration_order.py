@@ -2,9 +2,14 @@
 
 WHY THIS EXISTS
 
-main() is 320 lines, builds 15 ConversationHandlers and makes 47 add_handler
-calls. Splitting it up is the plan; this test is the safety net that makes the
-split readable as a pure move.
+main() was 320 lines of handler registration. This test was written as the
+safety net that made splitting it up readable as a pure move, which it did at
+v0.24.0; it now guards every later change to the wiring the same way.
+
+Deliberately no counts here. The snapshot file IS the count — regenerate it
+and read it. An earlier version of this docstring stated the number of
+conversations and add_handler calls, and all of them were wrong within two
+releases, because a number in prose has nothing keeping it honest.
 
 Registration order in bot.py is load-bearing and invisible. PTB runs only the
 FIRST matching handler per group, and group 0 ends with two handlers that match
