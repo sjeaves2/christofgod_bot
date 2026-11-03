@@ -486,18 +486,32 @@ async def sl_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def sl_stale_button(update: Update,
                           context: ContextTypes.DEFAULT_TYPE) -> int:
-    """A tap on a keyboard left over from before a restart.
+    """A tap the conversation itself declined.
 
-    Without this the tap would do nothing at all — no reply, no error — which
-    is the failure mode board_items_conversation documents. The list itself is
-    unrecoverable, so the only honest answer is to say so.
+    Reached only when song_list_conversation() does NOT handle the update,
+    which covers two cases that look identical from here:
+
+      * the bot restarted, so the list is gone (user_data does not survive);
+      * a list IS in progress and this is an OLDER keyboard, from a step the
+        conversation has already moved past.
+
+    The wording must be true in both. It deliberately does not say "the bot
+    restarted", which was wrong half the time, and does not tell an admin
+    mid-list to start again, which would throw away work.
+
+    Registered OUTSIDE the conversation, in bot.py, AFTER it. It cannot be an
+    entry point: with allow_reentry=True, PTB checks entry points BEFORE state
+    handlers, so a broad `^sl:` entry point hijacks every live tap. That was a
+    real production bug — the admin tapped a song and was told the bot had
+    restarted.
     """
     query = update.callback_query
     await query.answer()
     await query.edit_message_text(
-        "That song list is no longer in progress — the bot restarted since "
-        "those buttons were drawn, and a part-built list is not saved. "
-        "/songlist to start a new one."
+        "⚠️ Those buttons are out of date.\n\n"
+        "If you are still building a list, carry on in the most recent "
+        "message. Otherwise /songlist starts a new one — note that a "
+        "part-built list is not saved across a restart."
     )
     return ConversationHandler.END
 
@@ -526,21 +540,44 @@ def _cb_indexed(callback, verb: str) -> CallbackQueryHandler:
         callback, pattern=f"^{re.escape(CB_SONG_PREFIX + verb + ':')}\\d+$")
 
 
+def stale_button_handler() -> CallbackQueryHandler:
+    """Replies to any `sl:` tap the conversation did not handle.
+
+    MUST be registered AFTER song_list_conversation(). Before it, it would
+    shadow every live tap — the same symptom as the entry-point bug, by a
+    different route.
+    """
+    return CallbackQueryHandler(
+        sl_stale_button, pattern=f"^{re.escape(CB_SONG_PREFIX)}")
+
+
 def song_list_conversation() -> ConversationHandler:
     """/songlist — compile a worship list and send it to a registered user.
 
-    The bare `^sl:` CallbackQueryHandler is an ENTRY POINT so that a tap on a
-    keyboard that predates a restart gets an explanation rather than silence.
-    It is listed LAST among the entry points: the command is the normal way in,
-    and an entry point is only consulted when no conversation is active, so
-    this cannot shadow the state handlers below.
+    The ONLY entry point is the command. A CallbackQueryHandler must never be
+    added here: with allow_reentry=True, PTB checks entry points BEFORE the
+    state handlers —
+
+        if state is None or self.allow_reentry:
+            for entry_point in self.entry_points:     # first
+        ...
+        for candidate in self.states.get(state, []):  # only after
+
+    — so a broad `^sl:` entry point swallows every live tap. It did: the admin
+    tapped a song and was told the bot had restarted.
+
+    board_items_conversation does have a CallbackQueryHandler entry point and
+    is fine, but only because its entry-point callback IS its state callback,
+    so whichever branch wins the same function runs. That identity is the
+    load-bearing part of that pattern and it does not survive being copied to
+    a conversation with per-button handlers.
+
+    Dead taps are handled by stale_button_handler(), registered after this
+    conversation in bot.py, where the conversation declining an update lets it
+    fall through — which is what PTB's per-group ordering is for.
     """
     return ConversationHandler(
-        entry_points=[
-            CommandHandler("songlist", cmd_songlist),
-            CallbackQueryHandler(sl_stale_button,
-                                 pattern=f"^{re.escape(CB_SONG_PREFIX)}"),
-        ],
+        entry_points=[CommandHandler("songlist", cmd_songlist)],
         states={
             SL_TITLE: [
                 CommandHandler("end", sl_end),

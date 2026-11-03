@@ -9,7 +9,7 @@ when nobody is reachable.
 from __future__ import annotations
 
 import sys
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -18,6 +18,8 @@ from telegram.error import Forbidden
 from telegram.ext import ConversationHandler
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from common import now_tz
 
 import handlers.prayer as P  # noqa: E402
 import permissions  # noqa: E402
@@ -341,23 +343,23 @@ class TestAdminView:
     def test_members_markdown_is_escaped(self):
         """An unbalanced marker typed in distress must not stop delivery."""
         req = {"id": "PR-1", "requester_name": "A Member", "text": "pray *now",
-               "created": datetime.now().isoformat()}
+               "created": now_tz().isoformat()}
         assert "\\*now" in P.format_for_admin(req)
 
     def test_requester_name_is_escaped(self):
         req = {"id": "PR-1", "requester_name": "A_Member", "text": "hi",
-               "created": datetime.now().isoformat()}
+               "created": now_tz().isoformat()}
         assert "A\\_Member" in P.format_for_admin(req)
 
     def test_non_english_request_flags_the_language(self):
         """The bot does not translate prayer requests; say which language it is."""
         req = {"id": "PR-1", "requester_name": "X", "text": "Ore por mi",
-               "lang": "es", "created": datetime.now().isoformat()}
+               "lang": "es", "created": now_tz().isoformat()}
         assert "language: es" in P.format_for_admin(req)
 
     def test_english_request_does_not_mention_language(self):
         req = {"id": "PR-1", "requester_name": "X", "text": "Pray for me",
-               "lang": "en", "created": datetime.now().isoformat()}
+               "lang": "en", "created": now_tz().isoformat()}
         assert "language:" not in P.format_for_admin(req)
 
 

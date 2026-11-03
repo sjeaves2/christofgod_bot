@@ -10,6 +10,8 @@ import pytz
 from icalendar import Calendar
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from common import now_tz
 from ics_generator import (
     appointment_cancellation_to_ics,
     appointment_to_ics,
@@ -33,7 +35,7 @@ def _alarms_from_vevent(vevent) -> list:
 
 
 def _make_event(name: str, offset_days: int = 1, duration: int = 60, desc: str = "") -> dict:
-    svc = TZ.localize(datetime.now().replace(microsecond=0) + timedelta(days=offset_days))
+    svc = now_tz().replace(microsecond=0) + timedelta(days=offset_days)
     return {
         "name": name,
         "service_time": svc,

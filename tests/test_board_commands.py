@@ -21,13 +21,14 @@ over from the old one.
 from __future__ import annotations
 
 import sys
-from datetime import date, timedelta
+from datetime import timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import board_items as bi
+from common import now_tz
 import handlers.board as hb
 import permissions
 import telegram.ext as ext
@@ -37,6 +38,24 @@ import telegram.ext as ext
 # Fakes
 # ---------------------------------------------------------------------------
 
+
+
+def _today():
+    """Today in CHURCH time — the clock the bot itself uses.
+
+    NOT `_today()`. Every date decision in handlers/board.py goes through
+    `now_tz().date()` (America/New_York), while `_today()` follows the
+    machine's timezone. On a UTC runner those differ for the five hours
+    between 19:00 and midnight church time, and a fixture built on one clock
+    then contradicts an assertion made on the other.
+
+    That is not hypothetical: on 2026-11-03 at 01:12 UTC — 20:12 the previous
+    evening in church time — six tests in this suite failed on CI with
+    "assert '10 days' in ... in 11 days". The bot was right; the tests were
+    mixing clocks. Any CI run in that window had always been going to fail,
+    and none had happened to land there before.
+    """
+    return now_tz().date()
 
 def _ctx() -> MagicMock:
     ctx = MagicMock()
@@ -72,7 +91,7 @@ def _cb_update(data: str, chat_id: int = 111) -> MagicMock:
 
 def _item(**over):
     base = {"id": "AAA11111", "action": "Renew logo registration",
-            "due": (date.today() + timedelta(days=48)).isoformat(),
+            "due": (_today() + timedelta(days=48)).isoformat(),
             "notify_days": 60, "status": "pending", "description": "",
             "url": "", "history": []}
     base.update(over)
@@ -153,24 +172,24 @@ def balanced(text: str, marker: str) -> bool:
 
 class TestMarkdownSafety:
     def test_queue_escapes_an_action_full_of_markers(self):
-        text = hb.render_queue([_item(action=NASTY)], date.today())
+        text = hb.render_queue([_item(action=NASTY)], _today())
         assert r"Form\_990" in text
         assert balanced(text, "*"), text
 
     def test_detail_escapes_the_action(self):
-        text = hb.render_item(_item(action=NASTY), date.today())
+        text = hb.render_item(_item(action=NASTY), _today())
         assert r"Form\_990" in text
         assert balanced(text, "*"), text
 
     def test_detail_escapes_the_description(self):
-        text = hb.render_item(_item(description="EIN 12_3456789 *draft*"), date.today())
+        text = hb.render_item(_item(description="EIN 12_3456789 *draft*"), _today())
         assert r"12\_3456789" in text
         assert balanced(text, "*"), text
 
     def test_detail_escapes_a_non_tappable_url(self):
         """A url that fails is_button_url is shown as text, so it must be
         escaped — an underscore in it would reject the whole message."""
-        text = hb.render_item(_item(url="ask Pastor for the_link"), date.today())
+        text = hb.render_item(_item(url="ask Pastor for the_link"), _today())
         assert r"the\_link" in text
         assert balanced(text, "*"), text
 
@@ -178,7 +197,7 @@ class TestMarkdownSafety:
         """Legacy Markdown has no `**bold**`: it parses as an empty emphasis
         plus an unpaired marker, which rejects the message. Mutation check:
         writing `**OVERDUE**` in _when makes this fail."""
-        today = date.today()
+        today = _today()
         overdue = _item(due=(today - timedelta(days=3)).isoformat())
         due_today = _item(due=today.isoformat())
         for item in (overdue, due_today, _item()):
@@ -186,14 +205,14 @@ class TestMarkdownSafety:
                 assert "**" not in text, text
 
     def test_overdue_and_due_today_stay_balanced(self):
-        today = date.today()
+        today = _today()
         for offset in (-10, -1, 0, 1):
             item = _item(due=(today + timedelta(days=offset)).isoformat())
             text = hb.render_item(item, today)
             assert balanced(text, "*"), (offset, text)
 
     def test_an_item_with_no_due_date_renders_rather_than_crashing(self):
-        text = hb.render_item(_item(due="whenever"), date.today())
+        text = hb.render_item(_item(due="whenever"), _today())
         assert "no due date set" in text
 
 
@@ -204,7 +223,7 @@ class TestMarkdownSafety:
 
 class TestQueueView:
     def test_items_appear_in_due_date_order(self):
-        today = date.today()
+        today = _today()
         items = [
             _item(id="LATE", action="Later one", due=(today + timedelta(days=200)).isoformat()),
             _item(id="SOON", action="Sooner one", due=(today + timedelta(days=5)).isoformat()),
@@ -215,7 +234,7 @@ class TestQueueView:
     def test_keyboard_order_matches_the_list_order(self):
         """The numbers in the text and the numbers on the buttons must agree,
         or an officer taps the wrong obligation."""
-        today = date.today()
+        today = _today()
         items = [
             _item(id="LATE", action="Later one", due=(today + timedelta(days=200)).isoformat()),
             _item(id="SOON", action="Sooner one", due=(today + timedelta(days=5)).isoformat()),
@@ -225,7 +244,7 @@ class TestQueueView:
         assert "2." in labels[1] and "Later one" in labels[1]
 
     def test_completed_and_deleted_items_are_not_listed(self):
-        today = date.today()
+        today = _today()
         items = [_item(id="P", action="Pending one"),
                  _item(id="C", action="Done one", status="completed"),
                  _item(id="D", action="Gone one", status="deleted")]
@@ -234,13 +253,13 @@ class TestQueueView:
         assert "Done one" not in text and "Gone one" not in text
 
     def test_empty_queue_says_so_and_points_at_the_command(self):
-        text = hb.render_queue([], date.today())
+        text = hb.render_queue([], _today())
         assert "Nothing pending" in text and "/addboarditem" in text
 
     def test_urgency_matches_the_notification_thresholds(self):
         """The glyph and the bot's own schedule must not disagree — a 🟡 item
         the bot is already nagging daily about would be misleading."""
-        today = date.today()
+        today = _today()
         inside_daily = _item(due=(today + timedelta(days=10)).isoformat())
         inside_lead = _item(due=(today + timedelta(days=40)).isoformat())
         far_off = _item(due=(today + timedelta(days=200)).isoformat())
@@ -256,7 +275,7 @@ class TestQueueView:
     def test_long_actions_are_trimmed_for_button_labels(self):
         """Telegram caps button text; an untrimmed label fails the send."""
         label = button_labels(hb.queue_keyboard([_item(action="x" * 300)],
-                                                date.today()))[0]
+                                                _today()))[0]
         assert len(label) < 80
 
 
@@ -404,7 +423,7 @@ class TestCompletion:
         store = self._store(monkeypatch, items=[_item(status="completed")])
         ctx = _ctx()
         ctx.user_data["bi_next_due_id"] = "AAA11111"
-        upd = _update((date.today() - timedelta(days=5)).isoformat())
+        upd = _update((_today() - timedelta(days=5)).isoformat())
         await hb.bi_next_due(upd, ctx)
         assert bi.status_of(store.items[0]) == bi.STATUS_PENDING
         assert "every day" in sent_text(upd)
@@ -454,7 +473,7 @@ class TestDeletion:
     async def test_a_deleted_item_stops_notifying(self, monkeypatch):
         store = self._store(monkeypatch)
         await hb.board_callback(_cb_update("bi:del_yes:AAA11111"), _ctx())
-        assert bi.notice_due(store.items[0], date.today()) is False
+        assert bi.notice_due(store.items[0], _today()) is False
 
 
 # ---------------------------------------------------------------------------
@@ -499,7 +518,7 @@ class TestEditing:
         """Moving the date without clearing last_notified holds the first
         notice of the NEW schedule back by up to a week."""
         store = self._store(monkeypatch,
-                            items=[_item(last_notified=date.today().isoformat())])
+                            items=[_item(last_notified=_today().isoformat())])
         ctx = _ctx()
         ctx.user_data["bi_edit"] = {"id": "AAA11111", "field": "due"}
         await hb.bi_edit_value(_update("2031-01-05"), ctx)
@@ -507,7 +526,7 @@ class TestEditing:
 
     async def test_editing_the_lead_time_clears_the_send_marker(self, monkeypatch):
         store = self._store(monkeypatch,
-                            items=[_item(last_notified=date.today().isoformat())])
+                            items=[_item(last_notified=_today().isoformat())])
         ctx = _ctx()
         ctx.user_data["bi_edit"] = {"id": "AAA11111", "field": "notify_days"}
         await hb.bi_edit_value(_update("90"), ctx)
@@ -516,7 +535,7 @@ class TestEditing:
     async def test_editing_the_description_keeps_the_send_marker(self, monkeypatch):
         """Only the schedule's own inputs reset it. Fixing a typo in the notes
         must not re-trigger today's notice."""
-        today = date.today().isoformat()
+        today = _today().isoformat()
         store = self._store(monkeypatch, items=[_item(last_notified=today)])
         ctx = _ctx()
         ctx.user_data["bi_edit"] = {"id": "AAA11111", "field": "description"}
@@ -606,7 +625,7 @@ class TestAddBoardItem:
                          due=None, confirm="yes"):
         store = self._store(monkeypatch)
         ctx = _ctx()
-        due = due or (date.today() + timedelta(days=100)).isoformat()
+        due = due or (_today() + timedelta(days=100)).isoformat()
         assert await hb.cmd_addboarditem(_update(), ctx) == hb.AB_ACTION
         assert await hb.ab_action(_update("Renew tax exemption"), ctx) == hb.AB_DUE
         assert await hb.ab_due(_update(due), ctx) == hb.AB_NOTIFY
@@ -639,9 +658,9 @@ class TestAddBoardItem:
         """The acceptance test for the whole chain: what the conversation
         writes must be a record board_items can act on."""
         store, _, _ = await self._full_flow(
-            monkeypatch, due=(date.today() + timedelta(days=30)).isoformat())
+            monkeypatch, due=(_today() + timedelta(days=30)).isoformat())
         item = store.items[0]
-        assert bi.notice_due(item, date.today()) is True
+        assert bi.notice_due(item, _today()) is True
         assert item in bi.pending(store.items)
 
     async def test_skipping_the_lead_time_uses_the_default(self, monkeypatch):
@@ -674,7 +693,7 @@ class TestAddBoardItem:
     async def test_a_past_due_date_is_accepted_with_a_warning(self, monkeypatch):
         self._store(monkeypatch)
         ctx = _ctx()
-        upd = _update((date.today() - timedelta(days=2)).isoformat())
+        upd = _update((_today() - timedelta(days=2)).isoformat())
         assert await hb.ab_due(upd, ctx) == hb.AB_NOTIFY
         warnings = [c.args[0] for c in upd.message.reply_text.await_args_list]
         assert any("every day" in w for w in warnings), warnings
@@ -689,12 +708,12 @@ class TestAddBoardItem:
         days. Without this line that is indistinguishable from a broken bot."""
         store, _, _ = await self._full_flow(monkeypatch)
         starts = bi.due_date(store.items[0]) - timedelta(days=90)
-        assert hb._when_notices_start(store.items[0], date.today()) == (
+        assert hb._when_notices_start(store.items[0], _today()) == (
             f"Notices start on {starts.isoformat()}, 90 days before it is due.")
 
     async def test_it_says_today_when_notices_are_already_owed(self, monkeypatch):
-        item = _item(due=(date.today() + timedelta(days=5)).isoformat())
-        assert hb._when_notices_start(item, date.today()) == "Notices start today."
+        item = _item(due=(_today() + timedelta(days=5)).isoformat())
+        assert hb._when_notices_start(item, _today()) == "Notices start today."
 
 
 # ---------------------------------------------------------------------------
