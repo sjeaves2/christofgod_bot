@@ -146,7 +146,7 @@ from handlers.board import (
     purge_deleted_board_items,
 )
 from handlers.stats import cmd_stats
-from handlers.worship import song_list_conversation
+from handlers.worship import song_list_conversation, stale_button_handler
 
 logger = logging.getLogger(__name__)
 
@@ -670,6 +670,11 @@ def main() -> None:
         board_officer_callback, pattern=f"^{re.escape(CB_BOFF_PREFIX)}"))
 
     app.add_handler(song_list_conversation())
+    # AFTER the conversation, never before: this replies to any sl: tap the
+    # conversation declined — a keyboard from before a restart, or one from a
+    # step already moved past. Registered before it, it would shadow every
+    # live tap, which is exactly the bug it was once part of.
+    app.add_handler(stale_button_handler())
 
     # Catch-all free-text handler. MUST come after every ConversationHandler:
     # PTB runs only the first matching handler per group, and this one matches
