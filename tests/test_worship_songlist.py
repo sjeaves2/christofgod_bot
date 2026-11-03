@@ -18,8 +18,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import handlers.worship as w
 from apple_music import Song
+from telegram import CallbackQuery, Chat, Message, MessageEntity, Update, User
 from telegram.error import TelegramError
-from telegram.ext import ConversationHandler
+from telegram.ext import CallbackQueryHandler, ConversationHandler
 
 SONGS = [
     Song("Amazing Grace", "CeCe Winans", "The Hymns",
@@ -544,23 +545,34 @@ class TestTheWiring:
                 assert pattern.pattern.endswith(("$", "\\d+$")), (
                     f"state {state}: {pattern.pattern} is open-ended")
 
-    def test_a_stale_button_is_an_entry_point(self):
-        """user_data dies with a restart, so a keyboard on screen goes dead.
-        Without this entry point the tap does nothing at all."""
-        conv = self._conv()
-        entry = [h for h in conv.entry_points
-                 if getattr(h, "pattern", None) is not None]
-        assert len(entry) == 1
-        assert entry[0].callback is w.sl_stale_button
-        assert entry[0].pattern.match("sl:pick:0")
-        assert entry[0].pattern.match("sl:send")
+    def test_the_stale_button_handler_covers_every_verb(self):
+        """It is registered standalone, after the conversation, so its pattern
+        must be broad enough to catch any dead tap.
+
+        This replaces a test that asserted the handler was an ENTRY POINT —
+        which is precisely what caused the production bug, since PTB checks
+        entry points before state handlers when allow_reentry is true. The
+        test encoded the defect as the requirement, so it passed throughout.
+        """
+        handler = w.stale_button_handler()
+        assert handler.callback is w.sl_stale_button
+        for data in ("sl:pick:0", "sl:send", "sl:remove", "sl:rm:2",
+                     "sl:to:7", "sl:none", "sl:back", "sl:cancel"):
+            assert handler.pattern.match(data), data
 
     async def test_the_stale_button_explains_rather_than_failing_silently(self):
         update = _callback_update("sl:pick:0")
         assert await w.sl_stale_button(update, _context()) == \
             ConversationHandler.END
         said = _said(update.callback_query.edit_message_text)
-        assert "no longer in progress" in said and "/songlist" in said
+        assert "out of date" in said and "/songlist" in said
+        # Must NOT claim a restart: the conversation also declines a tap on an
+        # older keyboard while a list IS in progress, and saying "the bot
+        # restarted" was wrong half the time.
+        assert "restarted since" not in said
+        # Must not tell an admin mid-list to start again, which would throw
+        # away their work.
+        assert "carry on" in said
 
     def test_the_command_is_the_other_entry_point(self):
         commands = [h for h in self._conv().entry_points
@@ -599,3 +611,158 @@ class TestTheWiring:
                    for e in getattr(h, "entry_points", []) or []))
         catch_all_at = names.index("handle_counter_propose_message")
         assert songlist_at < catch_all_at
+
+
+class TestPtbPicksTheRightHandler:
+    """Which handler PTB ACTUALLY selects, driven through check_update.
+
+    THE GAP THIS FILLS, AND WHY IT COST A PRODUCTION BUG
+    ----------------------------------------------------
+    Every other test in this file calls a callback directly — w.sl_pick(...) —
+    so all 62 of them passed while the feature was broken for real users: the
+    admin tapped a song and was told the bot had restarted.
+
+    The cause was wiring, not logic. With allow_reentry=True, PTB checks
+    ENTRY POINTS BEFORE state handlers, even mid-conversation:
+
+        if state is None or self.allow_reentry:
+            for entry_point in self.entry_points:   # first
+        ...
+        for candidate in self.states.get(state, []):  # only after
+
+    A broad `^sl:` CallbackQueryHandler among the entry points therefore
+    hijacked every live tap. board_items_conversation has the same shape and
+    is safe only by accident — its entry-point callback IS its state callback,
+    so whichever wins, the same function runs. That identity was the load-
+    bearing part of the pattern, and it did not survive being copied.
+
+    The snapshot test pins the ORDER of registrations; it cannot say which
+    handler a given update reaches. Only check_update can.
+    """
+
+    USER = User(id=7, first_name="Bishop", is_bot=False)
+    CHAT = Chat(id=7, type="private")
+
+    @classmethod
+    def _tap(cls, data: str) -> Update:
+        message = Message(message_id=1, date=None, chat=cls.CHAT,
+                          from_user=cls.USER)
+        query = CallbackQuery(id="1", from_user=cls.USER, chat_instance="ci",
+                              data=data, message=message)
+        return Update(update_id=1, callback_query=query)
+
+    @classmethod
+    def _chosen(cls, conv, update):
+        """The name of the callback PTB would run, or None."""
+        result = conv.check_update(update)
+        if not result:
+            return None
+        for part in result:
+            name = getattr(getattr(part, "callback", None), "__name__", None)
+            if name:
+                return name
+        return "?"
+
+    @classmethod
+    def _mid_conversation(cls, state):
+        conv = w.song_list_conversation()
+        conv._conversations[(cls.CHAT.id, cls.USER.id)] = state
+        return conv
+
+    def test_a_live_pick_reaches_sl_pick(self):
+        """The reported bug: tapping a song said the bot had restarted."""
+        conv = self._mid_conversation(w.SL_PICK)
+        assert self._chosen(conv, self._tap("sl:pick:0")) == "sl_pick"
+
+    def test_a_live_search_again_reaches_sl_search_again(self):
+        conv = self._mid_conversation(w.SL_PICK)
+        assert self._chosen(conv, self._tap("sl:none")) == "sl_search_again"
+
+    def test_a_live_send_reaches_the_recipient_step(self):
+        conv = self._mid_conversation(w.SL_CONFIRM)
+        assert self._chosen(conv, self._tap("sl:send")) == "sl_choose_recipient"
+
+    def test_a_live_remove_menu_tap_reaches_the_remove_menu(self):
+        conv = self._mid_conversation(w.SL_CONFIRM)
+        assert self._chosen(conv, self._tap("sl:remove")) == "sl_remove_menu"
+
+    def test_a_live_removal_reaches_sl_remove(self):
+        conv = self._mid_conversation(w.SL_REMOVE)
+        assert self._chosen(conv, self._tap("sl:rm:1")) == "sl_remove"
+
+    def test_a_live_recipient_choice_reaches_sl_send(self):
+        conv = self._mid_conversation(w.SL_RECIPIENT)
+        assert self._chosen(conv, self._tap("sl:to:424242")) == "sl_send"
+
+    def test_a_live_cancel_reaches_sl_cancel(self):
+        conv = self._mid_conversation(w.SL_PICK)
+        assert self._chosen(conv, self._tap("sl:cancel")) == "sl_cancel"
+
+    def test_no_live_tap_is_ever_treated_as_stale(self):
+        """Swept across every state and button, because the bug hit ALL of
+        them at once and a per-button test could have missed a state."""
+        taps = {
+            w.SL_PICK: ["sl:pick:0", "sl:pick:4", "sl:none", "sl:cancel"],
+            w.SL_CONFIRM: ["sl:send", "sl:remove", "sl:cancel"],
+            w.SL_REMOVE: ["sl:rm:0", "sl:rm:10", "sl:back", "sl:cancel"],
+            w.SL_RECIPIENT: ["sl:to:1", "sl:to:999000001", "sl:cancel"],
+        }
+        for state, datas in taps.items():
+            conv = self._mid_conversation(state)
+            for data in datas:
+                chosen = self._chosen(conv, self._tap(data))
+                assert chosen is not None, f"state {state}: {data} unhandled"
+                assert chosen != "sl_stale_button", (
+                    f"state {state}: {data} was treated as a stale button")
+
+    def test_the_command_still_re_enters_mid_conversation(self):
+        """allow_reentry's actual purpose, which the fix must not cost: an
+        admin who types /songlist again gets a fresh list, not silence."""
+        conv = self._mid_conversation(w.SL_PICK)
+        message = Message(message_id=2, date=None, chat=self.CHAT,
+                          from_user=self.USER, text="/songlist",
+                          entities=[MessageEntity(type="bot_command", offset=0,
+                                                  length=9)])
+        # CommandHandler resolves "/cmd@botname" via message.get_bot(), which
+        # raises without one. Nothing here talks to Telegram.
+        bot = MagicMock()
+        bot.username = "christofgod_bot"
+        message.set_bot(bot)
+        update = Update(update_id=2, message=message)
+        assert self._chosen(conv, update) == "cmd_songlist"
+
+    def test_a_tap_with_no_conversation_is_not_handled_by_the_conversation(self):
+        """The stale-button case now belongs OUTSIDE the conversation, so the
+        conversation itself must decline it and let the standalone handler
+        registered after it in bot.py reply."""
+        conv = w.song_list_conversation()      # nothing in progress
+        assert self._chosen(conv, self._tap("sl:pick:0")) is None
+
+    def test_the_stale_button_handler_is_registered_after_the_conversation(self):
+        """It must come AFTER, or it would shadow every live tap again — in a
+        different way, but with the same symptom."""
+        from tests.test_board_wiring import _handlers
+        group0 = [h for group, h in _handlers() if group == 0]
+
+        def index_of(predicate):
+            return next(i for i, h in enumerate(group0) if predicate(h))
+
+        conv_at = index_of(lambda h: any(
+            getattr(getattr(e, "callback", None), "__name__", "") == "cmd_songlist"
+            for e in getattr(h, "entry_points", []) or []))
+        stale_at = index_of(lambda h: getattr(
+            getattr(h, "callback", None), "__name__", "") == "sl_stale_button")
+        assert conv_at < stale_at, (
+            "the stale-button handler must be registered after the "
+            "conversation, or it hijacks live taps")
+
+    def test_the_conversation_has_no_callback_entry_point(self):
+        """The direct guard on the regression. A CallbackQueryHandler among
+        the entry points is checked BEFORE the state handlers whenever
+        allow_reentry is true, which is what caused the bug."""
+        conv = w.song_list_conversation()
+        callback_entries = [h for h in conv.entry_points
+                            if isinstance(h, CallbackQueryHandler)]
+        assert callback_entries == [], (
+            "a CallbackQueryHandler entry point hijacks live taps while "
+            "allow_reentry is True")
