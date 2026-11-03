@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import handlers.worship as w
 from apple_music import Song
 from telegram import CallbackQuery, Chat, Message, MessageEntity, Update, User
+from telegram.constants import ParseMode
 from telegram.error import TelegramError
 from telegram.ext import CallbackQueryHandler, ConversationHandler
 
@@ -73,19 +74,21 @@ class TestTheRecipientFormat:
 
     def test_one_song(self):
         assert w.render_list(SONGS[:1]) == (
-            "1. Amazing Grace by CeCe Winans\n"
+            "1. <b>Amazing Grace</b> by CeCe Winans\n"
             "https://music.apple.com/us/album/amazing-grace/1?i=11")
 
     def test_indices_count_from_one(self):
         rendered = w.render_list(SONGS)
         assert rendered.startswith("1. ")
-        assert "\n2. Great Is Thy Faithfulness by Michael W. Smith\n" in rendered
-        assert "\n3. Amazing Grace (My Chains Are Gone) by Chris Tomlin\n" in rendered
+        assert ("\n2. <b>Great Is Thy Faithfulness</b> by Michael W. Smith\n"
+                in rendered)
+        assert ("\n3. <b>Amazing Grace (My Chains Are Gone)</b> by Chris Tomlin\n"
+                in rendered)
 
     def test_every_link_sits_on_the_line_below_its_title(self):
         lines = w.render_list(SONGS).split("\n")
         for n, song in enumerate(SONGS, 1):
-            i = lines.index(f"{n}. {song.title} by {song.artist}")
+            i = lines.index(f"{n}. <b>{song.title}</b> by {song.artist}")
             assert lines[i + 1] == song.url
 
     def test_entries_are_separated_by_a_blank_line(self):
@@ -97,14 +100,122 @@ class TestTheRecipientFormat:
                 for i in range(1, 12)]
         rendered = w.render_list(many)
         for n in range(1, 12):
-            assert f"{n}. Song {n} by Artist {n}" in rendered
+            assert f"{n}. <b>Song {n}</b> by Artist {n}" in rendered
 
-    def test_nothing_is_escaped_or_marked_up(self):
-        """Sent as plain text, so a backslash or asterisk would be literal."""
+    def test_only_the_title_is_marked_up(self):
+        """HTML mode, so no Markdown escaping and no Markdown syntax: a
+        backslash or asterisk would be literal, and the characters that made
+        Markdown dangerous here are inert."""
         rendered = w.render_list(SONGS)
         assert "\\" not in rendered
         assert "*" not in rendered and "_" not in rendered
-        assert "Amazing Grace (My Chains Are Gone)" in rendered
+        # Parentheses are literal in HTML mode; MarkdownV2 would need them
+        # escaped, and this title is why that mattered.
+        assert "<b>Amazing Grace (My Chains Are Gone)</b>" in rendered
+        # Nothing else is tagged: the link is left bare for Telegram to pick up.
+        assert rendered.count("<") == rendered.count("<b>") + rendered.count("</b>")
+
+
+class TestHtmlEscaping:
+    """A title Telegram cannot parse rejects the whole message.
+
+    The failure is not cosmetic: send_message raises BadRequest and the list
+    is lost at the last step, after the admin has typed eleven songs.
+    """
+
+    def test_an_ampersand_in_a_title_is_escaped(self):
+        """"Peace & Love" is a real shape. Bare & is invalid HTML entity
+        syntax and Telegram rejects the message."""
+        song = Song("Peace & Love", "Hillsong", "",
+                    "https://music.apple.com/us/album/x/1?i=11")
+        rendered = w.render_list([song])
+        assert "<b>Peace &amp; Love</b>" in rendered
+        assert "& Love" not in rendered
+
+    def test_angle_brackets_in_a_title_are_escaped(self):
+        """Unescaped < opens a tag Telegram does not recognise."""
+        song = Song("<Awake>", "Hillsong", "",
+                    "https://music.apple.com/us/album/x/1?i=11")
+        rendered = w.render_list([song])
+        assert "&lt;Awake&gt;" in rendered
+
+    def test_an_ampersand_in_an_artist_is_escaped(self):
+        """"Bethel Music & Jenn Johnson" is the real artist string the API
+        returns for Goodness of God — this is not a contrived case."""
+        song = Song("Goodness of God", "Bethel Music & Jenn Johnson", "",
+                    "https://music.apple.com/us/album/x/1?i=11")
+        assert "Bethel Music &amp; Jenn Johnson" in w.render_list([song])
+
+    def test_apostrophes_are_left_alone(self):
+        """quote=False: Telegram documents only &lt; &gt; &amp;, so escaping
+        an apostrophe to &#x27; trusts it to unescape something it never
+        promised. "Ain't No Grave" would then read literally."""
+        song = Song("Ain't No Grave", "Bethel Music", "",
+                    "https://music.apple.com/us/album/x/1?i=11")
+        rendered = w.render_list([song])
+        assert "Ain't No Grave" in rendered
+        assert "&#x27;" not in rendered and "&quot;" not in rendered
+
+    def test_markdown_characters_need_no_escaping(self):
+        """The whole reason HTML was chosen over MarkdownV2."""
+        song = Song("10,000 Reasons (Bless the Lord) [Live]", "Matt Redman",
+                    "", "https://music.apple.com/us/album/x/1?i=11")
+        rendered = w.render_list([song])
+        assert "<b>10,000 Reasons (Bless the Lord) [Live]</b>" in rendered
+        assert "\\" not in rendered
+
+    def test_the_url_is_escaped_too(self):
+        """clean_url leaves at most one parameter today, so there is no & to
+        escape — but that is a property of KEPT_URL_PARAMS, not a law. A
+        second kept parameter would join with & and break every link."""
+        song = Song("X", "Y", "",
+                    "https://music.apple.com/us/album/x/1?i=11&uo=4")
+        assert "i=11&amp;uo=4" in w.render_list([song])
+
+    def test_a_title_cannot_close_the_bold_tag_early(self):
+        """The injection case: a title containing </b> would unbalance the
+        markup for everything after it."""
+        song = Song("Grace</b> and", "Artist", "",
+                    "https://music.apple.com/us/album/x/1?i=11")
+        rendered = w.render_list([song])
+        assert rendered.count("<b>") == rendered.count("</b>") == 1
+        assert "&lt;/b&gt;" in rendered
+
+
+class TestSplittingNeverBreaksTheMarkup:
+    """Every chunk must be valid HTML on its own — each is its own message.
+
+    An unbalanced <b> makes Telegram reject that message outright, so a long
+    list would deliver its first chunk and fail on the rest. The split is on
+    the blank line BETWEEN entries, which is what makes this safe; this
+    asserts the property rather than trusting the reasoning.
+    """
+
+    @staticmethod
+    def _many(count=80):
+        return [Song(f"Song {i}", f"Artist {i}", "",
+                     f"https://music.apple.com/us/album/song-{i}/{i}?i={i}")
+                for i in range(count)]
+
+    def test_every_chunk_has_balanced_bold_tags(self):
+        chunks = w.split_for_telegram(w.render_list(self._many()))
+        assert len(chunks) > 1, "needs a list long enough to actually split"
+        for chunk in chunks:
+            assert chunk.count("<b>") == chunk.count("</b>")
+
+    def test_no_chunk_starts_or_ends_mid_tag(self):
+        for chunk in w.split_for_telegram(w.render_list(self._many())):
+            assert not chunk.startswith("</b>")
+            assert not chunk.endswith("<b>")
+            assert "<b" not in chunk.split("<b>")[-1]
+
+    def test_a_single_entry_longer_than_the_limit_stays_whole(self):
+        """The one case where the separator cannot help. Splitting inside an
+        entry would cut the markup, so it must be left over-long instead."""
+        song = Song("T" * 500, "A" * 500, "", "https://music.apple.com/1?i=1")
+        chunks = w.split_for_telegram(w.render_list([song]), limit=100)
+        assert len(chunks) == 1
+        assert chunks[0].count("<b>") == chunks[0].count("</b>") == 1
 
 
 class TestSplittingLongLists:
@@ -391,7 +502,7 @@ class TestConfirming:
         ctx = _context(songs=list(SONGS))
         assert await w.sl_end(update, ctx) == w.SL_CONFIRM
         said = _said(update.message.reply_text)
-        assert "1. Amazing Grace by CeCe Winans" in said
+        assert "1. <b>Amazing Grace</b> by CeCe Winans" in said
 
     async def test_the_confirmation_shows_exactly_what_will_be_sent(self):
         """A preview formatted differently from the real message confirms
@@ -420,8 +531,8 @@ class TestConfirming:
         ctx = _context(songs=list(SONGS))
         await w.sl_remove(update, ctx)
         shown = _said(update.callback_query.message.reply_text)
-        assert "1. Great Is Thy Faithfulness" in shown
-        assert "2. Amazing Grace (My Chains Are Gone)" in shown
+        assert "1. <b>Great Is Thy Faithfulness</b>" in shown
+        assert "2. <b>Amazing Grace (My Chains Are Gone)</b>" in shown
         assert "3. " not in shown
 
     async def test_removing_the_last_remaining_song_ends_the_conversation(self):
@@ -456,12 +567,36 @@ class TestSending:
         assert ctx.bot.send_message.await_args[0][0] == 99
         assert w.render_list(SONGS) in ctx.bot.send_message.await_args[0][1]
 
-    async def test_the_message_is_plain_text(self):
-        """This project has lost messages to Markdown parse failures. Song
-        titles carry parentheses and ampersands, and Telegram links a bare URL
-        on its own."""
+    async def test_the_message_is_sent_as_html(self):
+        """Bold titles need parse_mode, and the renderer emits <b>.
+
+        This REPLACED a test asserting no parse_mode at all. That was not a
+        mistake at the time: the project had lost messages to Markdown parse
+        failures, and MarkdownV2 needs eighteen characters escaped, most of
+        which appear in song titles. HTML needs three, and html.escape puts
+        them beyond doubt. Sending the <b> tags without parse_mode would show
+        the recipient the raw markup.
+        """
         _result, _update, ctx, _ = await self._send()
-        assert "parse_mode" not in ctx.bot.send_message.await_args.kwargs
+        assert ctx.bot.send_message.await_args.kwargs["parse_mode"] \
+            == ParseMode.HTML
+        assert "<b>" in ctx.bot.send_message.await_args[0][1]
+
+    async def test_the_preview_and_the_real_send_agree_on_parse_mode(self):
+        """_show_confirmation promises the admin sees exactly what is sent.
+
+        If the two disagree, one of them lies: a plain-text preview shows the
+        admin raw <b> tags, and a plain-text send shows them to the recipient.
+        Checked together because neither test alone can catch a mismatch.
+        """
+        update = _message_update("/end")
+        ctx = _context(songs=list(SONGS))
+        await w.sl_end(update, ctx)
+        preview_mode = update.message.reply_text.await_args.kwargs["parse_mode"]
+
+        _result, _update, send_ctx, _ = await self._send()
+        send_mode = send_ctx.bot.send_message.await_args.kwargs["parse_mode"]
+        assert preview_mode == send_mode == ParseMode.HTML
 
     async def test_link_previews_are_suppressed(self):
         """Eleven links would otherwise draw eleven previews."""

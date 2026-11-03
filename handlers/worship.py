@@ -68,6 +68,7 @@ from telegram import (
     LinkPreviewOptions,
     Update,
 )
+from telegram.constants import ParseMode
 from telegram.error import TelegramError
 from telegram.ext import (
     CallbackQueryHandler,
@@ -97,10 +98,15 @@ STATE_KEY = "songlist"
 NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
 
 # Telegram rejects a message over 4096 characters. A long entry runs to about
-# 165 (title, artist, a music.apple.com link, a blank line), so twenty-five
-# songs would exceed it. The list is split instead of capped: refusing a
-# twenty-sixth song would be an arbitrary limit, while a rejected send would
-# lose the whole list at the last step.
+# 170 (title, artist, a music.apple.com link, the <b> tags, a blank line), so
+# twenty-four songs would exceed it. The list is split instead of capped:
+# refusing a twenty-fifth song would be an arbitrary limit, while a rejected
+# send would lose the whole list at the last step.
+#
+# The margin is larger than it looks: Telegram counts the message AFTER
+# parsing, so the <b></b> tags do not count against 4096 while they do count
+# here. Measuring the markup is the conservative direction, so it is left as
+# it is rather than made clever.
 MAX_MESSAGE_CHARS = 3900
 
 
@@ -115,9 +121,14 @@ def _songs(context: ContextTypes.DEFAULT_TYPE) -> list[Song]:
 def render_list(songs: list[Song]) -> str:
     """The list as the recipient sees it, exactly as specified.
 
+    HTML, not plain text — Song.enumerated bolds the title. Every caller must
+    send with parse_mode=ParseMode.HTML.
+
     One blank line between entries, because without it the link of one song
     and the title of the next form a solid block that is hard to read on a
-    phone.
+    phone. That separator is also what keeps the markup safe under splitting:
+    split_for_telegram breaks BETWEEN entries, so a <b> can never be parted
+    from its </b>.
     """
     return "\n\n".join(song.enumerated(n) for n, song in enumerate(songs, 1))
 
@@ -355,6 +366,12 @@ async def _show_confirmation(send, songs: list[Song]) -> None:
     Deliberately the same renderer: a confirmation that formats the list
     differently from the real message confirms something the recipient will
     never see.
+
+    Which is why parse_mode here must stay in step with sl_send's. Rendering
+    the preview as plain text would show the admin the raw <b> tags and have
+    them approve something nobody receives; rendering it as HTML while the
+    real send is plain would do the reverse. The two are checked together in
+    tests/test_worship_songlist.py.
     """
     body = render_list(songs)
     header = f"📋 {len(songs)} song(s) — this is exactly what will be sent:\n\n"
@@ -364,6 +381,7 @@ async def _show_confirmation(send, songs: list[Song]) -> None:
         is_last = n == len(chunks) - 1
         await send(text,
                    reply_markup=confirm_keyboard(len(songs)) if is_last else None,
+                   parse_mode=ParseMode.HTML,
                    link_preview_options=NO_PREVIEW)
 
 
@@ -450,10 +468,11 @@ async def sl_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     for n, chunk in enumerate(chunks):
         text = header + chunk if n == 0 else chunk
         try:
-            # Plain text on purpose — no parse_mode. Song titles are full of
-            # parentheses and ampersands, and Telegram links a bare URL by
-            # itself, so Markdown would add a failure mode and nothing else.
+            # HTML, not Markdown: Song.enumerated bolds the title and escapes
+            # the three characters HTML mode cares about. Markdown would need
+            # eighteen escaped, most of them common in song titles.
             await context.bot.send_message(chat_id, text,
+                                           parse_mode=ParseMode.HTML,
                                            link_preview_options=NO_PREVIEW)
             sent += 1
         except TelegramError as exc:
