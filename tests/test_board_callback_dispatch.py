@@ -286,25 +286,52 @@ def test_generating_it_twice_gives_the_same_answer():
 def test_every_verb_in_the_router_is_covered():
     """A pin that misses a verb is worse than no pin: it reads as complete.
 
-    The verbs are read out of the SOURCE, so adding a branch without adding a
-    case here fails rather than silently narrowing the net.
+    The verbs are read from the dispatch TABLES, which are authoritative.
+    Until board_callback became tables this had to regex `if verb == "..."`
+    out of the source; the tables are the better source and the reason the
+    regex version is gone.
     """
-    source = (Path(__file__).parent.parent / "handlers" / "board.py").read_text()
-    body = source[source.index("async def board_callback"):]
-    body = body[:body.index("\nasync def ", 1)] if "\nasync def " in body[1:] else body
-    in_source = set(re.findall(r'verb == "([a-z_]+)"', body))
-    in_source |= {m for m in re.findall(r'verb\.startswith\("([a-z_]+)"\)', body)}
+    in_tables = set(hb._QUEUE_VERBS) | set(hb._ITEM_VERBS)
     covered = {v.partition(":")[0] for v, _ in _cases()}
-    covered |= {"ef_" for v, _ in _cases() if v.startswith("ef_")}
-    missing = {v for v in in_source if v not in covered}
+    missing = in_tables - covered
     assert not missing, f"board_callback verbs with no case pinned: {missing}"
 
 
-def test_the_scan_that_guards_coverage_actually_finds_verbs():
-    """Guards the guard: a regex that matches nothing would pass forever."""
-    source = (Path(__file__).parent.parent / "handlers" / "board.py").read_text()
-    found = set(re.findall(r'verb == "([a-z_]+)"', source))
-    assert {"close", "list", "done_yes", "del_yes"} <= found, found
+def test_the_tables_are_populated():
+    """Guards the guard: two empty dicts would make the check above vacuous."""
+    assert {"close", "list", "completed"} <= set(hb._QUEUE_VERBS)
+    assert {"show", "done", "done_yes", "reopen", "del", "del_yes",
+            "edit"} <= set(hb._ITEM_VERBS)
+
+
+def test_the_two_tables_are_disjoint():
+    """A verb in both would be answered by the queue table and the item one
+    would never run — silently, since the queue table is consulted first."""
+    overlap = set(hb._QUEUE_VERBS) & set(hb._ITEM_VERBS)
+    assert not overlap, f"verb in both tables: {overlap}"
+
+
+def test_every_editable_field_has_a_handler():
+    """EDIT_FIELDS drives the buttons AND the table. A field with a button but
+    no handler falls back to the item view, which looks like a dead button."""
+    for field, _label in hb.EDIT_FIELDS:
+        assert f"{hb.EDIT_FIELD_PREFIX}{field}" in hb._ITEM_VERBS, field
+
+
+def test_no_queue_verb_needs_an_item():
+    """The split is only sound if the queue handlers never touch an item.
+
+    Their signature says so — they take (tap) and not (tap, item) — and this
+    asserts it, because the signature is what keeps the item-is-None guard in
+    one place instead of eleven.
+    """
+    import inspect
+    for verb, handler in hb._QUEUE_VERBS.items():
+        params = list(inspect.signature(handler).parameters)
+        assert params == ["tap"], f"{verb}: {params}"
+    for verb, handler in hb._ITEM_VERBS.items():
+        params = list(inspect.signature(handler).parameters)
+        assert params == ["tap", "item"], f"{verb}: {params}"
 
 
 def test_side_effecting_verbs_are_distinguishable_from_their_prompts():

@@ -25,6 +25,7 @@ from __future__ import annotations
 import io
 import logging
 import re
+from dataclasses import dataclass
 from datetime import date, time, timedelta
 from typing import Any
 
@@ -91,6 +92,12 @@ EDIT_FIELDS: list[tuple[str, str]] = [
     ("description", "Details"),
     ("url", "Link"),
 ]
+#: Callback verbs for the edit screen are EDIT_FIELD_PREFIX + the field name.
+#: Named because three places depend on the same spelling: the buttons _bi_edit
+#: builds, the keys registered in _ITEM_VERBS, and the fallback for a field
+#: that is no longer editable.
+EDIT_FIELD_PREFIX = "ef_"
+
 _EDIT_LABELS = dict(EDIT_FIELDS)
 
 MAX_NOTIFY_DAYS = 3650   # ten years; beyond this it is a typo, not a lead time
@@ -268,12 +275,200 @@ async def _show_item(query, item: dict[str, Any], today: date) -> int:
     return BI_MENU
 
 
+@dataclass(frozen=True)
+class _Tap:
+    """One `bi:` button press, with everything a verb handler can need.
+
+    Assembled once by board_callback so the handlers below take no arguments
+    they do not use and share no mutable router state. `items` is the live
+    list — handlers that write call storage.save_board_items(tap.items), which
+    is why it is the whole list and not just the one item.
+    """
+
+    query: Any
+    context: ContextTypes.DEFAULT_TYPE
+    items: list[dict]
+    today: date
+    item_id: str
+    uid: int
+    uname: str
+    dname: str
+
+
+def _back_to_list(label: str = "← Back") -> InlineKeyboardMarkup:
+    """The one-button "give me a way out" keyboard, used by every dead end."""
+    return InlineKeyboardMarkup([[InlineKeyboardButton(
+        label, callback_data=f"{CB_BOARD_PREFIX}list")]])
+
+
+# ---------------------------------------------------------------------------
+# Queue verbs — reached WITHOUT an item, so they carry no id
+# ---------------------------------------------------------------------------
+
+async def _bi_close(tap: _Tap) -> int:
+    await edit_markdown(tap.query, "🗂 Closed. /boarditems to reopen.")
+    return ConversationHandler.END
+
+
+async def _bi_list(tap: _Tap) -> int:
+    return await _show_queue(tap.query, tap.items, tap.today)
+
+
+async def _bi_completed(tap: _Tap) -> int:
+    done = bi.completed(tap.items)
+    if not done:
+        await edit_markdown(tap.query, "No completed items yet.",
+                            reply_markup=_back_to_list())
+        return BI_MENU
+    rows = [[InlineKeyboardButton(
+        f"✅ {_short(i.get('action'))}",
+        callback_data=f"{CB_BOARD_PREFIX}show:{i.get('id')}")]
+        for i in done]
+    rows.append([InlineKeyboardButton(
+        "← Back", callback_data=f"{CB_BOARD_PREFIX}list")])
+    await edit_markdown(
+        tap.query,
+        "📋 *Completed items*\n\nReopen one with a new due date rather than "
+        "adding a fresh item — it keeps the renewal history.",
+        reply_markup=InlineKeyboardMarkup(rows))
+    return BI_MENU
+
+
+# ---------------------------------------------------------------------------
+# Item verbs — reached only AFTER the item has been found
+# ---------------------------------------------------------------------------
+
+async def _bi_show(tap: _Tap, item: dict) -> int:
+    return await _show_item(tap.query, item, tap.today)
+
+
+async def _bi_done(tap: _Tap, item: dict) -> int:
+    await edit_markdown(
+        tap.query,
+        f"Mark *{md(item.get('action'))}* as completed?",
+        reply_markup=_confirm_keyboard("done_yes", tap.item_id,
+                                       "✅ Yes, it is done"))
+    return BI_MENU
+
+
+async def _bi_done_yes(tap: _Tap, item: dict) -> int:
+    bi.complete(item, tap.today, tap.dname)
+    await storage.save_board_items(tap.items)
+    activity.log_command("boarditems", tap.uid, tap.uname, tap.dname,
+                         details=f"completed {tap.item_id}")
+    tap.context.user_data["bi_next_due_id"] = tap.item_id
+    await edit_markdown(
+        tap.query,
+        f"✅ *{md(item.get('action'))}* marked completed.\n\n"
+        "Most of these come round again. Send the NEXT due date "
+        "(YYYY-MM-DD) to queue it up now, or /skip to leave it retired — "
+        "you can reopen it any time from *Completed items*.")
+    return BI_NEXT_DUE
+
+
+async def _bi_reopen(tap: _Tap, item: dict) -> int:
+    tap.context.user_data["bi_next_due_id"] = tap.item_id
+    await edit_markdown(
+        tap.query,
+        f"♻️ Reopening *{md(item.get('action'))}*.\n\n"
+        "Send the new due date (YYYY-MM-DD), or /skip to leave it retired:")
+    return BI_NEXT_DUE
+
+
+async def _bi_del(tap: _Tap, item: dict) -> int:
+    await edit_markdown(
+        tap.query,
+        f"Delete *{md(item.get('action'))}*?\n\n"
+        f"It stops appearing and stops notifying. Recoverable by hand for "
+        f"{bi.DELETED_PURGE_AFTER_DAYS} days, then gone.\n\n"
+        "If the obligation was *met*, use ✅ Mark completed instead — that "
+        "keeps the renewal history.",
+        reply_markup=_confirm_keyboard("del_yes", tap.item_id,
+                                       "🗑 Yes, delete it"))
+    return BI_MENU
+
+
+async def _bi_del_yes(tap: _Tap, item: dict) -> int:
+    bi.soft_delete(item, tap.today, tap.dname)
+    await storage.save_board_items(tap.items)
+    activity.log_command("boarditems", tap.uid, tap.uname, tap.dname,
+                         details=f"deleted {tap.item_id}")
+    await edit_markdown(
+        tap.query, f"🗑 Deleted *{md(item.get('action'))}*.",
+        reply_markup=_back_to_list("← Back to the list"))
+    return BI_MENU
+
+
+async def _bi_edit(tap: _Tap, item: dict) -> int:
+    rows = [[InlineKeyboardButton(
+        label, callback_data=f"{CB_BOARD_PREFIX}{EDIT_FIELD_PREFIX}{field}:{tap.item_id}")]
+        for field, label in EDIT_FIELDS]
+    rows.append([InlineKeyboardButton(
+        "← Back", callback_data=f"{CB_BOARD_PREFIX}show:{tap.item_id}")])
+    await edit_markdown(tap.query,
+                        f"✏️ Editing *{md(item.get('action'))}*\n\n"
+                        "Which field?",
+                        reply_markup=InlineKeyboardMarkup(rows))
+    return BI_MENU
+
+
+def _edit_field_handler(field: str):
+    """The handler for one `ef_<field>` button.
+
+    One per editable field, built at import from EDIT_FIELDS, so the table
+    lists the legal fields instead of a handler re-deriving them from the verb
+    at every tap. The old code sliced `verb[3:]` and then checked the result
+    against _EDIT_LABELS; registering each field makes the check structural —
+    an illegal field simply is not in the table.
+    """
+    async def handler(tap: _Tap, item: dict) -> int:
+        tap.context.user_data["bi_edit"] = {"id": tap.item_id, "field": field}
+        await edit_markdown(tap.query, _edit_prompt(field, item))
+        return BI_EDIT_VALUE
+
+    handler.__name__ = f"_bi_ef_{field}"
+    return handler
+
+
+#: Verbs answered before the item is looked up. These carry no id, which is
+#: why they cannot live in the table below: `bi:list` has nothing to find.
+_QUEUE_VERBS = {
+    "close": _bi_close,
+    "list": _bi_list,
+    "completed": _bi_completed,
+}
+
+#: Verbs that need the item. Separate table AND a different signature —
+#: (tap, item) rather than (tap) — so the item-is-None guard lives in exactly
+#: one place and no handler can be reached without an item. That is the whole
+#: reason this is two tables instead of one: flattening them would mean either
+#: re-checking for None in eleven handlers or passing an Optional and hoping.
+_ITEM_VERBS = {
+    "show": _bi_show,
+    "done": _bi_done,
+    "done_yes": _bi_done_yes,
+    "reopen": _bi_reopen,
+    "del": _bi_del,
+    "del_yes": _bi_del_yes,
+    "edit": _bi_edit,
+    **{f"{EDIT_FIELD_PREFIX}{field}": _edit_field_handler(field)
+       for field, _ in EDIT_FIELDS},
+}
+
+
 async def board_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Router for every button in the /boarditems flow.
 
     Re-checks the officer flag. The entry point is gated, but a button from a
     session days ago is still tappable, and the board can change between the
     two — the flag is a runtime value precisely so it can.
+
+    Two tables, in the order the two phases run: the queue verbs need no item,
+    then the item is looked up once, then the verbs that need it. See
+    _ITEM_VERBS on why that is not one table.
+
+    tests/board_callback_dispatch.snapshot pins what every verb does. It did
+    not change when this became tables, which is the claim that matters.
     """
     query = update.callback_query
     await _answer_cb(query)
@@ -282,37 +477,15 @@ async def board_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return ConversationHandler.END
 
     uid, uname, dname = user_info(update)
-    raw = query.data[len(CB_BOARD_PREFIX):]
-    verb, _, item_id = raw.partition(":")
+    verb, _, item_id = query.data[len(CB_BOARD_PREFIX):].partition(":")
     items = await storage.get_board_items()
-    today = now_tz().date()
+    tap = _Tap(query=query, context=context, items=items,
+               today=now_tz().date(), item_id=item_id,
+               uid=uid, uname=uname, dname=dname)
 
-    if verb == "close":
-        await edit_markdown(query, "🗂 Closed. /boarditems to reopen.")
-        return ConversationHandler.END
-
-    if verb == "list":
-        return await _show_queue(query, items, today)
-
-    if verb == "completed":
-        done = bi.completed(items)
-        if not done:
-            await edit_markdown(
-                query, "No completed items yet.",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
-                    "← Back", callback_data=f"{CB_BOARD_PREFIX}list")]]))
-            return BI_MENU
-        rows = [[InlineKeyboardButton(f"✅ {_short(i.get('action'))}",
-                                      callback_data=f"{CB_BOARD_PREFIX}show:{i.get('id')}")]
-                for i in done]
-        rows.append([InlineKeyboardButton("← Back",
-                                          callback_data=f"{CB_BOARD_PREFIX}list")])
-        await edit_markdown(
-            query,
-            "📋 *Completed items*\n\nReopen one with a new due date rather than "
-            "adding a fresh item — it keeps the renewal history.",
-            reply_markup=InlineKeyboardMarkup(rows))
-        return BI_MENU
+    queue_handler = _QUEUE_VERBS.get(verb)
+    if queue_handler is not None:
+        return await queue_handler(tap)
 
     item = bi.by_id(items, item_id)
     if item is None:
@@ -321,83 +494,18 @@ async def board_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await edit_markdown(
             query, "That item is no longer on the list — it may have been "
                    "changed by another officer.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
-                "← Back", callback_data=f"{CB_BOARD_PREFIX}list")]]))
+            reply_markup=_back_to_list())
         return BI_MENU
 
-    if verb == "show":
-        return await _show_item(query, item, today)
-
-    if verb == "done":
-        await edit_markdown(
-            query,
-            f"Mark *{md(item.get('action'))}* as completed?",
-            reply_markup=_confirm_keyboard("done_yes", item_id, "✅ Yes, it is done"))
-        return BI_MENU
-
-    if verb == "done_yes":
-        bi.complete(item, today, dname)
-        await storage.save_board_items(items)
-        activity.log_command("boarditems", uid, uname, dname,
-                             details=f"completed {item_id}")
-        context.user_data["bi_next_due_id"] = item_id
-        await edit_markdown(
-            query,
-            f"✅ *{md(item.get('action'))}* marked completed.\n\n"
-            "Most of these come round again. Send the NEXT due date "
-            "(YYYY-MM-DD) to queue it up now, or /skip to leave it retired — "
-            "you can reopen it any time from *Completed items*.")
-        return BI_NEXT_DUE
-
-    if verb == "reopen":
-        context.user_data["bi_next_due_id"] = item_id
-        await edit_markdown(
-            query,
-            f"♻️ Reopening *{md(item.get('action'))}*.\n\n"
-            "Send the new due date (YYYY-MM-DD), or /skip to leave it retired:")
-        return BI_NEXT_DUE
-
-    if verb == "del":
-        await edit_markdown(
-            query,
-            f"Delete *{md(item.get('action'))}*?\n\n"
-            f"It stops appearing and stops notifying. Recoverable by hand for "
-            f"{bi.DELETED_PURGE_AFTER_DAYS} days, then gone.\n\n"
-            "If the obligation was *met*, use ✅ Mark completed instead — that "
-            "keeps the renewal history.",
-            reply_markup=_confirm_keyboard("del_yes", item_id, "🗑 Yes, delete it"))
-        return BI_MENU
-
-    if verb == "del_yes":
-        bi.soft_delete(item, today, dname)
-        await storage.save_board_items(items)
-        activity.log_command("boarditems", uid, uname, dname,
-                             details=f"deleted {item_id}")
-        items = await storage.get_board_items()
-        await edit_markdown(
-            query, f"🗑 Deleted *{md(item.get('action'))}*.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
-                "← Back to the list", callback_data=f"{CB_BOARD_PREFIX}list")]]))
-        return BI_MENU
-
-    if verb == "edit":
-        rows = [[InlineKeyboardButton(
-            label, callback_data=f"{CB_BOARD_PREFIX}ef_{field}:{item_id}")]
-            for field, label in EDIT_FIELDS]
-        rows.append([InlineKeyboardButton(
-            "← Back", callback_data=f"{CB_BOARD_PREFIX}show:{item_id}")])
-        await edit_markdown(query, f"✏️ Editing *{md(item.get('action'))}*\n\n"
-                                   "Which field?",
-                            reply_markup=InlineKeyboardMarkup(rows))
-        return BI_MENU
-
-    if verb.startswith("ef_"):
-        field = verb[3:]
-        if field not in _EDIT_LABELS:
-            return await _show_item(query, item, today)
-        context.user_data["bi_edit"] = {"id": item_id, "field": field}
-        await edit_markdown(query, _edit_prompt(field, item))
-        return BI_EDIT_VALUE
+    item_handler = _ITEM_VERBS.get(verb)
+    if item_handler is None and verb.startswith(EDIT_FIELD_PREFIX):
+        # An ef_ verb naming a field that is no longer editable — a keyboard
+        # from before EDIT_FIELDS changed. The item view is a truthful answer
+        # and keeps the officer where they were, so it is preserved rather
+        # than being allowed to fall through to the message below.
+        item_handler = _bi_show
+    if item_handler is not None:
+        return await item_handler(tap, item)
 
     # Reached by a verb no branch claims — a keyboard older than a deploy that
     # renamed one, or a bug. The log line has always been here; the reply has
@@ -413,8 +521,7 @@ async def board_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         query,
         "⚠️ That button no longer works — it is probably from an older "
         "message.",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
-            "← Back", callback_data=f"{CB_BOARD_PREFIX}list")]]))
+        reply_markup=_back_to_list())
     return BI_MENU
 
 
