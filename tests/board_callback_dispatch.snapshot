@@ -1,0 +1,29 @@
+# What every `bi:` verb does, one verb per line. GENERATED — do not hand-edit.
+#
+# Regenerate with:
+#     python -m tests.test_board_callback_dispatch
+#
+# Only alongside a DELIBERATE change to what a verb does, in the same commit.
+# This file exists to prove the dispatch-table rewrite of board_callback is a
+# pure move, so regenerating it to make a refactor pass defeats its only
+# purpose. Absolute dates are masked to <DATE>; see
+# tests/test_board_callback_dispatch.py.
+close -> state=END saved=0 user_data=- buttons=[-] text=🗂 Closed. /boarditems to reopen.
+list -> state=BI_MENU saved=0 user_data=- buttons=[bi:show:AAA11111,bi:completed,bi:close] text=🗂 *Board Items* — pending, soonest first 🟡 *1. Renew logo registration* <DATE> — in 48 days
+completed -> state=BI_MENU saved=0 user_data=- buttons=[bi:show:BBB22222,bi:list] text=📋 *Completed items* Reopen one with a new due date rather than adding a fresh item — it keeps the renewal history.
+completed -> state=BI_MENU saved=0 user_data=- buttons=[bi:list] text=No completed items yet.
+show:AAA11111 -> state=BI_MENU saved=0 user_data=- buttons=[bi:list] text=That item is no longer on the list — it may have been changed by another officer.
+show:AAA11111 -> state=BI_MENU saved=0 user_data=- buttons=[bi:done:AAA11111,bi:edit:AAA11111,bi:del:AAA11111,bi:list] text=🟡 *Pending* *Renew logo registration* Due: <DATE> — in 48 days First notice: 60 days before, then weekly, then daily inside 21 days Last notice sent: none yet `AAA11111`
+done:AAA11111 -> state=BI_MENU saved=0 user_data=- buttons=[bi:done_yes:AAA11111,bi:show:AAA11111] text=Mark *Renew logo registration* as completed?
+done_yes:AAA11111 -> state=BI_NEXT_DUE saved=1 user_data=['bi_next_due_id'] buttons=[-] text=✅ *Renew logo registration* marked completed. Most of these come round again. Send the NEXT due date (YYYY-MM-DD) to queue it up now, or /skip to leave it retired — you can reopen it any time from *Completed items*.
+reopen:AAA11111 -> state=BI_NEXT_DUE saved=0 user_data=['bi_next_due_id'] buttons=[-] text=♻️ Reopening *Renew logo registration*. Send the new due date (YYYY-MM-DD), or /skip to leave it retired:
+del:AAA11111 -> state=BI_MENU saved=0 user_data=- buttons=[bi:del_yes:AAA11111,bi:show:AAA11111] text=Delete *Renew logo registration*? It stops appearing and stops notifying. Recoverable by hand for 90 days, then gone. If the obligation was *met*, use ✅ Mark completed instead — that keeps the renewal history.
+del_yes:AAA11111 -> state=BI_MENU saved=1 user_data=- buttons=[bi:list] text=🗑 Deleted *Renew logo registration*.
+edit:AAA11111 -> state=BI_MENU saved=0 user_data=- buttons=[bi:ef_action:AAA11111,bi:ef_due:AAA11111,bi:ef_notify_days:AAA11111,bi:ef_description:AAA11111,bi:ef_url:AAA11111,bi:show:AAA11111] text=✏️ Editing *Renew logo registration* Which field?
+ef_action:AAA11111 -> state=BI_EDIT_VALUE saved=0 user_data=['bi_edit'] buttons=[-] text=*What has to be done* Currently: Renew logo registration Send the new wording (max 120 characters):
+ef_due:AAA11111 -> state=BI_EDIT_VALUE saved=0 user_data=['bi_edit'] buttons=[-] text=*Due date* Currently: <DATE> Send the new due date (YYYY-MM-DD):
+ef_notify_days:AAA11111 -> state=BI_EDIT_VALUE saved=0 user_data=['bi_edit'] buttons=[-] text=*Lead time* Currently: 60 Send the lead time in days — how far ahead the first notice goes out:
+ef_description:AAA11111 -> state=BI_EDIT_VALUE saved=0 user_data=['bi_edit'] buttons=[-] text=*Details* Send the new details (max 1024 characters), or /skip to clear them:
+ef_url:AAA11111 -> state=BI_EDIT_VALUE saved=0 user_data=['bi_edit'] buttons=[-] text=*Link* Send the new link, or /skip to remove it:
+ef_bogus:AAA11111 -> state=BI_MENU saved=0 user_data=- buttons=[bi:done:AAA11111,bi:edit:AAA11111,bi:del:AAA11111,bi:list] text=🟡 *Pending* *Renew logo registration* Due: <DATE> — in 48 days First notice: 60 days before, then weekly, then daily inside 21 days Last notice sent: none yet `AAA11111`
+wat:AAA11111 -> state=BI_MENU saved=0 user_data=- buttons=[-] text=<nothing sent>
