@@ -105,9 +105,17 @@ class TestMalformedRecords:
         assert P.next_allowed_at([{"requester_chat_id": MEMBER}], MEMBER) is None
 
     def test_a_naive_timestamp_is_tolerated(self):
-        """Legacy records predate tz-aware storage."""
-        from datetime import datetime
-        naive = datetime.now().replace(microsecond=0).isoformat()
+        """Legacy records predate tz-aware storage.
+
+        The naive value must be CHURCH-local now, which is what the legacy
+        writer would have stored. The machine's own bare clock reading is the
+        RUNNER's timezone, and production localizes a naive record to church
+        time — so on a machine behind America/New_York the record read as
+        hours in the past and the cooldown looked expired. This failed under
+        America/Los_Angeles. See tests/test_tests_are_clock_independent.py,
+        which bans the naive form in source TEXT, prose included.
+        """
+        naive = now_tz().replace(tzinfo=None, microsecond=0).isoformat()
         reqs = [{"requester_chat_id": MEMBER, "created": naive}]
         assert P.next_allowed_at(reqs, MEMBER) is not None
 
