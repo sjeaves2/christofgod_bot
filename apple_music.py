@@ -1,6 +1,6 @@
 """Song search against Apple's public iTunes Search API.
 
-Used by the worship song-list builder to turn "Amazing Grace, CeCe Winans"
+Used by the worship song-list builder to turn "Amazing Grace CeCe Winans"
 into a music.apple.com link an admin can hand to a worship leader.
 
 WHY THIS API AND NOT THE APPLE MUSIC API
@@ -150,25 +150,30 @@ def _as_song(result: dict) -> Song | None:
                 url=clean_url(url))
 
 
-def search_term(title: str, artist: str | None = None) -> str:
-    """What to send as `term`.
-
-    The artist is appended rather than sent separately because the Search API
-    has no artist parameter for an entity=song query — `attribute=artistTerm`
-    searches ONLY the artist and would ignore the title entirely.
-    """
-    title = (title or "").strip()
-    artist = (artist or "").strip()
-    return f"{title} {artist}".strip() if artist else title
-
-
-async def search_songs(title: str, artist: str | None = None,
+async def search_songs(query: str,
                        limit: int = MAX_RESULTS) -> list[Song]:
-    """Candidate songs for *title* (optionally narrowed by *artist*).
+    """Candidate songs for the free-text *query*.
+
+    *query* goes to the API verbatim — it is the same general search the Music
+    app's own search box performs, matching title, artist and album at once.
+    So "Amazing Grace CeCe Winans" narrows by artist with no parsing here and
+    no separate parameter: there ISN'T one. For an entity=song query the
+    Search API offers only `attribute=artistTerm`, which searches the artist
+    ALONE and ignores the title entirely. Do not add a second field hoping to
+    pass the artist separately; there is nowhere for it to go.
+
+    One consequence is worth knowing before anyone adds "helpful" parsing:
+    measured on 2026-11-03 over twelve title/artist pairs, sending the word
+    "by" between them ("Great Is Thy Faithfulness by CeCe Winans") moved the
+    top hit in five, and in one case to a DIFFERENT ARTIST — Carrie
+    Underwood's recording outranked the one asked for. The word is treated as
+    a search term like any other. The caller's prompt therefore asks for a
+    song and artist without suggesting "by", which is cheaper and more
+    reliable than stripping it afterwards.
 
     Never raises; returns [] on any failure. See the module docstring.
     """
-    term = search_term(title, artist)
+    term = (query or "").strip()
     if not term:
         return []
 

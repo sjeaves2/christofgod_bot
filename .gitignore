@@ -54,3 +54,8 @@ data/known_groups.yaml
 
 # Coverage output
 .coverage
+
+# Claude Code: local, per-machine settings (tool allowlist). Never commit —
+# this repo is public, and settings.local.json is the untracked tier by design.
+.claude/settings.local.json
+.claude/worktrees/
