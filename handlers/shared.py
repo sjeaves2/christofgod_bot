@@ -28,10 +28,15 @@ async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     Replaces `lambda u, c: ConversationHandler.END`, which looked harmless but
     never worked: PTB awaits every callback, and awaiting the integer END raises
-    TypeError. So /cancel errored in all 15 conversations and — because the
+    TypeError. So /cancel errored in EVERY conversation and — because the
     exception meant the state was never returned — left the user stuck in the
     conversation they were trying to leave. Several prompts tell people to use
     it, so this was a promise the bot could not keep.
+
+    No count here on purpose. This sentence described a past fault, but the
+    number in it was twice "corrected" to match the current total — 13, then
+    15 — which is how a historical claim becomes a maintenance chore that is
+    wrong between every pair of releases. "Every" was true then and stays true.
 
     Clearing user_data matters too: it holds only conversation scratch here, and
     leaving a half-finished draft behind would leak it into the next one.
