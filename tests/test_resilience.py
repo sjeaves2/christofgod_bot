@@ -166,6 +166,8 @@ def _fresh_watchdog():
     nw.watchdog = NetworkWatchdog()
 
 
+
+
 class TestWatchdogJob:
     async def test_successful_probe_keeps_bot_running(self):
         ctx = _context()
@@ -226,6 +228,157 @@ class TestWatchdogJob:
                 await watchdog_job(ctx)
         assert log_error.called
         assert "Recovered" in log_error.call_args[0][0]
+
+
+class TestGivingUpTellsSomebody:
+    """The one fault in the bot that used to notify NOBODY.
+
+    A sustained outage was written to the activity log, and nothing reads the
+    activity log, so the 87-minute silence this module exists to catch would
+    have gone unannounced a second time. The alert is HELD rather than sent —
+    the network is broken by definition here — and post_init delivers it.
+    """
+
+    @staticmethod
+    async def _sustained(ctx):
+        start = _at(12, 0)
+        with patch.object(nw, "now_tz",
+                          side_effect=[start, start + timedelta(minutes=11)]):
+            await watchdog_job(ctx)
+            await watchdog_job(ctx)
+
+    async def test_a_sustained_outage_holds_an_ops_alert(self):
+        ctx = _context(side_effect=NetworkError("dns"))
+        with patch.object(nw.error_reporting, "hold_alert") as hold:
+            await self._sustained(ctx)
+        assert hold.call_count == 1
+
+    async def test_a_single_failure_holds_nothing(self):
+        """Blips must stay silent; only an exhausted grace period alerts."""
+        ctx = _context(side_effect=NetworkError("502"))
+        with patch.object(nw.error_reporting, "hold_alert") as hold:
+            await watchdog_job(ctx)
+        hold.assert_not_called()
+
+    async def test_the_alert_carries_no_cause_text(self):
+        """Network exceptions embed the API URL, which carries the token, and
+        hold_alert stores its text verbatim — build_alert's redact_secrets is
+        not in this path. So the TYPE goes in and str(exc) never does."""
+        secret = "https://api.telegram.org/bot12345:SECRETTOKEN/getMe failed"
+        ctx = _context(side_effect=NetworkError(secret))
+        with patch.object(nw.error_reporting, "hold_alert") as hold:
+            await self._sustained(ctx)
+        text = hold.call_args[0][1]
+        assert "SECRETTOKEN" not in text
+        assert secret not in text
+        assert "NetworkError" in text          # the type still identifies it
+
+    async def test_it_does_not_go_through_report_exception(self):
+        """report_exception would attempt a send over a connection known to be
+        dead AND route the result through should_alert, whose duration gate
+        swallows transient network errors — which is exactly what this is.
+        The alert would be dropped by the rule that silences nightly blips."""
+        ctx = _context(side_effect=NetworkError("dns"))
+        with patch.object(nw.error_reporting, "hold_alert"), \
+             patch.object(nw.error_reporting, "report_exception",
+                          new=AsyncMock()) as report, \
+             patch.object(nw.error_reporting, "should_alert") as gate:
+            await self._sustained(ctx)
+        report.assert_not_awaited()
+        gate.assert_not_called()
+
+    async def test_the_alert_is_held_before_the_app_is_stopped(self):
+        """Ordering is load-bearing: stop_running ends the process, so an
+        alert queued after it may never reach the disk."""
+        order = []
+        ctx = _context(side_effect=NetworkError("dns"))
+        ctx.application.stop_running = MagicMock(
+            side_effect=lambda *a: order.append("stop"))
+        with patch.object(nw.error_reporting, "hold_alert",
+                          side_effect=lambda *a: order.append("hold")):
+            await self._sustained(ctx)
+        assert order == ["hold", "stop"]
+
+    async def test_it_does_not_point_at_a_log_that_gets_cleared(self):
+        """post_init flushes this queue and THEN calls reset_error_log(), so a
+        held alert referencing errors.log sends the admin to an empty file."""
+        ctx = _context(side_effect=NetworkError("dns"))
+        with patch.object(nw.error_reporting, "hold_alert") as hold:
+            await self._sustained(ctx)
+        text = hold.call_args[0][1]
+        assert "errors.log" not in text
+        assert "bot_activity.log" in text
+
+    async def test_an_unstoppable_bot_says_it_may_still_be_wedged(self):
+        """Receiving the alert proves the network came back, not that the bot
+        recovered. If it could not stop itself it needs a human."""
+        ctx = _context(side_effect=NetworkError("dns"))
+        ctx.application = None
+        with patch.object(nw.error_reporting, "hold_alert") as hold:
+            await self._sustained(ctx)
+        text = hold.call_args[0][1]
+        assert "wedged" in text
+        assert "restart worked" not in text
+
+    async def test_a_restarting_bot_does_not_ask_for_a_human(self):
+        ctx = _context(side_effect=NetworkError("dns"))
+        with patch.object(nw.error_reporting, "hold_alert") as hold:
+            await self._sustained(ctx)
+        text = hold.call_args[0][1]
+        assert "wedged" not in text
+
+    async def test_a_failure_to_hold_never_blocks_the_restart(self):
+        """Describing the outage must not stop the bot recovering from it."""
+        ctx = _context(side_effect=NetworkError("dns"))
+        with patch.object(nw.error_reporting, "hold_alert",
+                          side_effect=OSError("disk full")):
+            await self._sustained(ctx)       # must not raise
+        ctx.application.stop_running.assert_called_once()
+
+    async def test_the_real_queue_accepts_it_and_a_restart_delivers_it(
+            self, tmp_path):
+        """End to end against the REAL hold_alert and flush, not a mock.
+
+        Every other test here patches hold_alert, so all of them would pass if
+        _give_up called it with the wrong arguments, or wrote text the queue
+        rejected. This drives the actual path a real outage takes: give up,
+        write to disk, restart, deliver.
+        """
+        import error_reporting as er
+        pending = tmp_path / "pending_alerts.json"
+        ctx = _context(side_effect=NetworkError("dns"))
+
+        with patch.object(er, "PENDING_ALERTS", pending):
+            await self._sustained(ctx)
+            assert pending.exists(), "the outage alert never reached the disk"
+            held = er._load_pending()
+            assert len(held) == 1
+
+            # Now the restart: post_init's flush is the first chance to send.
+            bot = MagicMock()
+            bot.send_message = AsyncMock()
+            with patch.object(er, "ops_chat_ids",
+                              new=AsyncMock(return_value={999000001})):
+                sent = await er.flush_pending_alerts(bot)
+
+            assert sent == 1
+            bot.send_message.assert_awaited_once()
+            delivered = bot.send_message.await_args[0][1]
+            assert "Telegram was unreachable" in delivered
+            # flush labels a held alert with when it actually happened.
+            assert "Delayed alert" in delivered
+            # Still inside the patch: outside it this reads the real
+            # logs/pending_alerts.json and asserts against whatever is there.
+            assert er._load_pending() == []
+
+    async def test_the_outage_length_and_probe_count_reach_the_reader(self):
+        """"Unreachable" alone does not say whether to worry."""
+        ctx = _context(side_effect=NetworkError("dns"))
+        with patch.object(nw.error_reporting, "hold_alert") as hold:
+            await self._sustained(ctx)
+        text = hold.call_args[0][1]
+        assert "11m" in text
+        assert "2 failed probes" in text
 
 
 # ---------------------------------------------------------------------------

@@ -30,6 +30,11 @@ Design notes
   has RETURNED, so it is where held ops alerts get retried. The probe runs
   whether or not anyone is talking to the bot, which a passive signal would
   not. See error_reporting.flush_pending_alerts.
+* This module both WRITES to and READS from that queue. Giving up holds an
+  alert for the next process (_hold_outage_alert); a successful probe delivers
+  whatever is waiting. Until v0.27.1 a sustained outage notified nobody at
+  all — it was logged on the grounds that a DM could not cross a broken
+  network, which is true of SENDING and irrelevant to QUEUEING.
 
   The dependency runs one way only — error_reporting knows nothing about this
   module — and tests/test_resilience.py pins that, because a cycle here would
@@ -176,23 +181,103 @@ async def _retry_held_alerts(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 def _give_up(context: ContextTypes.DEFAULT_TYPE, elapsed: timedelta,
              exc: BaseException) -> None:
-    """Log loudly, then ask the application to stop so systemd can restart it."""
+    """Log loudly, hold an ops DM for after the restart, then stop the app.
+
+    Whether the bot can actually stop is decided FIRST, because it changes what
+    the alert should say: "it restarted" and "it is still wedged" call for
+    different actions from whoever reads it.
+    """
+    app = getattr(context, "application", None)
+    stop = getattr(app, "stop_running", None)
+
     message = (
         f"Telegram unreachable for {_human(elapsed)} "
         f"({watchdog.consecutive_failures} failed probes; last error: "
-        f"{type(exc).__name__}: {exc}). Exiting so systemd restarts the bot."
+        f"{type(exc).__name__}: {exc})."
     )
+    message += (" Exiting so systemd restarts the bot." if stop is not None
+                else " No application to stop; the bot cannot restart itself.")
     logger.critical(message)
-    # Written to the activity log rather than DM'd: the DM would have to travel
-    # over the very network that is broken.
     activity.log_error(message)
+    _hold_outage_alert(elapsed, exc, restarting=stop is not None)
 
-    app = getattr(context, "application", None)
-    stop = getattr(app, "stop_running", None)
     if stop is None:
         logger.error("No application to stop; the watchdog cannot restart the bot.")
         return
     stop()
+
+
+def _hold_outage_alert(elapsed: timedelta, exc: BaseException,
+                       restarting: bool) -> None:
+    """Queue the ops DM this outage would otherwise never produce.
+
+    This was the one fault in the bot that notified NOBODY. The activity log
+    recorded it and nothing read the activity log, so the 87-minute silence
+    that prompted this whole module would have gone unannounced a second time.
+
+    HELD, NOT SENT, and that is the whole trick
+    -------------------------------------------
+    The reason this used to be log-only was that "the DM would have to travel
+    over the very network that is broken" — true, and a send here would indeed
+    fail. But not sending is not the same as not alerting. v0.24.1 added a
+    disk-backed queue precisely for alerts that cannot get out, and post_init
+    flushes it once the process comes back up, which is the first moment
+    anything can be delivered. So the alert is written to disk BEFORE
+    stop_running() and delivered by the next process.
+
+    hold_alert is reached directly rather than through report_exception. That
+    is deliberate twice over:
+
+      * report_exception would attempt a send over a connection known to be
+        dead, and route the result through should_alert, whose duration gate
+        swallows transient network errors — which is exactly what this
+        exception is. The alert would be dropped by the very noise rule that
+        makes the nightly Telegram blips silent.
+      * hold_alert needs no event loop. _give_up is synchronous and the process
+        is about to stop; an awaitable here would be abandoned mid-flight.
+
+    WHAT IS AND IS NOT IN THE TEXT
+    ------------------------------
+    The exception TYPE only, never str(exc). Network exceptions embed the API
+    URL, which carries the bot token; write_error_log and build_alert run it
+    through redact_secrets, but hold_alert stores the text verbatim, so the
+    safe move is to carry no cause text at all. BackupUndelivered established
+    this shape for the same reason.
+
+    It points at the activity log rather than errors.log, because post_init
+    flushes this queue and THEN calls reset_error_log() — a trace referenced
+    here would be cleared before anyone could read it. bot_activity.log and
+    the journal both survive the restart.
+
+    Never raises: it runs on the way to stopping the bot, and failing to
+    describe an outage must not stop the bot from recovering from it.
+    """
+    try:
+        lines = [
+            "🔌 The bot restarted itself: Telegram was unreachable.",
+            "",
+            f"Unreachable for {_human(elapsed)} "
+            f"({watchdog.consecutive_failures} failed probes in a row).",
+            f"Last probe error: {type(exc).__name__}.",
+            "",
+        ]
+        if restarting:
+            lines.append(
+                "It stopped so systemd could restart it. Receiving this means "
+                "the restart worked and connectivity is back — no action "
+                "needed unless it repeats.")
+        else:
+            lines.append(
+                "It could NOT stop itself to restart, so it may still be "
+                "wedged even though this message got through. Worth checking "
+                "by hand.")
+        lines.append("")
+        lines.append("Details: logs/bot_activity.log, or "
+                     "journalctl -u christofgod-bot.")
+        error_reporting.hold_alert(error_reporting.new_error_id(),
+                                   "\n".join(lines))
+    except Exception as hold_exc:   # noqa: BLE001 - see docstring
+        logger.warning("Could not hold the outage alert: %s", hold_exc)
 
 
 def _human(delta: timedelta) -> str:
