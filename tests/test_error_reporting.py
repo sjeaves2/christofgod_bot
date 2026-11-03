@@ -18,8 +18,6 @@ import error_reporting as er
 import permissions
 
 
-
-
 def _raise(kind=ValueError, msg="something broke"):
     """Return a raised-and-caught exception, so it carries a real traceback."""
     try:
@@ -31,6 +29,41 @@ def _raise(kind=ValueError, msg="something broke"):
 def _reset():
     er._alert_state.clear()
     er._episodes.clear()
+
+
+class TestTheSuiteCannotTouchTheRealLogs:
+    """conftest redirects logs/ into tmp_path. This checks it covers EVERY
+    file, not just the ones someone remembered.
+
+    PENDING_ALERTS was missed for three releases: the queue was added in
+    v0.24.1 and conftest was written before it existed. Nothing failed,
+    because logs/ is gitignored, so fake ops alerts accumulated in the real
+    logs/pending_alerts.json where git status would never show them.
+
+    Derived from the module rather than listed here on purpose. A list would
+    need the same update conftest needs, and would be forgotten in the same
+    breath.
+    """
+
+    def _log_file_constants(self):
+        """Module-level Path constants naming a FILE (not the directory)."""
+        return {name: value for name, value in vars(er).items()
+                if name.isupper() and isinstance(value, Path) and value.suffix}
+
+    def test_the_scan_finds_the_constants_it_is_meant_to_check(self):
+        """Guards against the regex-typo failure mode: a scan that sees
+        nothing passes vacuously forever."""
+        found = self._log_file_constants()
+        assert {"ERRORS_LOG", "PENDING_ALERTS"} <= set(found), found
+
+    def test_no_log_file_constant_points_into_the_repository(self):
+        repo_logs = (Path(__file__).resolve().parents[1] / "logs").resolve()
+        for name, value in self._log_file_constants().items():
+            resolved = Path(value).resolve()
+            assert repo_logs not in resolved.parents, (
+                f"error_reporting.{name} points at {resolved}, inside the real "
+                f"logs/ directory. Add it to the _isolate_logs fixture in "
+                f"tests/conftest.py — a test run must never write there.")
 
 
 class TestClassification:
