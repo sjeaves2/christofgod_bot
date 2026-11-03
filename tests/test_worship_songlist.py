@@ -245,47 +245,108 @@ class TestBuildingTheList:
              patch.object(w.activity, "log_command"):
             state = await w.cmd_songlist(update, ctx)
         said = _said(update.message.reply_text)
-        assert state == w.SL_TITLE
+        assert state == w.SL_QUERY
         assert "restarts" in said and "lost" in said
         assert "/end" in said and "/undo" in said
 
-    async def test_a_title_leads_to_the_artist_prompt(self):
+    async def test_the_first_prompt_asks_for_song_and_artist_together(self):
+        """One message, not two — and the example shows the exact form.
+
+        The example is load-bearing, not decoration. The API scores "by" as a
+        search term like any other: measured over twelve title/artist pairs,
+        putting it between them moved the top hit in five and in one case
+        returned a DIFFERENT ARTIST. An example written "Amazing Grace by
+        CeCe Winans" would teach the admin the worse of the two inputs.
+        """
+        update = _message_update()
+        ctx = _context()
+        with patch("permissions.is_admin", return_value=True), \
+             patch.object(w.activity, "log_command"):
+            await w.cmd_songlist(update, ctx)
+        said = _said(update.message.reply_text)
+        assert "artist" in said
+        assert "Amazing Grace CeCe Winans" in said
+        assert "Amazing Grace by CeCe Winans" not in said
+
+    async def test_the_whole_message_goes_to_the_search_verbatim(self):
+        """No parsing, no splitting, no rejoining.
+
+        `term` is a general search over title, artist and album at once, so
+        the artist needs no separate handling. Pinned because the obvious
+        "improvement" is to split on " by " and pass two fields — there is no
+        second field to pass them to.
+        """
+        update = _message_update("Amazing Grace CeCe Winans")
+        ctx = _context(songs=[])
+        search = AsyncMock(return_value=SONGS)
+        with patch.object(w.apple_music, "search_songs", search):
+            assert await w.sl_query(update, ctx) == w.SL_PICK
+        search.assert_awaited_once_with("Amazing Grace CeCe Winans")
+
+    async def test_the_artist_is_optional(self):
+        """The admin may not know it — that was explicit in the request."""
         update = _message_update("Amazing Grace")
         ctx = _context(songs=[])
-        assert await w.sl_title(update, ctx) == w.SL_ARTIST
-        assert ctx.user_data[w.STATE_KEY]["pending_title"] == "Amazing Grace"
-        assert "/skip" in _said(update.message.reply_text)
-
-    async def test_skipping_the_artist_searches_on_the_title_alone(self):
-        """The admin may not know the artist — that was explicit."""
-        update = _message_update()
-        ctx = _context(songs=[], pending_title="Amazing Grace")
         search = AsyncMock(return_value=SONGS)
         with patch.object(w.apple_music, "search_songs", search):
-            assert await w.sl_skip_artist(update, ctx) == w.SL_PICK
-        search.assert_awaited_once_with("Amazing Grace", None)
+            assert await w.sl_query(update, ctx) == w.SL_PICK
+        search.assert_awaited_once_with("Amazing Grace")
 
-    async def test_naming_the_artist_narrows_the_search(self):
-        update = _message_update("CeCe Winans")
-        ctx = _context(songs=[], pending_title="Amazing Grace")
+    async def test_a_title_containing_by_is_not_split(self):
+        """"Saved By Grace" is a song, not a song and an artist.
+
+        A last-" by " split would send "Saved Grace", which does not fail
+        loudly — it returns five confident, wrong results (Tom Petty's
+        "Saving Grace" topped the list when this was measured). So nothing may
+        touch the admin's text on its way to the search.
+        """
+        update = _message_update("Saved By Grace Israel Houghton")
+        ctx = _context(songs=[])
         search = AsyncMock(return_value=SONGS)
         with patch.object(w.apple_music, "search_songs", search):
-            assert await w.sl_artist(update, ctx) == w.SL_PICK
-        search.assert_awaited_once_with("Amazing Grace", "CeCe Winans")
+            await w.sl_query(update, ctx)
+        search.assert_awaited_once_with("Saved By Grace Israel Houghton")
 
-    async def test_no_results_sends_the_admin_back_to_the_title(self):
-        update = _message_update()
-        ctx = _context(songs=[], pending_title="Nonexistent Hymn")
+    async def test_an_admin_who_types_by_anyway_still_gets_it_verbatim(self):
+        """The prompt discourages "by", but nothing strips it.
+
+        This is the mutation-killing case: every other test here uses input
+        with no " by " in it, so a re-added `query.rsplit(" by ", 1)` would
+        pass them all. Stripping it was considered and rejected — the measured
+        cost is a slightly worse ranking, and the policy chosen was that the
+        admin's text reaches the API untouched. A split here would instead
+        send "Amazing Grace" alone and silently drop the artist.
+        """
+        update = _message_update("Amazing Grace by CeCe Winans")
+        ctx = _context(songs=[])
+        search = AsyncMock(return_value=SONGS)
+        with patch.object(w.apple_music, "search_songs", search):
+            await w.sl_query(update, ctx)
+        search.assert_awaited_once_with("Amazing Grace by CeCe Winans")
+
+    async def test_no_results_asks_for_the_song_again(self):
+        update = _message_update("Nonexistent Hymn")
+        ctx = _context(songs=[])
         with patch.object(w.apple_music, "search_songs",
                           AsyncMock(return_value=[])):
-            assert await w.sl_skip_artist(update, ctx) == w.SL_TITLE
+            assert await w.sl_query(update, ctx) == w.SL_QUERY
         said = _said(update.message.reply_text)
         assert "could not find" in said and "Nonexistent Hymn" in said
 
+    async def test_a_blank_message_does_not_reach_the_search(self):
+        """Whitespace is not a song. The API would return [] for it anyway,
+        but the admin should be asked again rather than told nothing matched."""
+        update = _message_update("   ")
+        ctx = _context(songs=[])
+        search = AsyncMock(return_value=SONGS)
+        with patch.object(w.apple_music, "search_songs", search):
+            assert await w.sl_query(update, ctx) == w.SL_QUERY
+        search.assert_not_awaited()
+
     async def test_picking_a_result_adds_it_to_the_list(self):
         update = _callback_update("sl:pick:1")
-        ctx = _context(songs=[], results=SONGS, pending_title="x")
-        assert await w.sl_pick(update, ctx) == w.SL_TITLE
+        ctx = _context(songs=[], results=SONGS)
+        assert await w.sl_pick(update, ctx) == w.SL_QUERY
         assert ctx.user_data[w.STATE_KEY]["songs"] == [SONGS[1]]
         assert "Great Is Thy Faithfulness" in _said(
             update.callback_query.edit_message_text)
@@ -293,27 +354,26 @@ class TestBuildingTheList:
     async def test_picking_clears_the_previous_search(self):
         """Otherwise a stale `results` list could be indexed by the next pick."""
         update = _callback_update("sl:pick:0")
-        ctx = _context(songs=[], results=SONGS, pending_title="x")
+        ctx = _context(songs=[], results=SONGS)
         await w.sl_pick(update, ctx)
         assert "results" not in ctx.user_data[w.STATE_KEY]
-        assert "pending_title" not in ctx.user_data[w.STATE_KEY]
 
     async def test_a_pick_beyond_the_results_is_handled(self):
         update = _callback_update("sl:pick:9")
         ctx = _context(songs=[], results=SONGS[:1])
-        assert await w.sl_pick(update, ctx) == w.SL_TITLE
+        assert await w.sl_pick(update, ctx) == w.SL_QUERY
         assert ctx.user_data[w.STATE_KEY]["songs"] == []
 
     async def test_search_again_keeps_the_list_and_asks_for_a_title(self):
         update = _callback_update("sl:none")
         ctx = _context(songs=[SONGS[0]], results=SONGS)
-        assert await w.sl_search_again(update, ctx) == w.SL_TITLE
+        assert await w.sl_search_again(update, ctx) == w.SL_QUERY
         assert ctx.user_data[w.STATE_KEY]["songs"] == [SONGS[0]]
 
     async def test_undo_drops_the_last_song(self):
         update = _message_update("/undo")
         ctx = _context(songs=list(SONGS))
-        assert await w.sl_undo(update, ctx) == w.SL_TITLE
+        assert await w.sl_undo(update, ctx) == w.SL_QUERY
         assert ctx.user_data[w.STATE_KEY]["songs"] == SONGS[:2]
         assert "Amazing Grace (My Chains Are Gone)" in _said(
             update.message.reply_text)
@@ -321,7 +381,7 @@ class TestBuildingTheList:
     async def test_undo_on_an_empty_list_says_so(self):
         update = _message_update("/undo")
         ctx = _context(songs=[])
-        assert await w.sl_undo(update, ctx) == w.SL_TITLE
+        assert await w.sl_undo(update, ctx) == w.SL_QUERY
         assert "Nothing to undo" in _said(update.message.reply_text)
 
 
@@ -591,7 +651,7 @@ class TestTheWiring:
 
     def test_end_and_undo_are_commands_not_free_text(self):
         """A song called "end" must not finish the list."""
-        handlers = w.song_list_conversation().states[w.SL_TITLE]
+        handlers = w.song_list_conversation().states[w.SL_QUERY]
         commands = {c for h in handlers
                     for c in getattr(h, "commands", None) or ()}
         assert {"end", "undo"} <= commands

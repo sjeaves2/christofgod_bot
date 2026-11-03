@@ -76,25 +76,49 @@ def _patched(client):
 
 
 class TestTheSearchTerm:
-    def test_title_only_when_no_artist(self):
-        assert am.search_term("Amazing Grace") == "Amazing Grace"
+    """The query reaches the API untouched.
 
-    def test_artist_is_appended(self):
-        assert am.search_term("Amazing Grace", "CeCe Winans") == \
-            "Amazing Grace CeCe Winans"
+    There used to be a search_term() that joined a title and an artist. The
+    caller now asks for both in one message, because `term` is a general
+    search across title, artist and album — so there is nothing left to join,
+    and anything this module did to the admin's text would be a bug.
+    """
 
-    def test_blank_artist_is_the_same_as_none(self):
-        """The artist step is skippable, and /skip must not append a space
-        that changes the query."""
-        assert am.search_term("Amazing Grace", "   ") == \
-            am.search_term("Amazing Grace", None)
+    async def test_the_query_is_sent_verbatim(self):
+        client = _FakeClient({"results": []})
+        with _patched(client):
+            await am.search_songs("Amazing Grace CeCe Winans")
+        assert client.calls[0]["params"]["term"] == "Amazing Grace CeCe Winans"
 
-    def test_surrounding_whitespace_is_dropped(self):
-        assert am.search_term("  Amazing Grace  ", " CeCe Winans ") == \
-            "Amazing Grace CeCe Winans"
+    async def test_a_query_containing_by_is_not_split(self):
+        """"Saved By Grace" is one song title. Splitting it would send
+        "Saved Grace", which returns confident, wrong results."""
+        client = _FakeClient({"results": []})
+        with _patched(client):
+            await am.search_songs("Saved By Grace Israel Houghton")
+        assert client.calls[0]["params"]["term"] == \
+            "Saved By Grace Israel Houghton"
 
-    def test_an_empty_title_yields_an_empty_term(self):
-        assert am.search_term("", None) == ""
+    async def test_surrounding_whitespace_is_dropped(self):
+        client = _FakeClient({"results": []})
+        with _patched(client):
+            await am.search_songs("  Amazing Grace  ")
+        assert client.calls[0]["params"]["term"] == "Amazing Grace"
+
+    async def test_inner_spacing_is_left_alone(self):
+        """Only the ends are stripped. Collapsing runs of spaces would be
+        another transformation of the admin's text, with nothing to gain."""
+        client = _FakeClient({"results": []})
+        with _patched(client):
+            await am.search_songs(" Amazing  Grace ")
+        assert client.calls[0]["params"]["term"] == "Amazing  Grace"
+
+    def test_it_takes_no_artist_argument(self):
+        """The API has no artist parameter for an entity=song query, so this
+        one must not grow a second field that silently goes nowhere."""
+        import inspect
+        params = inspect.signature(am.search_songs).parameters
+        assert list(params) == ["query", "limit"]
 
 
 class TestTheRequest:
