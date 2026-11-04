@@ -83,7 +83,7 @@ class TestReadActivity:
     def test_parses_real_log_format(self, tmp_path):
         now = datetime.now(TZ)
         p = _write_log(tmp_path, [
-            _log_line(now - timedelta(hours=1), "COMMAND", "/start", "Sam @sjeaves2 (id:1)"),
+            _log_line(now - timedelta(hours=1), "COMMAND", "/start", "Amember @amember (id:1)"),
             _log_line(now - timedelta(hours=2), "NOTIFICATION",
                       "Sent notification for 'Sabbath Eve' to 3 user(s)"),
         ])

@@ -1,3 +1,16 @@
+# ============================================================================
+# admins.yaml.example — safe template committed to the repository.
+#
+# To use:
+#   cp config/admins.yaml.example config/admins.yaml
+#   # then replace the placeholders with real Telegram usernames
+#
+# config/admins.yaml is gitignored: it names real people and says which of
+# them read prayer requests.  Keep the structure and the comments in sync
+# here when you change them there, and never put real usernames, phone
+# numbers or display names in this file.
+# ============================================================================
+
 # Bot administrators.  At least one of `username` or `phone` is required.
 # username: Telegram username without the leading @
 # phone:    Phone number as registered with Telegram (digits only, no + or spaces)
@@ -13,15 +26,11 @@
 #       so add someone here only if that is true of them. They must have run
 #       /start at least once.
 admins:
-  - username: "OneMorah"
-    display_name: "Pastor Christel Williams Crowdy"
-    prayer: true
-
-  - username: "sjeaves2"
-    display_name: "Bishop Samuel Eaves, II"
+  - username: "firstadmin"
+    display_name: "First Admin"
     ops: true
     prayer: true
 
-  - username: "curtisadairjr"
-    display_name: "Evangelist-at-Large Curtis Adair, Jr"
-    
+  - username: "secondadmin"
+    display_name: "Second Admin"
+    prayer: true

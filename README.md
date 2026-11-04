@@ -127,8 +127,8 @@ christofgod_bot/
 ├── requirements.txt        # Python dependencies
 ├── config/
 │   ├── config.yaml         # Bot token, timezone, and path configuration
-│   ├── admins.yaml         # Telegram usernames and/or phone numbers of administrators
-│   └── officials.yaml      # Church officials available for appointment requests
+│   ├── admins.yaml         # Administrators (gitignored; copy from .example)
+│   └── officials.yaml      # Officials for appointments (gitignored; copy from .example)
 ├── data/
 │   ├── events.yaml         # Special events and convocation announcements
 │   ├── users.yaml          # Registered users (auto-managed)
@@ -170,8 +170,12 @@ bot:
   timezone: "America/New_York"
 ```
 
-**2. Add administrators** in `config/admins.yaml`. Each entry may use a Telegram username,
-a phone number, or both:
+**2. Add administrators** in `config/admins.yaml`. Copy the template first —
+the file is gitignored, so a fresh checkout does not have one:
+```bash
+cp config/admins.yaml.example config/admins.yaml
+```
+Each entry may use a Telegram username, a phone number, or both:
 ```yaml
 admins:
   - username: "your_telegram_username"
@@ -181,7 +185,12 @@ admins:
     display_name: "Pastor Name"
 ```
 
-**3. Add officials** available for appointment requests in `config/officials.yaml`:
+**3. Add officials** available for appointment requests in `config/officials.yaml`,
+also gitignored and also copied from its template:
+```bash
+cp config/officials.yaml.example config/officials.yaml
+```
+Leave `chat_id` out — the bot fills it in when each official runs `/start`:
 ```yaml
 officials:
   - id: "pastor_example"
@@ -216,9 +225,12 @@ detects file changes and reloads the cache within 60 seconds automatically.
 |---|---|---|
 | `config/config.yaml` | Bot configuration (live token) | ❌ (gitignored) |
 | `config/config.yaml.example` | Safe template for the repo | ✅ (token placeholder only) |
-| `config/admins.yaml` | Admin user list | ✅ |
-| `config/officials.yaml` | Officials list | ✅ |
-| `data/events.yaml` | Special events and announcements | ✅ |
+| `config/admins.yaml` | Admin user list | ❌ (names real people) |
+| `config/admins.yaml.example` | Safe template for the repo | ✅ (placeholders only) |
+| `config/officials.yaml` | Officials list | ❌ (names and chat_ids) |
+| `config/officials.yaml.example` | Safe template for the repo | ✅ (placeholders only) |
+| `data/events.yaml` | Special events and announcements | ❌ (join links embed passcodes) |
+| `data/events.yaml.example` | Safe template for the repo | ✅ (placeholders only) |
 | `data/users.yaml` | Registered user records | ❌ (personal data) |
 | `data/appointments.yaml` | Appointment requests | ❌ (personal data) |
 

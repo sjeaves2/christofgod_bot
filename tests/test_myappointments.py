@@ -121,8 +121,8 @@ class TestMyAppointments:
 
     async def test_official_matched_by_telegram_username(self):
         appt = _make_appt(user_chat_id=111, official_id="off1")
-        officials = _make_officials(chat_id=None, username="OneMorah")
-        text = await _run_cmd([appt], officials, chat_id=555, username="OneMorah")
+        officials = _make_officials(chat_id=None, username="anofficial")
+        text = await _run_cmd([appt], officials, chat_id=555, username="anofficial")
         assert "APPT001" in text
 
     async def test_all_statuses_shown(self):

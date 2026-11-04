@@ -900,7 +900,7 @@ class TestPtbPicksTheRightHandler:
             w.SL_PICK: ["sl:pick:0", "sl:pick:4", "sl:none", "sl:cancel"],
             w.SL_CONFIRM: ["sl:send", "sl:remove", "sl:cancel"],
             w.SL_REMOVE: ["sl:rm:0", "sl:rm:10", "sl:back", "sl:cancel"],
-            w.SL_RECIPIENT: ["sl:to:1", "sl:to:474108062", "sl:cancel"],
+            w.SL_RECIPIENT: ["sl:to:1", "sl:to:999000001", "sl:cancel"],
         }
         for state, datas in taps.items():
             conv = self._mid_conversation(state)
