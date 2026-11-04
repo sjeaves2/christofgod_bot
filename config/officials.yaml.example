@@ -1,0 +1,42 @@
+# ============================================================================
+# officials.yaml.example — safe template committed to the repository.
+#
+# To use:
+#   cp config/officials.yaml.example config/officials.yaml
+#   # then replace the placeholders with the real officials
+#
+# config/officials.yaml is gitignored for two reasons: it names real people
+# and carries their numeric Telegram chat_ids, and THE BOT REWRITES IT at
+# runtime (chat_id auto-fill, /enable_appt_proxies), so a tracked copy would
+# also fight every deploy.  Keep the structure and the comments in sync here
+# when you change them there, and never put real names, usernames or chat_ids
+# in this file.
+#
+# Leave chat_id out of a new entry: the bot fills it in when that person runs
+# /start.  The `id` is the bot's own stable key for the official and is the
+# one field that must not change once appointments reference it.
+# ============================================================================
+
+# Officials available for appointments. Each may optionally have `proxies`
+# (secretaries who can negotiate appointments on their behalf) and a
+# `proxies_enabled` flag the official toggles via /enable_appt_proxies yes|no.
+# A proxy's chat_id is auto-filled when they run /start (same as officials).
+# Example:
+#   proxies_enabled: true
+#   proxies:
+#     - name: Jane Secretary
+#       telegram_username: janesec
+# The bot rewrites this file when it auto-fills chat_ids or toggles proxies;
+# it is saved in round-trip mode, so these comments are preserved.
+officials:
+- id: first_official
+  name: First Official
+  telegram_username: firstofficial
+  proxies_enabled: true
+  proxies:
+    - name: Jane Secretary
+      telegram_username: janesec
+- id: second_official
+  name: Second Official
+  telegram_username: secondofficial
+  proxies_enabled: false
