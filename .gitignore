@@ -8,6 +8,14 @@
 # Bot configuration — contains the live token, never commit this
 config/config.yaml
 
+# Who the leadership are. NOT tracked: both name real people, admins.yaml says
+# which of them read prayer requests, and officials.yaml carries their numeric
+# Telegram chat_ids. officials.yaml is also rewritten by the bot at runtime
+# (chat_id auto-fill, /enable_appt_proxies), so tracking it would fight every
+# deploy. Ship the .example files instead.
+config/admins.yaml
+config/officials.yaml
+
 # Runtime-generated files
 generated/
 logs/

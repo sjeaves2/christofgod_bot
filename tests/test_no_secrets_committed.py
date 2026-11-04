@@ -45,6 +45,17 @@ ALLOWED_ZOOM = {("0000000000", "SETMEWITHSETSERVICELINK")}
 # or the template, which is how the Zoom links leaked twice.
 EIN_RE = re.compile(r"\b\d{2}-\d{7}\b")
 
+# A numeric Telegram chat_id, as the bot auto-fills into officials.yaml when
+# someone runs /start. Not a credential, but the one identifier here that
+# CANNOT be changed: a username can be swapped and a Zoom link rotated, while
+# a chat_id is permanent and is enough to message that person directly.
+# config/admins.yaml and config/officials.yaml carried these in a public repo
+# from the repository's first commit (40a5f2c, 2026-06-16) until they were
+# untracked — the third leak of this shape, after the token and the Zoom links.
+# The .example templates omit chat_id entirely: the bot fills it in at runtime,
+# so a template never needs one and any value here is a real person's.
+CHAT_ID_RE = re.compile(r"^\s*-?\s*chat_id:\s*[\"']?(\d{4,})")
+
 # Files that legitimately describe the patterns without containing a secret.
 EXEMPT = {"tests/test_no_secrets_committed.py",
           "tests/test_board_items_untracked.py"}
@@ -131,6 +142,42 @@ class TestNoCredentialsTracked:
                                  capture_output=True, text=True).stdout.split()
         assert "config/config.yaml" not in tracked
         assert "config/config.yaml.example" in tracked
+
+    def test_member_config_is_not_tracked(self):
+        """admins.yaml and officials.yaml name real people; only examples ship.
+
+        Both were tracked from 40a5f2c (2026-06-16) until this change, in a
+        repository that is public by choice. admins.yaml also records which
+        admins read prayer requests, which members are told stays with the
+        ministry's leadership.
+        """
+        tracked = subprocess.run(["git", "ls-files", "config/"], cwd=REPO,
+                                 capture_output=True, text=True).stdout.split()
+        for name in ("config/admins.yaml", "config/officials.yaml"):
+            assert name not in tracked, (
+                f"{name} names real members and must not be tracked; ship "
+                f"{name}.example instead"
+            )
+            assert f"{name}.example" in tracked, (
+                f"{name} is untracked, so {name}.example must ship or a fresh "
+                "checkout cannot start the bot and CI cannot import it"
+            )
+
+    def test_no_telegram_chat_id_committed(self):
+        """A chat_id cannot be rotated, unlike a username or a Zoom link."""
+        findings = []
+        for p in _tracked_text_files():
+            for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
+                m = CHAT_ID_RE.match(line)
+                if m:
+                    findings.append(f"{p.relative_to(REPO)}:{i} — {m.group(1)}")
+        assert not findings, (
+            "a numeric Telegram chat_id appears in a tracked file:\n  "
+            + "\n  ".join(findings)
+            + "\n\nThe bot auto-fills chat_ids at runtime, so a template never "
+              "needs one — omit the field. A chat_id is permanent: unlike a "
+              "username or a Zoom link it cannot be rotated once published."
+        )
 
     def test_runtime_data_is_not_tracked(self):
         """data/events.yaml carries join links and is rewritten at runtime."""
