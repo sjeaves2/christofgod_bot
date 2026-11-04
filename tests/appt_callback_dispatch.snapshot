@@ -25,9 +25,12 @@ rs_decline-on-confirmed [rs_decline:TARGET] -> saved=0 status=confirmed confirme
 terminal-confirmed [confirm:TARGET] -> saved=0 status=confirmed confirmed_from=- effects=---- cp=- user_data=- text=ℹ️ Appointment TARGET has already been confirmed. No further action taken.
 terminal-declined [decline:TARGET] -> saved=0 status=declined confirmed_from=- effects=---- cp=- user_data=- text=ℹ️ Appointment TARGET has already been declined. No further action taken.
 terminal-cancelled [counter:TARGET] -> saved=0 status=cancelled confirmed_from=- effects=---- cp=- user_data=- text=ℹ️ Appointment TARGET has already been cancelled. No further action taken.
-past-counter [counter:TARGET] -> saved=0 status=pending confirmed_from=- effects=---- cp=- user_data=- text=⚠️ This appointment's time has already passed; it can no longer be rescheduled.
-past-decline_counter [decline_counter:TARGET] -> saved=0 status=pending confirmed_from=- effects=---- cp=- user_data=- text=⚠️ This appointment's time has already passed; it can no longer be rescheduled.
-past-confirm-is-allowed [confirm:TARGET] -> saved=1 status=confirmed confirmed_from=requested_datetime effects=F-G- cp=- user_data=- text=✅ You confirmed the appointment (ID: TARGET).
+past-confirm-blocked [confirm:TARGET] -> saved=0 status=pending confirmed_from=- effects=---- cp=- user_data=- text=⚠️ This appointment's time has already passed, so it can no longer be confirmed. Suggest a new time instead, or decline it.
+past-counter-now-allowed [counter:TARGET] -> saved=1 status=pending confirmed_from=- effects=--G- cp=['TARGET'] user_data=['cp_appt_TARGET'] text=Suggest a new date/time for appointment TARGET. Reply with: YYYY-MM-DD HH:MM
+past-decline_counter-now-allowed [decline_counter:TARGET] -> saved=0 status=pending confirmed_from=- effects=---- cp=['TARGET'] user_data=- text=Suggest a different date/time (or type 'cancel' to cancel the request): YYYY-MM-DD HH:MM
+confirm-just-started-still-allowed [confirm:TARGET] -> saved=1 status=confirmed confirmed_from=requested_datetime effects=F-G- cp=- user_data=- text=✅ You confirmed the appointment (ID: TARGET).
+confirm-window-just-closed [confirm:TARGET] -> saved=0 status=pending confirmed_from=- effects=---- cp=- user_data=- text=⚠️ This appointment's time has already passed, so it can no longer be confirmed. Suggest a new time instead, or decline it.
+confirm-grace-follows-duration [confirm:TARGET] -> saved=1 status=confirmed confirmed_from=requested_datetime effects=F-G- cp=- user_data=- text=✅ You confirmed the appointment (ID: TARGET).
 unauthorized-actor [confirm:TARGET] -> saved=0 status=pending confirmed_from=- effects=---- cp=- user_data=- text=⚠️ You're not authorized to act on this appointment.
 claim-by-first-actor [decline:TARGET] -> saved=2 status=declined confirmed_from=- effects=-NG- cp=- user_data=- text=❌ You declined the appointment (ID: TARGET).
 already-claimed-by-other [confirm:TARGET] -> saved=0 status=pending confirmed_from=- effects=---- cp=- user_data=- text=ℹ️ This appointment is already being handled by Someone Else.

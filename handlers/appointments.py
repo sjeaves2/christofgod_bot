@@ -227,6 +227,27 @@ def _appt_is_past(appt: dict[str, Any]) -> bool:
     return dt_obj is not None and dt_obj <= now_tz()
 
 
+def _appt_window_has_ended(appt: dict[str, Any]) -> bool:
+    """True once the appointment's whole SLOT is over, not merely begun.
+
+    Deliberately separate from `_appt_is_past`, which is `start <= now` with
+    NO grace. That is right for listing and reminders — an appointment that
+    started a minute ago is no longer "upcoming" — but wrong as a gate on an
+    official's action: an official tapping Confirm at 10:03 on a 10:00
+    appointment is sitting down to the meeting, not confirming a dead
+    request. `_appt_is_past` has eleven other callers and is NOT changed.
+
+    The grace is the appointment's own `duration_minutes`, so the window
+    closes when the meeting would have finished, rather than at some constant
+    that would be wrong for both a 15-minute call and a 2-hour session.
+    """
+    start = _appt_datetime(appt)
+    if start is None:
+        return False
+    minutes = int(appt.get("duration_minutes", DEFAULT_APPT_DURATION_MIN))
+    return start + timedelta(minutes=minutes) <= now_tz()
+
+
 def _user_is_appt_official(appt: dict[str, Any], user_id: int, username: str | None) -> bool:
     """True if this user is the official assigned to the given appointment."""
     off = next((o for o in permissions.OFFICIALS if o.get("id") == appt.get("official_id")), None)
@@ -786,11 +807,14 @@ async def _confirm_proposed_time(context: ContextTypes.DEFAULT_TYPE, query,
     accepted by the official). They differed in which field holds the time,
     the wording, and one guard — so those are the parameters.
 
-    check_past is False for `confirm` alone, which accepts a requested time
-    that has already passed. That is existing behaviour, pinned by the
-    "past-confirm-is-allowed" line of the dispatch snapshot, and preserved
-    here rather than quietly tightened; it is worth a second look, but not in
-    a commit whose claim is that nothing changed.
+    check_past is False for `confirm` alone, and still is — but no longer
+    because confirm accepts a past time. Since v0.28.4 `appt_callback` refuses
+    a past `confirm` upstream, with `_appt_window_has_ended`, which allows a
+    grace period of the appointment's duration; this check has no grace at
+    all, so routing confirm through it would refuse an official tapping
+    Confirm three minutes into the meeting. The two checks answer different
+    questions: this one is "is the time THEY SUGGESTED in the past", the
+    upstream one is "has the booked slot finished".
 
     clash_text is a callable rather than a template because the three
     messages differ in more than the values — one says "your appointment" and
@@ -874,10 +898,30 @@ async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         return
 
-    # Can't start rescheduling an appointment whose time has already passed.
-    if action in ("counter", "decline_counter") and _appt_is_past(appt):
+    # A slot that has come and gone can no longer be CONFIRMED — doing so
+    # would produce a confirmed appointment in the past and send both parties
+    # an ICS for a meeting that already finished.
+    #
+    # The reverse of what this guard used to say. Until v0.28.4 it blocked
+    # `counter` and `decline_counter` and let `confirm` through, which was an
+    # omission rather than a decision: the verb list dates to a bulk commit
+    # (2026-08-18) and nothing recorded a choice. The effect was backwards —
+    # the one action that cannot be right was allowed, and both ways out were
+    # blocked, so a stale request could only be DECLINED. Worse, the refusal
+    # told the official to "suggest a new time", which was the very thing it
+    # had just blocked.
+    #
+    # Unblocking both re-propose verbs is safe because neither writes a time:
+    # they open a prompt, and `handle_counter_propose_message` rejects a past
+    # proposal for either role ("That date/time is in the past"). So the
+    # official is forced onto a future time regardless, and the old block
+    # bought no safety while removing the only useful action.
+    # `decline_counter` comes along because it is not a terminal decline —
+    # it opens the SAME re-propose prompt for the requester.
+    if action == "confirm" and _appt_window_has_ended(appt):
         await query.edit_message_text(
-            "⚠️ This appointment's time has already passed; it can no longer be rescheduled."
+            "⚠️ This appointment's time has already passed, so it can no "
+            "longer be confirmed. Suggest a new time instead, or decline it."
         )
         return
 

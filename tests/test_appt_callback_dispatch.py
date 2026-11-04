@@ -8,7 +8,7 @@ between them is load-bearing — the code says so, because rs_accept/rs_decline
 are handled early *specifically* to bypass the terminal-status guard below
 them.
 
-    parse ─ appt lookup ─ rs_* ─ terminal status ─ past(counter|decline_counter)
+    parse ─ appt lookup ─ rs_* ─ terminal status ─ past(confirm)
           ─ official-side auth + negotiator claim ─ the seven verb branches
 
 Three of those stages apply to a SUBSET of verbs, and one of them (the
@@ -82,6 +82,16 @@ def _at(days: int, hour: int = 10) -> str:
     base = datetime.now(TZ) + timedelta(days=days)
     return base.replace(hour=hour, minute=0, second=0,
                         microsecond=0).isoformat()
+
+
+def _minutes_ago(minutes: int) -> str:
+    """An ISO datetime `minutes` before now, for the grace-window cases.
+
+    `_at` snaps to a whole hour, which cannot express "three minutes into a
+    thirty-minute appointment" — the case the grace period exists for.
+    """
+    return (datetime.now(TZ) - timedelta(minutes=minutes)).replace(
+        second=0, microsecond=0).isoformat()
 
 
 def _officials() -> list:
@@ -219,13 +229,28 @@ def _cases() -> list[tuple[str, str, list, int]]:
          [_appt(status="declined")], OFFICIAL_CHAT_ID),
         ("terminal-cancelled", "counter:TARGET",
          [_appt(status="cancelled")], OFFICIAL_CHAT_ID),
-        # --- the past guard, which applies to two verbs only -------------
-        ("past-counter", "counter:TARGET",
+        # --- the past guard, which applies to `confirm` ONLY -------------
+        # Reversed in v0.28.4. It used to block the two re-propose verbs and
+        # let confirm through; the sense of all three lines below is the
+        # change, and each is here to make the reversal visible in the diff
+        # rather than only in the code.
+        ("past-confirm-blocked", "confirm:TARGET",
          [_appt(requested_datetime=_at(-2))], OFFICIAL_CHAT_ID),
-        ("past-decline_counter", "decline_counter:TARGET",
+        ("past-counter-now-allowed", "counter:TARGET",
+         [_appt(requested_datetime=_at(-2))], OFFICIAL_CHAT_ID),
+        ("past-decline_counter-now-allowed", "decline_counter:TARGET",
          [_appt(requested_datetime=_at(-2))], USER_CHAT_ID),
-        ("past-confirm-is-allowed", "confirm:TARGET",
-         [_appt(requested_datetime=_at(-2))], OFFICIAL_CHAT_ID),
+        # --- the grace window, which is the whole reason for a separate
+        #     helper: _appt_is_past would refuse both of these ------------
+        ("confirm-just-started-still-allowed", "confirm:TARGET",
+         [_appt(requested_datetime=_minutes_ago(3), duration_minutes=30)],
+         OFFICIAL_CHAT_ID),
+        ("confirm-window-just-closed", "confirm:TARGET",
+         [_appt(requested_datetime=_minutes_ago(31), duration_minutes=30)],
+         OFFICIAL_CHAT_ID),
+        ("confirm-grace-follows-duration", "confirm:TARGET",
+         [_appt(requested_datetime=_minutes_ago(45), duration_minutes=120)],
+         OFFICIAL_CHAT_ID),
         # --- official-side auth and the negotiator claim -----------------
         ("unauthorized-actor", "confirm:TARGET", [_appt()], STRANGER_CHAT_ID),
         ("claim-by-first-actor", "decline:TARGET", [_appt()],
@@ -345,9 +370,9 @@ def test_the_source_scan_actually_finds_verbs():
 #: be completely inert: nothing written, nothing sent to anyone else.
 _PIPELINE_STOPS = (
     "malformed-no-id", "appt-missing", "terminal-confirmed",
-    "terminal-declined", "terminal-cancelled", "past-counter",
-    "past-decline_counter", "unauthorized-actor",
-    "already-claimed-by-other", "unknown-verb",
+    "terminal-declined", "terminal-cancelled",
+    "past-confirm-blocked", "confirm-window-just-closed",
+    "unauthorized-actor", "already-claimed-by-other", "unknown-verb",
 )
 
 #: Paths where the VERB ran and refused. Not inert, and that is not a bug:
