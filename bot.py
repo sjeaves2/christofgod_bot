@@ -167,7 +167,7 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     uid, uname, dname = user_info(update)
-    phone = contact.phone_number  # e.g. "+17572863574" or "17572863574"
+    phone = contact.phone_number  # e.g. "+15550001234" or "15550001234"
 
     await permissions._register_admin_by_phone(uid, phone)
     await _register_official_if_known(uid, uname, phone)

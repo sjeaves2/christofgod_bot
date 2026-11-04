@@ -58,14 +58,23 @@ EIN_RE = re.compile(r"\b\d{2}-\d{7}\b")
 # and CI then found three tracked test files holding the real ops admin's id
 # as `User(id=...)` and inside a Python set. A guard aimed at the shape
 # the leak happened to take the first time is shape #11 in the project notes.
-# So: match any 9-or-10-digit run of digits anywhere in a tracked file —
-# Telegram user ids are 9 or 10 digits — and allow the placeholders BY SHAPE
-# rather than keeping a list of the real values, which would commit them.
-LONG_DIGITS_RE = re.compile(r"(?<![\d.])(\d{9,10})(?![\d.])")
+# So: match any 9-to-11-digit run of digits anywhere in a tracked file, and
+# allow the placeholders BY SHAPE rather than keeping a list of the real
+# values, which would commit them.
+#
+# ELEVEN, not ten. The 9-10 version shipped and missed a real phone number
+# sitting in a bot.py comment as `"+1..........."`, because a country code
+# makes the run 11 digits long and the bound excluded it. Telegram user ids
+# are 9-10 digits, so 10 looked like the natural ceiling — but the hazard is
+# any identifier of a real person, and a phone number is the one that reaches
+# them off Telegram entirely. Third widening of this check in one day; each
+# time the previous bound had been drawn around the example in front of me.
+LONG_DIGITS_RE = re.compile(r"(?<![\d.])(\d{9,11})(?![\d.])")
 
 # Allowed by prefix: 555… is the test-phone convention (as in 5550001234) and
-# 999… is the designated synthetic Telegram-id range (999000001). Anything
-# else nine or ten digits long needs a reason here.
+# 999… is the designated synthetic Telegram-id range (999000001). A leading
+# 1 country code is stripped before the check, so "+15550001234" is allowed
+# on the same grounds as "5550001234". Anything else needs a reason below.
 SYNTHETIC_PREFIXES = ("555", "999")
 ALLOWED_LONG_DIGITS = {
     "0000000000",   # events.py PLACEHOLDER_MEETING, and the Zoom example links
@@ -76,6 +85,16 @@ ALLOWED_LONG_DIGITS = {
     "7575550000",   # README's example admin phone (757 area code + 555)
     "7575550001",   # README's example official phone
 }
+
+
+def _is_placeholder(n: str) -> bool:
+    """Whether a long run of digits is a designated placeholder.
+
+    A leading 1 is a country code, not part of the pattern: "+15550001234"
+    is the same placeholder as "5550001234" and must not need its own entry.
+    """
+    core = n[1:] if len(n) == 11 and n.startswith("1") else n
+    return n in ALLOWED_LONG_DIGITS or core.startswith(SYNTHETIC_PREFIXES)
 
 # Files that legitimately describe the patterns without containing a secret.
 EXEMPT = {"tests/test_no_secrets_committed.py",
@@ -199,14 +218,13 @@ class TestNoCredentialsTracked:
             for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
                 for m in LONG_DIGITS_RE.finditer(line):
                     n = m.group(1)
-                    if n in ALLOWED_LONG_DIGITS:
-                        continue
-                    if n.startswith(SYNTHETIC_PREFIXES):
+                    if _is_placeholder(n):
                         continue
                     findings.append(f"{p.relative_to(REPO)}:{i} — {n}")
         assert not findings, (
-            "a 9-or-10-digit number appears in a tracked file, which is the "
-            "shape of a Telegram user id:\n  " + "\n  ".join(findings)
+            "a 9-to-11-digit number appears in a tracked file, which is the "
+            "shape of a Telegram user id or a phone number:\n  "
+            + "\n  ".join(findings)
             + "\n\nA chat_id is PERMANENT — unlike a username or a Zoom link "
               "it cannot be rotated once published, so it must never be "
               "committed. Use the 999… synthetic range in tests (999000001), "
