@@ -1,0 +1,36 @@
+# ============================================================================
+# admins.yaml.example — safe template committed to the repository.
+#
+# To use:
+#   cp config/admins.yaml.example config/admins.yaml
+#   # then replace the placeholders with real Telegram usernames
+#
+# config/admins.yaml is gitignored: it names real people and says which of
+# them read prayer requests.  Keep the structure and the comments in sync
+# here when you change them there, and never put real usernames, phone
+# numbers or display names in this file.
+# ============================================================================
+
+# Bot administrators.  At least one of `username` or `phone` is required.
+# username: Telegram username without the leading @
+# phone:    Phone number as registered with Telegram (digits only, no + or spaces)
+# Both may be supplied; the bot will match on either.
+#
+# ops:  optional. Admins with `ops: true` receive direct-message alerts when the
+#       bot hits an unhandled exception (see logs/errors.log for full traces).
+#       They must have run /start at least once so the bot knows their chat_id.
+#
+# prayer: optional. Admins with `prayer: true` receive prayer requests sent with
+#       /prayer, and are the ONLY people who can read, answer or dismiss them.
+#       Members are told their request is shared with the ministry's leadership,
+#       so add someone here only if that is true of them. They must have run
+#       /start at least once.
+admins:
+  - username: "firstadmin"
+    display_name: "First Admin"
+    ops: true
+    prayer: true
+
+  - username: "secondadmin"
+    display_name: "Second Admin"
+    prayer: true

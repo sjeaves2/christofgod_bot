@@ -64,11 +64,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
 
-      - name: Provide a config file for import
-        # config/config.yaml is gitignored (holds the live token); the bot module
-        # reads it at import time, so tests need a stand-in. The example template
-        # carries a placeholder token, which is all the tests require.
-        run: cp config/config.yaml.example config/config.yaml
+      - name: Provide config files for import
+        # All three are gitignored: config.yaml holds the live token, and
+        # admins.yaml/officials.yaml name real people. settings.py and
+        # permissions.py read them at IMPORT time, so every test needs a
+        # stand-in or collection fails before a single test runs. The example
+        # templates carry placeholders, which is all the tests require — no
+        # test asserts against real member data.
+        run: |
+          cp config/config.yaml.example config/config.yaml
+          cp config/admins.yaml.example config/admins.yaml
+          cp config/officials.yaml.example config/officials.yaml
 
       - name: Run tests
         run: pytest -v

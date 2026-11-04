@@ -77,10 +77,10 @@ class TestOfficerRoster:
     @pytest.mark.asyncio
     async def test_names_lists_only_officers(self, users):
         users.extend([
-            {"chat_id": 1, "display_name": "Samuel Eaves", "board_officer": True},
+            {"chat_id": 1, "display_name": "First Officer", "board_officer": True},
             {"chat_id": 2, "display_name": "Someone Else"},
         ])
-        assert await permissions.board_officer_names() == ["Samuel Eaves"]
+        assert await permissions.board_officer_names() == ["First Officer"]
 
     @pytest.mark.asyncio
     async def test_chat_ids_lists_only_officers(self, users):

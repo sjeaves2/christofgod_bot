@@ -198,16 +198,16 @@ class TestNoticeSchedule:
 class TestCompletion:
     def test_completing_records_the_cycle_in_history(self):
         rec = item()
-        bi.complete(rec, date(2027, 2, 1), "Samuel Eaves")
+        bi.complete(rec, date(2027, 2, 1), "First Officer")
         assert rec["history"] == [{"due": "2027-03-14",
                                    "completed_at": "2027-02-01",
-                                   "completed_by": "Samuel Eaves"}]
+                                   "completed_by": "First Officer"}]
 
     def test_completing_sets_status_and_who(self):
         rec = item()
-        bi.complete(rec, date(2027, 2, 1), "Samuel Eaves")
+        bi.complete(rec, date(2027, 2, 1), "First Officer")
         assert bi.status_of(rec) == bi.STATUS_COMPLETED
-        assert rec["completed_by"] == "Samuel Eaves"
+        assert rec["completed_by"] == "First Officer"
 
     def test_completing_keeps_the_details_for_the_next_cycle(self):
         rec = item(description="Serial 123", url="https://example.test/x")

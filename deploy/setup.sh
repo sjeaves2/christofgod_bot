@@ -77,10 +77,18 @@ if [ ! -f config/config.yaml ]; then
     echo "      # then set bot.token"
     missing=1
 fi
-if [ ! -f config/admins.yaml ]; then
-    echo "    MISSING config/admins.yaml"
-    missing=1
-fi
+# Both name real people and are gitignored, so a fresh checkout never has
+# them — permissions.py reads both at import time and `import bot` below would
+# fail with a bare traceback. Say which file and how to make one instead.
+for f in config/admins.yaml config/officials.yaml; do
+    if [ ! -f "$f" ]; then
+        echo "    MISSING $f"
+        echo "    Copy it from your laptop (deploy/migrate.sh does this), or:"
+        echo "      cp $f.example $f"
+        echo "      # then replace the placeholder people with the real ones"
+        missing=1
+    fi
+done
 if [ "$missing" -eq 1 ]; then
     echo
     echo "Configuration incomplete — fix the above, then re-run this script."

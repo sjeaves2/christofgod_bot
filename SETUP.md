@@ -23,15 +23,18 @@ bot:
   timezone: "America/New_York"   # IANA tz name
 ```
 
-**`admins.yaml`** — add admin Telegram usernames (without @):
+**`admins.yaml`** — copy `config/admins.yaml.example` (the real file is
+gitignored: it names people), then add admin Telegram usernames (without @):
 ```yaml
 admins:
-  - username: "sjeaves2"
-    display_name: "Bishop Samuel Eaves, II"
+  - username: "yourusername"
+    display_name: "Your Name"
 ```
 
-**`officials.yaml`** — officials available for appointments.  
-Each official must send `/start` to the bot at least once so their chat_id is captured.
+**`officials.yaml`** — copy `config/officials.yaml.example`, also gitignored,
+then list the officials available for appointments.  
+Each official must send `/start` to the bot at least once so their chat_id is
+captured — leave the field out until then; the bot writes it.
 
 ## 4. Run
 
