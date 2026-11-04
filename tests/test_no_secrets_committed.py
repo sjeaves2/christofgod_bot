@@ -56,7 +56,7 @@ EIN_RE = re.compile(r"\b\d{2}-\d{7}\b")
 # so a template never needs one and any value here is a real person's.
 # The first version of this check matched only the YAML form, `chat_id: NNN`,
 # and CI then found three tracked test files holding the real ops admin's id
-# as `User(id=999000001)` and inside a Python set. A guard aimed at the shape
+# as `User(id=...)` and inside a Python set. A guard aimed at the shape
 # the leak happened to take the first time is shape #11 in the project notes.
 # So: match any 9-or-10-digit run of digits anywhere in a tracked file —
 # Telegram user ids are 9 or 10 digits — and allow the placeholders BY SHAPE
@@ -82,14 +82,22 @@ EXEMPT = {"tests/test_no_secrets_committed.py",
           "tests/test_board_items_untracked.py"}
 
 
-def _tracked_text_files() -> list[Path]:
-    """Every file git tracks, skipping binaries and this test itself."""
+def _tracked_text_files(respect_exempt: bool = True) -> list[Path]:
+    """Every file git tracks, skipping binaries and this test itself.
+
+    `respect_exempt=False` includes the EXEMPT files. The long-digits check
+    uses it, because that check allows values by SHAPE and by a documented
+    list rather than by file — so it has no reason to skip anything, and
+    skipping is how a real chat_id got into the prose of THIS file on
+    2026-11-04 and shipped: the guard exempted itself, so nothing read the
+    comment explaining the leak it was written for.
+    """
     out = subprocess.run(["git", "ls-files"], cwd=REPO,
                          capture_output=True, text=True).stdout
     files = []
     for name in out.splitlines():
         name = name.strip()
-        if not name or name in EXEMPT:
+        if not name or (respect_exempt and name in EXEMPT):
             continue
         p = REPO / name
         if not p.is_file():
@@ -187,7 +195,7 @@ class TestNoCredentialsTracked:
     def test_no_telegram_chat_id_committed(self):
         """A chat_id cannot be rotated, unlike a username or a Zoom link."""
         findings = []
-        for p in _tracked_text_files():
+        for p in _tracked_text_files(respect_exempt=False):
             for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
                 for m in LONG_DIGITS_RE.finditer(line):
                     n = m.group(1)
