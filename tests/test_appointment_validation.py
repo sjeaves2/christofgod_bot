@@ -919,27 +919,174 @@ class TestReschedulePastGuards:
         upd, saved = await self._run_counter_msg(appt, future)
         assert appt["status"] == "counter_proposed"
 
-    async def test_counter_on_past_appointment_blocked(self):
-        # appt_callback "counter" on a past appointment is refused.
+    async def _run_tap(self, appt, verb, chat_id=999):
+        """Drive appt_callback for one verb, returning the query mock."""
         from handlers.appointments import CB_APPT_PREFIX
-        past = self._appt(_ahead(-1), appt_id="PASTR")
         ctx = _make_context()
         q = MagicMock()
         q.answer = AsyncMock()
         q.edit_message_text = AsyncMock()
-        q.data = f"{CB_APPT_PREFIX}counter:PASTR"
-        q.message.chat_id = 999
+        q.data = f"{CB_APPT_PREFIX}{verb}:{appt['id']}"
+        q.message.chat_id = chat_id
+        q.from_user.id = 999
+        q.from_user.username = "off"
         upd = MagicMock()
         upd.callback_query = q
 
         async def _get():
-            return [past]
+            return [appt]
 
+        # _finalize_appointment is stubbed: these tests are about the GUARD,
+        # and delivery needs an async bot the shared context fake does not
+        # provide. The status is set BEFORE finalize runs, so asserting on it
+        # still distinguishes allowed from blocked.
         with patch("storage.get_appointments", side_effect=_get), \
+             patch("storage.save_appointments", new=AsyncMock()), \
+             patch.object(ha, "_finalize_appointment", new=AsyncMock()), \
              patch("permissions.OFFICIALS", _officials()):
             await ha.appt_callback(upd, ctx)
-        assert "PASTR" not in ha._counter_propose_state
-        assert "passed" in q.edit_message_text.call_args[0][0].lower()
+        return q
+
+    # --- v0.28.4 reversed this guard -----------------------------------
+    # It used to block `counter`/`decline_counter` and allow `confirm`. The
+    # old test asserted the block on `counter` and was RIGHT about the code
+    # and wrong about the intent: it pinned an omission. See the comment on
+    # the guard in handlers/appointments.py.
+
+    async def test_counter_on_past_appointment_is_now_allowed(self):
+        """The whole point of the reversal: a stale request has a way out.
+
+        Blocked, the official was told to "suggest a new time" by a refusal
+        that had just prevented exactly that, so the only remaining action
+        was to decline.
+        """
+        past = self._appt(_ahead(-1), appt_id="PASTR")
+        q = await self._run_tap(past, "counter")
+        assert "PASTR" in ha._counter_propose_state, (
+            "counter must open the re-propose prompt for a past appointment"
+        )
+        ha._counter_propose_state.pop("PASTR", None)
+        assert "passed" not in q.edit_message_text.call_args[0][0].lower()
+
+    async def test_decline_counter_on_past_appointment_is_now_allowed(self):
+        """Not a terminal decline — it opens the same prompt for the requester."""
+        past = self._appt(_ahead(-1), appt_id="PASTD", status="counter_proposed")
+        q = await self._run_tap(past, "decline_counter", chat_id=111)
+        assert "PASTD" in ha._counter_propose_state
+        ha._counter_propose_state.pop("PASTD", None)
+        assert "passed" not in q.edit_message_text.call_args[0][0].lower()
+
+    async def test_the_reopened_path_still_refuses_a_past_time(self):
+        """Why unblocking is safe: the DOWNSTREAM check does the work.
+
+        Without this, the two tests above would be an argument for a hole.
+        """
+        past = self._appt(_ahead(-1), appt_id="PASTR")
+        upd, _ = await self._run_counter_msg(past, "2000-01-01 10:00")
+        assert past["status"] == "pending"
+        assert "past" in upd.message.reply_text.call_args[0][0].lower()
+
+    async def test_confirm_on_a_finished_appointment_is_blocked(self):
+        past = self._appt(_ahead(-1), appt_id="PASTC")
+        q = await self._run_tap(past, "confirm")
+        assert past["status"] == "pending", "a finished slot must not confirm"
+        assert past.get("confirmed_datetime") is None
+        text = q.edit_message_text.call_args[0][0].lower()
+        assert "passed" in text
+        # The refusal must name a way out, which is what the old one got wrong.
+        assert "suggest a new time" in text and "decline" in text
+
+    async def test_confirm_during_the_appointment_is_allowed(self):
+        """The grace window: 3 minutes into a 30-minute slot.
+
+        `_appt_is_past` is `start <= now` with no grace, so reusing it here
+        would refuse an official who is sitting down to the meeting. This is
+        the case that justifies a second helper rather than a second caller.
+        """
+        now = ha.now_tz()
+        appt = self._appt(now - timedelta(minutes=3), appt_id="LIVE")
+        q = await self._run_tap(appt, "confirm")
+        assert appt["status"] == "confirmed", (
+            q.edit_message_text.call_args[0][0]
+        )
+
+    async def test_the_grace_window_is_the_appointments_own_duration(self):
+        """Not a constant: 45 minutes in is still live for a 2-hour session."""
+        now = ha.now_tz()
+        long_appt = self._appt(now - timedelta(minutes=45), appt_id="LONG")
+        long_appt["duration_minutes"] = 120
+        assert await self._status_after_confirm(long_appt) == "confirmed"
+
+        short = self._appt(now - timedelta(minutes=45), appt_id="SHORT")
+        short["duration_minutes"] = 30
+        assert await self._status_after_confirm(short) == "pending", (
+            "a 30-minute slot that started 45 minutes ago has finished"
+        )
+
+    async def _status_after_confirm(self, appt):
+        await self._run_tap(appt, "confirm")
+        return appt["status"]
+
+    def test_the_helper_at_the_exact_boundary(self):
+        """Direct test, because no router test can reach exact equality.
+
+        The cases above use 29 and 31 minutes, so `<=` becoming `<` survives
+        them: a run would have to land on the same microsecond. Freezing
+        now_tz is the only way to assert the boundary itself, so this tests
+        the helper rather than the dispatch.
+        """
+        start = TZ.localize(datetime(2026, 6, 1, 10, 0))
+        appt = {"requested_datetime": start.isoformat(), "duration_minutes": 30}
+
+        cases = [
+            (start + timedelta(minutes=29, seconds=59), False, "still in it"),
+            (start + timedelta(minutes=30), True, "exactly at the end"),
+            (start + timedelta(minutes=30, seconds=1), True, "just after"),
+        ]
+        for fake_now, expected, why in cases:
+            with patch.object(ha, "now_tz", lambda n=fake_now: n):
+                assert ha._appt_window_has_ended(appt) is expected, why
+
+    def test_the_helper_tolerates_a_missing_time(self):
+        """No datetime at all must not read as 'finished' and block confirm."""
+        with patch.object(ha, "now_tz", lambda: TZ.localize(datetime(2026, 6, 1, 10, 0))):
+            assert ha._appt_window_has_ended({}) is False
+            assert ha._appt_window_has_ended(
+                {"requested_datetime": "not-a-date"}) is False
+
+    def test_the_helper_defaults_the_duration_when_absent(self):
+        """An appointment written before duration_minutes existed still works."""
+        start = TZ.localize(datetime(2026, 6, 1, 10, 0))
+        appt = {"requested_datetime": start.isoformat()}   # no duration
+        just_inside = start + timedelta(minutes=ha.DEFAULT_APPT_DURATION_MIN - 1)
+        just_outside = start + timedelta(minutes=ha.DEFAULT_APPT_DURATION_MIN)
+        with patch.object(ha, "now_tz", lambda: just_inside):
+            assert ha._appt_window_has_ended(appt) is False
+        with patch.object(ha, "now_tz", lambda: just_outside):
+            assert ha._appt_window_has_ended(appt) is True
+
+    def test_the_helper_prefers_the_confirmed_time(self):
+        """_appt_datetime prefers confirmed_datetime; the window must too.
+
+        A rescheduled appointment whose ORIGINAL request is long past is not
+        finished — its confirmed time is what counts.
+        """
+        old = TZ.localize(datetime(2026, 6, 1, 10, 0))
+        new = TZ.localize(datetime(2026, 6, 8, 10, 0))
+        appt = {"requested_datetime": old.isoformat(),
+                "confirmed_datetime": new.isoformat(), "duration_minutes": 30}
+        with patch.object(ha, "now_tz", lambda: new + timedelta(minutes=5)):
+            assert ha._appt_window_has_ended(appt) is False
+
+    async def test_the_window_closes_at_the_end_not_the_start(self):
+        """Boundary: exactly at start+duration is closed, a minute before is open."""
+        now = ha.now_tz()
+        for minutes, expected in ((29, "confirmed"), (31, "pending")):
+            appt = self._appt(now - timedelta(minutes=minutes),
+                              appt_id=f"B{minutes}")
+            assert await self._status_after_confirm(appt) == expected, (
+                f"{minutes} minutes into a 30-minute slot"
+            )
 
 
 class TestTheFixtureHelperItself:
