@@ -759,8 +759,8 @@ class TestAddBoardItem:
 class TestSetBoardOfficer:
     def _store(self, monkeypatch, users=None):
         return FakeStore(items=[], users=users if users is not None else [
-            {"chat_id": 111, "display_name": "Samuel Eaves", "username": "sjeaves2"},
-            {"chat_id": 222, "display_name": "First Official"},
+            {"chat_id": 111, "display_name": "First Officer", "username": "firstofficer"},
+            {"chat_id": 222, "display_name": "Second Officer"},
         ]).install(monkeypatch)
 
     def _as_admin(self, monkeypatch):
@@ -782,7 +782,7 @@ class TestSetBoardOfficer:
         upd = _update()
         await hb.cmd_setboardofficer(upd, _ctx())
         labels = " ".join(button_labels(sent_markup(upd)))
-        assert "Samuel Eaves" in labels and "First Official" in labels
+        assert "First Officer" in labels and "Second Officer" in labels
 
     async def test_toggling_on_writes_a_real_boolean(self, monkeypatch):
         """is_board_officer checks `is True`. A "true" string written here
@@ -850,13 +850,13 @@ class TestSetBoardOfficer:
 
     async def test_done_lists_the_current_board(self, monkeypatch):
         self._store(monkeypatch, users=[
-            {"chat_id": 111, "display_name": "Samuel Eaves", "board_officer": True},
+            {"chat_id": 111, "display_name": "First Officer", "board_officer": True},
             {"chat_id": 222, "display_name": "Someone Else"}])
         self._as_admin(monkeypatch)
         upd = _cb_update("bo:done")
         await hb.board_officer_callback(upd, _ctx())
         text = sent_text(upd)
-        assert "Samuel Eaves" in text and "Someone Else" not in text
+        assert "First Officer" in text and "Someone Else" not in text
 
     async def test_no_registered_users_says_so(self, monkeypatch):
         self._store(monkeypatch, users=[])

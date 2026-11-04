@@ -54,7 +54,28 @@ EIN_RE = re.compile(r"\b\d{2}-\d{7}\b")
 # untracked — the third leak of this shape, after the token and the Zoom links.
 # The .example templates omit chat_id entirely: the bot fills it in at runtime,
 # so a template never needs one and any value here is a real person's.
-CHAT_ID_RE = re.compile(r"^\s*-?\s*chat_id:\s*[\"']?(\d{4,})")
+# The first version of this check matched only the YAML form, `chat_id: NNN`,
+# and CI then found three tracked test files holding the real ops admin's id
+# as `User(id=999000001)` and inside a Python set. A guard aimed at the shape
+# the leak happened to take the first time is shape #11 in the project notes.
+# So: match any 9-or-10-digit run of digits anywhere in a tracked file —
+# Telegram user ids are 9 or 10 digits — and allow the placeholders BY SHAPE
+# rather than keeping a list of the real values, which would commit them.
+LONG_DIGITS_RE = re.compile(r"(?<![\d.])(\d{9,10})(?![\d.])")
+
+# Allowed by prefix: 555… is the test-phone convention (as in 5550001234) and
+# 999… is the designated synthetic Telegram-id range (999000001). Anything
+# else nine or ten digits long needs a reason here.
+SYNTHETIC_PREFIXES = ("555", "999")
+ALLOWED_LONG_DIGITS = {
+    "0000000000",   # events.py PLACEHOLDER_MEETING, and the Zoom example links
+    "1234567890",   # the example Zoom meeting id, used across the event tests
+    "111111111",    # the bot_id half of the one permitted synthetic token
+    "1896455498",   # Apple album id, in apple_music.py's worked example
+    "6767277651",   # Apple track id, same example
+    "7575550000",   # README's example admin phone (757 area code + 555)
+    "7575550001",   # README's example official phone
+}
 
 # Files that legitimately describe the patterns without containing a secret.
 EXEMPT = {"tests/test_no_secrets_committed.py",
@@ -168,15 +189,23 @@ class TestNoCredentialsTracked:
         findings = []
         for p in _tracked_text_files():
             for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
-                m = CHAT_ID_RE.match(line)
-                if m:
-                    findings.append(f"{p.relative_to(REPO)}:{i} — {m.group(1)}")
+                for m in LONG_DIGITS_RE.finditer(line):
+                    n = m.group(1)
+                    if n in ALLOWED_LONG_DIGITS:
+                        continue
+                    if n.startswith(SYNTHETIC_PREFIXES):
+                        continue
+                    findings.append(f"{p.relative_to(REPO)}:{i} — {n}")
         assert not findings, (
-            "a numeric Telegram chat_id appears in a tracked file:\n  "
-            + "\n  ".join(findings)
-            + "\n\nThe bot auto-fills chat_ids at runtime, so a template never "
-              "needs one — omit the field. A chat_id is permanent: unlike a "
-              "username or a Zoom link it cannot be rotated once published."
+            "a 9-or-10-digit number appears in a tracked file, which is the "
+            "shape of a Telegram user id:\n  " + "\n  ".join(findings)
+            + "\n\nA chat_id is PERMANENT — unlike a username or a Zoom link "
+              "it cannot be rotated once published, so it must never be "
+              "committed. Use the 999… synthetic range in tests (999000001), "
+              "and 555… for phone numbers. The bot auto-fills real chat_ids at "
+              "runtime, so a config template never needs one: omit the field. "
+              "If this really is a harmless constant, add it to "
+              "ALLOWED_LONG_DIGITS above WITH a comment saying what it is."
         )
 
     def test_runtime_data_is_not_tracked(self):

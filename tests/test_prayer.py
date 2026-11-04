@@ -290,22 +290,106 @@ class TestRetention:
 # ---------------------------------------------------------------------------
 
 class TestAccessControl:
-    def test_prayer_flag_is_read_from_admins_yaml(self):
-        assert permissions.PRAYER_USERNAMES, "no prayer admins configured"
+    """These CONSTRUCT the admin sets; they never read the live admins.yaml.
+
+    They used to hardcode a real member's Telegram username and rely on that
+    person being an admin WITHOUT the prayer flag in config/admins.yaml. Two
+    faults in one, and both bit:
+
+      * it published a real username in a tracked file in a repository that
+        is public — the same leak admins.yaml itself was untracked for;
+      * it read ambient state, so it asserted whatever the file happened to
+        say. Granting that person the prayer flag would have failed it for no
+        code reason, and it DID fail the moment CI stopped shipping the real
+        file and used the template instead.
+
+    That is shape #2 on this project's list of ways a test has been vacuous:
+    reading ambient state instead of constructing it.
+    """
+
+    @staticmethod
+    def _upd(uid: int, username: str) -> MagicMock:
+        upd = MagicMock()
+        upd.effective_user.id = uid
+        upd.effective_user.username = username
+        return upd
+
+    def test_the_prayer_flag_is_parsed_from_a_constructed_file(self, tmp_path):
+        """Reload permissions against an admins.yaml written HERE.
+
+        The predecessor asserted `PRAYER_USERNAMES` was non-empty, which only
+        said the live file had a prayer admin in it. Asserting the parsed sets
+        are a subset of one another would be no better — both are built from
+        the same list, so the subset holds by construction and the assertion
+        cannot fail. The only way to test the flag parsing is to feed it a
+        document with a known answer, so this one does.
+        """
+        (tmp_path / "admins.yaml").write_text(
+            'admins:\n'
+            '  - username: "@MixedCase"\n'       # @ stripped, lowered
+            '    prayer: true\n'
+            '  - username: "plainadmin"\n'       # admin, no flag
+            '  - username: "opsonly"\n'          # a DIFFERENT flag
+            '    ops: true\n'
+        )
+        (tmp_path / "officials.yaml").write_text("officials: []\n")
+        # Patch settings.CONFIG_DIR, not permissions.CONFIG_DIR: reload
+        # re-executes `from settings import CONFIG_DIR`, so a patch on the
+        # permissions module itself is overwritten by the reload and the real
+        # file is read instead. First attempt at this test did exactly that.
+        import importlib
+
+        import settings
+        try:
+            with patch.object(settings, "CONFIG_DIR", tmp_path):
+                reloaded = importlib.reload(permissions)
+                assert reloaded.ADMIN_USERNAMES == {
+                    "mixedcase", "plainadmin", "opsonly"}
+                assert reloaded.PRAYER_USERNAMES == {"mixedcase"}
+                assert reloaded.OPS_USERNAMES == {"opsonly"}
+        finally:
+            # OUTSIDE the patch, or the restoring reload reads tmp_path again
+            # and every later test runs against the constructed file. The
+            # first version of this had the reload inside, and the test below
+            # is what caught it.
+            importlib.reload(permissions)
+
+    def test_the_reload_above_left_the_real_config_loaded(self):
+        """Guard the guard: a reload that did not restore would poison the
+        rest of the suite silently, and the symptom would surface somewhere
+        unrelated."""
+        assert permissions.PRAYER_USERNAMES, "permissions did not reload"
+        assert permissions.CONFIG_DIR.name == "config"
+        assert "mixedcase" not in permissions.ADMIN_USERNAMES, (
+            "the constructed admins.yaml is still loaded"
+        )
 
     def test_plain_admin_is_not_a_prayer_admin(self):
         """Being an administrator is not enough to read prayer requests."""
-        upd = MagicMock()
-        upd.effective_user.id = 999
-        upd.effective_user.username = "plainadmin"   # admin, no prayer flag
-        assert permissions.is_admin(upd) is True
-        assert permissions.is_prayer_admin(upd) is False
+        with patch.object(permissions, "ADMIN_USERNAMES",
+                          {"plainadmin", "prayeradmin"}), \
+             patch.object(permissions, "PRAYER_USERNAMES", {"prayeradmin"}), \
+             patch.object(permissions, "_admin_chat_ids", set()), \
+             patch.object(permissions, "_prayer_chat_ids", set()):
+            upd = self._upd(999, "plainadmin")
+            assert permissions.is_admin(upd) is True
+            assert permissions.is_prayer_admin(upd) is False
 
     def test_configured_prayer_admin_passes(self):
-        upd = MagicMock()
-        upd.effective_user.id = 1
-        upd.effective_user.username = sorted(permissions.PRAYER_USERNAMES)[0]
-        assert permissions.is_prayer_admin(upd) is True
+        with patch.object(permissions, "PRAYER_USERNAMES", {"prayeradmin"}), \
+             patch.object(permissions, "_prayer_chat_ids", set()):
+            assert permissions.is_prayer_admin(self._upd(1, "prayeradmin")) is True
+
+    def test_the_username_match_is_case_insensitive(self):
+        """Telegram shows usernames in mixed case; the parsed set is lowered.
+
+        Nothing stopped someone writing `- username: "PrayerAdmin"` in the
+        file, and `is_prayer_admin` lowers the incoming name, so a mutation
+        dropping either .lower() must fail something.
+        """
+        with patch.object(permissions, "PRAYER_USERNAMES", {"prayeradmin"}), \
+             patch.object(permissions, "_prayer_chat_ids", set()):
+            assert permissions.is_prayer_admin(self._upd(1, "PrayerAdmin")) is True
 
     async def test_non_prayer_admin_cannot_list_requests(self):
         upd = _update(uid=999, username="plainadmin")
@@ -487,7 +571,7 @@ class TestStatsShowsPendingCount:
     async def test_cmd_stats_supplies_the_count(self):
         """The report parameter is useless if /stats never fills it in."""
         from handlers import stats as st
-        upd = _update(uid=1, username="sjeaves2")
+        upd = _update(uid=1, username="prayeradmin")
         ctx = _ctx()
         ctx.args = []
         await storage.save_prayer_requests(
@@ -519,7 +603,7 @@ class TestPrayerAdminHelp:
 
     async def test_prayer_admin_sees_the_commands_in_adminhelp(self):
         import handlers.user_basics as UB
-        upd = _update(uid=1, username="sjeaves2")
+        upd = _update(uid=1, username="prayeradmin")
         with patch.object(UB.permissions, "is_prayer_admin", lambda u: True), \
              patch.object(UB.permissions, "is_admin", lambda u: True), \
              patch.object(UB.activity, "log_command", lambda *a, **k: None):
@@ -562,7 +646,7 @@ class TestPrayerAdminHelp:
     async def test_help_shows_them_to_a_prayer_admin(self):
         """/help, not just /adminhelp — it is where people actually look."""
         import handlers.user_basics as UB
-        upd = _update(uid=1, username="sjeaves2")
+        upd = _update(uid=1, username="prayeradmin")
         ctx = _ctx()
         ctx.args = []
         with patch.object(UB.permissions, "is_prayer_admin", lambda u: True), \
