@@ -1027,6 +1027,52 @@ class TestReschedulePastGuards:
         await self._run_tap(appt, "confirm")
         return appt["status"]
 
+    def test_the_docstring_names_exactly_the_real_callers(self):
+        """Keep the claim honest instead of trusting it.
+
+        `_appt_window_has_ended`'s docstring explains itself by contrast with
+        `_appt_is_past`, and names that helper's other call sites. The first
+        version of that paragraph said "eleven other callers"; the real number
+        is four, and the wrong figure reached the v0.28.4 tag because nothing
+        checked it.
+
+        Correcting the words would leave the next reader in the same
+        position, so this walks the AST and compares. If you add or remove a
+        caller of `_appt_is_past`, this fails and you update the docstring —
+        which is the only arrangement that keeps a comment like that true.
+        """
+        import ast
+        import inspect
+
+        src = inspect.getsource(ha)
+        callers = {
+            node.name
+            for node in ast.walk(ast.parse(src))
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            for sub in ast.walk(node)
+            if isinstance(sub, ast.Call)
+            and isinstance(sub.func, ast.Name)
+            and sub.func.id == "_appt_is_past"
+        }
+        assert callers, "found no callers at all — the walk is broken, not the code"
+
+        doc = inspect.getdoc(ha._appt_window_has_ended)
+        named = {name for name in callers if name in doc}
+        missing = callers - named
+        assert not missing, (
+            "these call _appt_is_past but the _appt_window_has_ended "
+            f"docstring does not mention them: {sorted(missing)}. Either add "
+            "them, or say why the contrast no longer needs listing."
+        )
+        # And nothing named that is no longer a caller.
+        for stale in ("cmd_cancelappointment", "ca_confirm",
+                      "cmd_reschedule", "rs_newtime"):
+            if stale in doc:
+                assert stale in callers, (
+                    f"the docstring still names {stale} as a caller of "
+                    "_appt_is_past, but it no longer calls it"
+                )
+
     def test_the_helper_at_the_exact_boundary(self):
         """Direct test, because no router test can reach exact equality.
 

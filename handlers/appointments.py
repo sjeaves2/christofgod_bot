@@ -235,7 +235,19 @@ def _appt_window_has_ended(appt: dict[str, Any]) -> bool:
     started a minute ago is no longer "upcoming" — but wrong as a gate on an
     official's action: an official tapping Confirm at 10:03 on a 10:00
     appointment is sitting down to the meeting, not confirming a dead
-    request. `_appt_is_past` has eleven other callers and is NOT changed.
+    request.
+
+    `_appt_is_past` is NOT changed. Its other call sites are the "can the
+    user still act on this?" filters in the cancel and reschedule flows
+    (cmd_cancelappointment, ca_confirm, cmd_reschedule, rs_newtime), where no
+    grace is what you want.
+
+    No COUNT of them here on purpose. This comment said "eleven other
+    callers", which was wrong — a grep that also matched `_appt_datetime` —
+    and the figure reached the v0.28.4 tag before anyone checked it. v0.27.1
+    removed a count from a comment in handlers/shared.py for the same reason
+    rather than correcting it: a number in a comment goes stale silently,
+    while a list of names is at least wrong in a way a reader can see.
 
     The grace is the appointment's own `duration_minutes`, so the window
     closes when the meeting would have finished, rather than at some constant
