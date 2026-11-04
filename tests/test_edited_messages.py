@@ -35,8 +35,8 @@ import handlers.user_basics as UB  # noqa: E402
 
 
 def _edited(text="/privacy", is_command=True):
-    user = User(id=474108062, first_name="Sam", is_bot=False, username="sjeaves2")
-    chat = Chat(id=474108062, type=Chat.PRIVATE)
+    user = User(id=999000001, first_name="Amember", is_bot=False, username="amember")
+    chat = Chat(id=999000001, type=Chat.PRIVATE)
     msg = Message(
         message_id=1, date=datetime.now(timezone.utc), chat=chat, from_user=user,
         text=text,

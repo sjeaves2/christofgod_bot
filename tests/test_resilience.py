@@ -358,7 +358,7 @@ class TestGivingUpTellsSomebody:
             bot = MagicMock()
             bot.send_message = AsyncMock()
             with patch.object(er, "ops_chat_ids",
-                              new=AsyncMock(return_value={474108062})):
+                              new=AsyncMock(return_value={999000001})):
                 sent = await er.flush_pending_alerts(bot)
 
             assert sent == 1
