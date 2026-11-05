@@ -74,6 +74,9 @@ ADMIN_COMMANDS_TEXT = """\
 /stats — usage and system stats (/stats usage, /stats 30)
 /backup — send a data backup now (also runs nightly at 3am)
 /setboardofficer — turn the board-officer flag on or off for a registered user
+/sharecontact — re-offer the "share my contact" button, so a `phone:` added to
+    admins.yaml or officials.yaml can be matched to your chat_id (/start only
+    offers it to people it does not already recognise)
 /adminhelp — show this list"""
 
 # Shown ONLY to admins with `prayer: true`. Listing these for every admin would
@@ -173,6 +176,38 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     follow_up = DEEP_LINK_FOLLOW_UPS.get(payload)
     if follow_up is not None:
         await follow_up(update, context)
+
+
+async def cmd_sharecontact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Offer the contact-share keyboard on demand, to anyone who asks.
+
+    /start offers it only when the caller is NOT already recognised (see
+    `already_known` above), which locks it away from exactly the people who
+    need it most. An admin or official matched by username is already known,
+    so the prompt never appears for them again — and a `phone:` added to
+    admins.yaml afterwards can then never be tied to their chat_id, because
+    the only thing that writes a phone into data/users.yaml is a contact
+    share (bot.py handle_contact). The phone sits in the config looking
+    configured and matches nothing.
+
+    Deliberately NOT admin-gated. It stores the caller's own number and
+    nothing else, handle_contact already refuses a contact belonging to
+    anyone else, and /start asks ordinary members for the same thing, so
+    there is no reach here that the bot did not already have. Gating it would
+    only mean an official who is not an admin could not fix their own entry.
+
+    No new localised strings: this reuses the two keys /start already uses, in
+    every language the bot ships.
+    """
+    uid, uname, dname = user_info(update)
+    _, lang = await get_user_prefs(uid)
+    kb = ReplyKeyboardMarkup(
+        [[KeyboardButton(t("share_contact_button", lang), request_contact=True)]],
+        one_time_keyboard=True,
+        resize_keyboard=True,
+    )
+    await update.message.reply_text(t("share_contact_prompt", lang), reply_markup=kb)
+    activity.log_command("sharecontact", uid, uname, dname)
 
 
 async def _register_official_if_known(

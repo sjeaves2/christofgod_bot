@@ -102,6 +102,7 @@ from handlers.user_basics import (
     cmd_listevents,
     cmd_notifications,
     cmd_privacy,
+    cmd_sharecontact,
     cmd_start,
     cmd_stop,
     cmd_unknown,
@@ -621,6 +622,7 @@ def main() -> None:
     )
 
     app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("sharecontact", cmd_sharecontact))
     app.add_handler(MessageHandler(filters.CONTACT, handle_contact))
     app.add_handler(CommandHandler("stop", cmd_stop))
     app.add_handler(CommandHandler("help", cmd_help))

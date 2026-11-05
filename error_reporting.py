@@ -76,6 +76,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import traceback
 import uuid
 from datetime import datetime, timedelta
@@ -316,14 +317,46 @@ def build_alert(error_id: str, exc: BaseException, note: str = "",
 async def ops_chat_ids() -> set:
     """Chat ids of ops admins the bot can actually reach.
 
-    Ops admins are known either because they shared a contact (phone match) or
-    because a registered user's current username is listed with `ops: true`.
+    Three routes, because the first two are both perishable:
+
+      * `permissions._ops_chat_ids` — somebody shared a contact during THIS
+        process. Rebuilt from empty on every start, so it says nothing about
+        anyone after a restart.
+      * a registered user whose CURRENT username is listed with `ops: true`.
+        Stops matching the day that person changes their Telegram handle.
+      * a registered user whose STORED phone is listed with `ops: true`.
+
+    The stored-phone route is the one this function was missing. A `phone:` in
+    admins.yaml is meant to be the backstop for a changed username, but the
+    number was only ever compared against a live contact-share
+    (permissions._register_admin_by_phone), never against the phone already
+    sitting in data/users.yaml — so a phone-matched ops admin went unreachable
+    at the next restart, and nothing reported it. An alerting path that loses
+    recipients silently is worse than one that never had them: the alerts keep
+    "succeeding" with nobody on the other end.
+
+    Phones are compared digits-only, the same normalisation
+    permissions.OPS_PHONES is built with. Neither side strips a country code,
+    so an admins.yaml entry has to be written in the form Telegram actually
+    delivers — "+1..." arrives as 11 digits for a US number (see the worked
+    example in bot.py handle_contact).
     """
     ids = set(permissions._ops_chat_ids)
     for u in await storage.get_all_users():
+        chat_id = u.get("chat_id")
+        if not chat_id:
+            continue
         uname = (u.get("username") or "").lstrip("@").lower()
-        if uname and uname in permissions.OPS_USERNAMES and u.get("chat_id"):
-            ids.add(u["chat_id"])
+        if uname and uname in permissions.OPS_USERNAMES:
+            ids.add(chat_id)
+            # Skips a redundant regex, nothing more: both branches can only
+            # add this same chat_id and `ids` is a set. Deleting this line is
+            # an EQUIVALENT mutation — no test can kill it, and one written to
+            # try would be asserting on an implementation detail.
+            continue
+        phone = re.sub(r"\D", "", str(u.get("phone") or ""))
+        if phone and phone in permissions.OPS_PHONES:
+            ids.add(chat_id)
     return ids
 
 
