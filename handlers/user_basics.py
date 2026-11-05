@@ -215,10 +215,13 @@ async def _register_official_if_known(
 ) -> None:
     """Store chat_id for officials/admins who have started the bot.
 
-    Matches on telegram_username or phone (digits-only comparison).
+    Matches on telegram_username or phone. Both sides of the phone comparison
+    go through permissions.normalize_phone, so a number hand-typed into
+    officials.yaml without its country code still matches the 11-digit form
+    Telegram delivers — see that function for why this was silently broken.
     """
     uname_lower = (username or "").lstrip("@").lower()
-    phone_norm = re.sub(r"\D", "", phone or "")
+    phone_norm = permissions.normalize_phone(phone)
 
     def _match_and_set(rec: dict) -> bool:
         matched = False
@@ -227,7 +230,7 @@ async def _register_official_if_known(
             if rname and rname == uname_lower:
                 matched = True
         if not matched and phone_norm:
-            rphone = re.sub(r"\D", "", rec.get("phone") or "")
+            rphone = permissions.normalize_phone(rec.get("phone"))
             if rphone and rphone == phone_norm:
                 matched = True
         if matched and rec.get("chat_id") != user_id:

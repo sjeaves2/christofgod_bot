@@ -168,12 +168,22 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     uid, uname, dname = user_info(update)
-    phone = contact.phone_number  # e.g. "+15550001234" or "15550001234"
+    # Telegram sends a NANP number WITH its country code: "+15550001234" or
+    # "15550001234", 11 digits either way. Config entries may be written
+    # without it, which is why every comparison goes through
+    # permissions.normalize_phone rather than a bare digit-strip.
+    phone = contact.phone_number
 
     await permissions._register_admin_by_phone(uid, phone)
     await _register_official_if_known(uid, uname, phone)
 
-    # Store phone in user record
+    # Store phone in user record, as the digits Telegram sent and nothing
+    # more: 11 for a NANP number, country code included. Deliberately NOT
+    # permissions.normalize_phone'd — canonicalising here would leave the
+    # records written before 2026-11-05 in the old form and every reader
+    # guessing which it had. The canonical form belongs at the COMPARISON,
+    # which is where normalize_phone is applied; never compare this value
+    # directly.
     users = await storage.get_all_users()
     for u in users:
         if u["chat_id"] == uid and not u.get("phone"):

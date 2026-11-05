@@ -1,13 +1,29 @@
 """Tests for admin/official identification logic.
 
-Exercises is_admin(), _register_admin_by_phone(), _register_admin_by_username(),
-and _register_official_if_known() by testing the pure matching logic directly.
+Exercises is_admin(), normalize_phone(), _register_admin_by_phone(),
+_register_admin_by_username() and _register_official_if_known().
+
+Several classes here still SIMULATE the logic they describe — they
+reimplement the matching and assert against the copy. Two of them were
+converted to drive the real functions on 2026-11-05, after the v0.28.6
+normalisation change passed the simulated versions untouched while proving
+nothing about the shipped code. `TestAdminSetConstruction` and
+`TestOfficialMatching` below are still copies, and are worth the same
+treatment; they are left for now rather than rewritten in a change about
+phone normalisation.
 """
 from __future__ import annotations
 
 import re
 import sys
+from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+import permissions
 
 
 # We need to import bot.py but it requires a valid config.yaml and will
@@ -158,40 +174,275 @@ class TestAdminUsernameSet:
 # _register_admin_by_phone logic (pure, no Telegram)
 # ---------------------------------------------------------------------------
 
+class TestNormalizePhone:
+    """permissions.normalize_phone — the one canonical form (v0.28.6).
+
+    Before it, both sides of every phone comparison were a bare digit-strip,
+    so nothing reconciled a country code: Telegram delivers a NANP number as
+    11 digits while the README and the admins.yaml comment both showed ten.
+    An entry written as documented loaded cleanly and matched nothing.
+    """
+
+    @pytest.mark.parametrize("raw", [
+        "5550001234",            # as the documentation showed it
+        "15550001234",           # as Telegram delivers it
+        "+15550001234",          # E.164
+        "+1 (555) 000-1234",     # hand-typed with punctuation
+        "1-555-000-1234",
+        " 555 000 1234 ",
+    ])
+    def test_every_spelling_of_one_number_agrees(self, raw):
+        assert permissions.normalize_phone(raw) == "5550001234"
+
+    @pytest.mark.parametrize("raw,expected", [
+        ("+27555000123", "27555000123"),   # South Africa: 11 digits, leading 2
+        ("27555000123", "27555000123"),
+        ("+44 7700 900123", "447700900123"),   # UK: 12 digits
+    ])
+    def test_numbers_outside_the_nanp_are_untouched(self, raw, expected):
+        """The strip must not corrupt a non-NANP number.
+
+        Worth asserting rather than assuming: the bot ships isiZulu, so a
+        +27 number is a realistic entry, and it is 11 digits long — the same
+        length the strip acts on. It survives because it does not start
+        with 1, which is the whole reason the rule is keyed on that digit.
+        """
+        assert permissions.normalize_phone(raw) == expected
+
+    def test_a_leading_one_is_only_stripped_at_eleven_digits(self):
+        """Ten digits beginning with 1 is a local number, not a country code."""
+        assert permissions.normalize_phone("1555000123") == "1555000123"
+        assert permissions.normalize_phone("155500012345") == "155500012345"
+
+    @pytest.mark.parametrize("raw", [None, "", "   ", "+", "()- "])
+    def test_nothing_in_gives_empty_out_rather_than_raising(self, raw):
+        """Callers guard on a falsy result; none of them expect an exception."""
+        assert permissions.normalize_phone(raw) == ""
+
+    def test_two_different_numbers_stay_different(self):
+        """Guards against a normalisation that collapses everything."""
+        assert (permissions.normalize_phone("+15550001234")
+                != permissions.normalize_phone("+15559990000"))
+
+
+class TestPhoneSetsAreBuiltCanonically:
+    """The *_PHONES sets, built from a real file by the real module code.
+
+    Found by mutation on 2026-11-05: reverting ADMIN_PHONES and OPS_PHONES to
+    a raw digit-strip passed the ENTIRE suite. Every other test patches those
+    sets, so nothing exercised their construction — and construction is the
+    config half of the normalisation fix. A `phone:` spelled with its country
+    code would build an 11-digit member that the canonical inbound number can
+    never equal, which is the original bug with the sides swapped.
+
+    Reloads `permissions` against a constructed config directory. Note it is
+    `settings.CONFIG_DIR` that must be patched, not `permissions.CONFIG_DIR`:
+    the reload re-executes `from settings import CONFIG_DIR`, so patching the
+    name on permissions is overwritten immediately. The restoring reload sits
+    OUTSIDE the patch, or the module is left loaded from the temp directory.
+    """
+
+    #: One person, spelled three ways, with a distinct number per role so the
+    #: sets cannot be confused with one another.
+    ADMINS_YAML = (
+        "admins:\n"
+        '  - username: "plainadmin"\n'
+        '    phone: "5550001111"\n'              # as the documentation showed
+        '  - username: "opsadmin"\n'
+        '    phone: "15550002222"\n'             # with the country code
+        "    ops: true\n"
+        '  - username: "prayeradmin"\n'
+        '    phone: "+1 (555) 000-3333"\n'       # hand-typed punctuation
+        "    prayer: true\n"
+    )
+
+    @staticmethod
+    def _reload_with(tmp_path, admins_yaml):
+        import importlib
+        import settings
+        (tmp_path / "admins.yaml").write_text(admins_yaml)
+        (tmp_path / "officials.yaml").write_text("officials: []\n")
+        with patch.object(settings, "CONFIG_DIR", tmp_path):
+            return importlib.reload(permissions)
+
+    @staticmethod
+    def _restore():
+        import importlib
+        importlib.reload(permissions)
+
+    def test_every_spelling_lands_canonically_in_the_sets(self, tmp_path):
+        try:
+            p = self._reload_with(tmp_path, self.ADMINS_YAML)
+            assert p.ADMIN_PHONES == {"5550001111", "5550002222", "5550003333"}, (
+                "a config phone did not reach ADMIN_PHONES in canonical form; "
+                f"got {sorted(p.ADMIN_PHONES)}"
+            )
+            assert p.OPS_PHONES == {"5550002222"}
+            assert p.PRAYER_PHONES == {"5550003333"}
+        finally:
+            self._restore()
+
+    def test_no_set_member_carries_a_country_code(self, tmp_path):
+        """The property, stated independently of the exact numbers above."""
+        try:
+            p = self._reload_with(tmp_path, self.ADMINS_YAML)
+            every = p.ADMIN_PHONES | p.OPS_PHONES | p.PRAYER_PHONES
+            assert every, "the sets came out empty — this test proves nothing"
+            offenders = [n for n in every if len(n) == 11 and n.startswith("1")]
+            assert not offenders, (
+                f"these kept their country code: {offenders}. An inbound "
+                "number is canonicalised, so these can never be matched."
+            )
+        finally:
+            self._restore()
+
+    def test_the_real_config_is_loaded_again_afterwards(self, tmp_path):
+        """Paired guard: a reload left pointing at tmp_path would silently
+        corrupt every later test in the session."""
+        try:
+            self._reload_with(tmp_path, self.ADMINS_YAML)
+        finally:
+            self._restore()
+        import settings
+        assert permissions.CONFIG_DIR == settings.CONFIG_DIR
+        assert permissions.CONFIG_DIR != tmp_path
+
+    def test_an_entry_with_no_phone_adds_nothing(self, tmp_path):
+        try:
+            p = self._reload_with(
+                tmp_path, 'admins:\n  - username: "plainadmin"\n')
+            assert p.ADMIN_PHONES == set()
+            assert p.ADMIN_USERNAMES == {"plainadmin"}
+        finally:
+            self._restore()
+
+
 class TestRegisterAdminByPhone:
-    """Test the phone-matching logic that populates _admin_chat_ids."""
+    """The REAL permissions._register_admin_by_phone.
 
-    def _run(self, admin_phones: set[str], phone: str | None, user_id: int) -> set[int]:
-        """Simulate _register_admin_by_phone without importing bot."""
-        chat_ids: set[int] = set()
-        if not phone:
-            return chat_ids
-        normalized = re.sub(r"\D", "", phone)
-        if normalized in admin_phones:
-            chat_ids.add(user_id)
-        return chat_ids
+    This class used to reimplement the function — its own `re.sub`, its own
+    set membership — and assert against the copy. That passed the v0.28.6
+    normalisation change untouched while proving nothing about the shipped
+    code, which is the only thing it exists to check. It now calls the real
+    function and reads the real module state.
+    """
 
-    def test_matching_phone_adds_user(self):
-        result = self._run({"5550001234"}, "5550001234", 42)
-        assert 42 in result
+    async def _run(self, admin_phones: set[str], phone: str | None,
+                   user_id: int) -> set[int]:
+        with patch.object(permissions, "ADMIN_PHONES", set(admin_phones)), \
+             patch.object(permissions, "OPS_PHONES", set()), \
+             patch.object(permissions, "PRAYER_PHONES", set()), \
+             patch.object(permissions, "_admin_chat_ids", set()), \
+             patch.object(permissions, "_ops_chat_ids", set()), \
+             patch.object(permissions, "_prayer_chat_ids", set()):
+            await permissions._register_admin_by_phone(user_id, phone)
+            return set(permissions._admin_chat_ids)
 
-    def test_non_matching_phone_excluded(self):
-        result = self._run({"5550001234"}, "9990001234", 42)
-        assert 42 not in result
+    async def test_matching_phone_adds_user(self):
+        assert 42 in await self._run({"5550001234"}, "5550001234", 42)
 
-    def test_none_phone_skipped(self):
-        result = self._run({"5550001234"}, None, 42)
-        assert len(result) == 0
+    async def test_non_matching_phone_excluded(self):
+        assert 42 not in await self._run({"5550001234"}, "9990001234", 42)
 
-    def test_formatted_phone_matches_digits_only_stored(self):
-        # "+1 (555) 000-1234" normalises to "15550001234" (with country code).
-        # The stored value must also include the country code to match.
-        result = self._run({"15550001234"}, "+1 (555) 000-1234", 99)
-        assert 99 in result
+    async def test_none_phone_skipped(self):
+        assert await self._run({"5550001234"}, None, 42) == set()
 
-    def test_e164_format_matches(self):
-        result = self._run({"15550001234"}, "+15550001234", 77)
-        assert 77 in result
+    async def test_the_country_code_form_matches_a_ten_digit_entry(self):
+        """The bug this release fixes, at the real call site.
+
+        The config entry is written as the documentation showed it; Telegram
+        delivers the number with its country code. Before v0.28.6 this was a
+        miss, and nothing anywhere reported it.
+        """
+        assert 99 in await self._run({"5550001234"}, "+1 (555) 000-1234", 99)
+
+    async def test_a_ten_digit_contact_matches_an_eleven_digit_entry(self):
+        """And the reverse, for a config file written the other way."""
+        assert 77 in await self._run({"5550001234"}, "5550001234", 77)
+
+    async def test_e164_format_matches(self):
+        assert 77 in await self._run({"5550001234"}, "+15550001234", 77)
+
+    async def test_ops_and_prayer_sets_are_independent(self):
+        """A phone in ADMIN_PHONES alone must not confer ops or prayer."""
+        with patch.object(permissions, "ADMIN_PHONES", {"5550001234"}), \
+             patch.object(permissions, "OPS_PHONES", set()), \
+             patch.object(permissions, "PRAYER_PHONES", set()), \
+             patch.object(permissions, "_admin_chat_ids", set()), \
+             patch.object(permissions, "_ops_chat_ids", set()), \
+             patch.object(permissions, "_prayer_chat_ids", set()):
+            await permissions._register_admin_by_phone(5, "+15550001234")
+            assert permissions._admin_chat_ids == {5}
+            assert permissions._ops_chat_ids == set()
+            assert permissions._prayer_chat_ids == set()
+
+
+class TestRealOfficialRegistration:
+    """The REAL handlers.user_basics._register_official_if_known.
+
+    No test called it before this change — every one either patched it out or
+    reimplemented the matching, so the normalisation fix applied to it was
+    unverified. `_save_officials` is patched because the real one writes
+    config/officials.yaml, which is untracked live data.
+    """
+
+    @staticmethod
+    def _officials():
+        return [
+            {"id": "off1", "name": "Pastor Example", "telegram_username": "pastorex"},
+            {"id": "off2", "name": "Elder Example", "phone": "5551112222"},
+            {"id": "off3", "name": "Deacon Example", "phone": "15553334444"},
+        ]
+
+    async def _run(self, user_id, username, phone):
+        import handlers.user_basics as ub
+        officials = self._officials()
+        with patch.object(permissions, "OFFICIALS", officials), \
+             patch.object(permissions, "_save_officials", lambda: None):
+            await ub._register_official_if_known(user_id, username, phone)
+        return {o["id"]: o.get("chat_id") for o in officials}
+
+    async def test_a_ten_digit_entry_matches_the_delivered_number(self):
+        """off2 is written without a country code, as the docs showed."""
+        got = await self._run(501, None, "+1 (555) 111-2222")
+        assert got["off2"] == 501, "the documented 10-digit form did not match"
+        assert got["off1"] is None and got["off3"] is None
+
+    async def test_an_eleven_digit_entry_matches_a_bare_number(self):
+        """off3 is written with one, which must not stop matching either."""
+        got = await self._run(502, None, "5553334444")
+        assert got["off3"] == 502
+        assert got["off1"] is None and got["off2"] is None
+
+    async def test_username_matching_still_works(self):
+        got = await self._run(503, "@PastorEx", None)
+        assert got["off1"] == 503
+
+    async def test_an_unknown_number_matches_nobody(self):
+        got = await self._run(504, "stranger", "+15559998888")
+        assert set(got.values()) == {None}
+
+    async def test_a_proxy_is_matched_too(self):
+        """Proxies are a second level the loop walks; easy to drop silently."""
+        import handlers.user_basics as ub
+        officials = [{"id": "off1", "name": "Pastor Example",
+                      "proxies": [{"id": "p1", "phone": "5557778888"}]}]
+        with patch.object(permissions, "OFFICIALS", officials), \
+             patch.object(permissions, "_save_officials", lambda: None):
+            await ub._register_official_if_known(601, None, "+15557778888")
+        assert officials[0]["proxies"][0]["chat_id"] == 601
+
+    async def test_officials_are_saved_only_when_something_changed(self):
+        import handlers.user_basics as ub
+        calls = []
+        officials = self._officials()
+        with patch.object(permissions, "OFFICIALS", officials), \
+             patch.object(permissions, "_save_officials",
+                          lambda: calls.append(1)):
+            await ub._register_official_if_known(700, "nobody", "+15550000000")
+            assert calls == [], "saved the file despite matching nobody"
+            await ub._register_official_if_known(701, None, "+15551112222")
+            assert calls == [1], "a real match did not persist"
 
 
 # ---------------------------------------------------------------------------

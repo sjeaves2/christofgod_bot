@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 import pytz
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -38,19 +39,45 @@ def _update(user_id: int, username: str | None = None) -> MagicMock:
 # ---------------------------------------------------------------------------
 
 class TestPhoneAdminRecognition:
-    async def test_phone_registration_grants_admin(self):
+    """Phone recognition, across both ways a config entry can be written.
+
+    These used to patch ADMIN_PHONES with "15550001234" — the 11-digit form,
+    which encoded the old behaviour: the set held exactly what Telegram sends,
+    and nothing else matched. ADMIN_PHONES is now built with
+    permissions.normalize_phone, so the realistic patched value is the
+    canonical 10-digit form, and BOTH ways of writing the entry must match.
+    Parametrised over both rather than rewritten to one, because "either form
+    works" is the whole point of the v0.28.6 fix.
+    """
+
+    #: The same person, as a config file might spell them.
+    CONFIG_FORMS = ["5550001234", "15550001234", "+1 (555) 000-1234"]
+
+    @staticmethod
+    def _phones(raw):
+        """ADMIN_PHONES as permissions builds it, from one raw config value."""
         import permissions
-        with patch.object(permissions, "ADMIN_PHONES", {"15550001234"}), \
+        return {permissions.normalize_phone(raw)}
+
+    @pytest.mark.parametrize("config_form", CONFIG_FORMS)
+    async def test_phone_registration_grants_admin(self, config_form):
+        import permissions
+        with patch.object(permissions, "ADMIN_PHONES", self._phones(config_form)), \
              patch.object(permissions, "ADMIN_USERNAMES", set()), \
              patch.object(permissions, "_admin_chat_ids", set()):
             upd = _update(4242)
             assert permissions.is_admin(upd) is False        # not yet known
             await permissions._register_admin_by_phone(4242, "+1 (555) 000-1234")
-            assert permissions.is_admin(upd) is True         # recognised after sharing
+            assert permissions.is_admin(upd) is True, (
+                f"config entry {config_form!r} did not match the number "
+                "Telegram actually delivers"
+            )
 
-    async def test_non_admin_phone_does_not_grant_admin(self):
+    @pytest.mark.parametrize("config_form", CONFIG_FORMS)
+    async def test_non_admin_phone_does_not_grant_admin(self, config_form):
+        """The normalisation must not turn every number into every other one."""
         import permissions
-        with patch.object(permissions, "ADMIN_PHONES", {"15550001234"}), \
+        with patch.object(permissions, "ADMIN_PHONES", self._phones(config_form)), \
              patch.object(permissions, "ADMIN_USERNAMES", set()), \
              patch.object(permissions, "_admin_chat_ids", set()):
             await permissions._register_admin_by_phone(4242, "+1 (555) 999-0000")
@@ -58,7 +85,7 @@ class TestPhoneAdminRecognition:
 
     async def test_registration_is_per_user(self):
         import permissions
-        with patch.object(permissions, "ADMIN_PHONES", {"15550001234"}), \
+        with patch.object(permissions, "ADMIN_PHONES", {"5550001234"}), \
              patch.object(permissions, "ADMIN_USERNAMES", set()), \
              patch.object(permissions, "_admin_chat_ids", set()):
             await permissions._register_admin_by_phone(1, "+15550001234")

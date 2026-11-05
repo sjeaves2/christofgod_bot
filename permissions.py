@@ -18,6 +18,42 @@ import storage
 from cache import make_rt_yaml
 from settings import CONFIG_DIR
 
+def normalize_phone(raw: Any) -> str:
+    """A phone number reduced to the one form everything compares against.
+
+    Strips every non-digit, then drops a leading `1` from an 11-digit run.
+
+    THE SECOND HALF IS THE POINT. Before it existed, phone matching was a
+    plain digit-strip on both sides and nothing reconciled a country code.
+    Telegram delivers a US number WITH it — `contact.phone_number` arrives as
+    "+15550001234", 11 digits — while `config/admins.yaml` told the reader
+    "digits only, no + or spaces" and the README's example showed ten. Follow
+    the documentation and you got an entry that loaded cleanly, matched
+    nothing, and said so nowhere. It was found on 2026-11-05 while adding a
+    `phone:` for a second ops admin, which is the first time anyone had used
+    the field.
+
+    Dropping a leading 1 from exactly 11 digits is unambiguous: +1 is the only
+    country code that begins with 1 (it is the whole NANP), so an 11-digit run
+    starting with 1 can only be a NANP number carrying its country code. Every
+    other length and every other leading digit is left alone, so a South
+    African +27 (11 digits, leading 2) or a UK +44 (12 digits) is untouched —
+    worth stating because the bot ships isiZulu.
+
+    What this does NOT do is rewrite anything on disk. data/users.yaml holds
+    whatever Telegram sent (all 11 digits in production as of 2026-11-05) and
+    keeps holding it; officials.yaml and admins.yaml keep whatever a human
+    typed. Only the COMPARISON is canonical, so there is no migration and no
+    moment where half the records are in the old form. Every comparison must
+    therefore route through here — a direct `re.sub(r"\\D", "", ...)` against
+    a stored value is the bug this function exists to remove.
+    """
+    digits = re.sub(r"\D", "", str(raw or ""))
+    if len(digits) == 11 and digits.startswith("1"):
+        return digits[1:]
+    return digits
+
+
 # Admins are loaded once at startup and kept in memory.
 # Each entry may carry a `username`, a `phone`, or both.
 _admins_raw = yaml.safe_load((CONFIG_DIR / "admins.yaml").read_text()) or {}
@@ -27,7 +63,7 @@ ADMIN_USERNAMES: set[str] = {
     if a.get("username")
 }
 ADMIN_PHONES: set[str] = {
-    re.sub(r"\D", "", a["phone"])
+    normalize_phone(a["phone"])
     for a in _admins_raw.get("admins", [])
     if a.get("phone")
 }
@@ -41,7 +77,7 @@ OPS_USERNAMES: set[str] = {
     if a.get("username") and a.get("ops")
 }
 OPS_PHONES: set[str] = {
-    re.sub(r"\D", "", a["phone"])
+    normalize_phone(a["phone"])
     for a in _admins_raw.get("admins", [])
     if a.get("phone") and a.get("ops")
 }
@@ -56,7 +92,7 @@ PRAYER_USERNAMES: set[str] = {
     if a.get("username") and a.get("prayer")
 }
 PRAYER_PHONES: set[str] = {
-    re.sub(r"\D", "", a["phone"])
+    normalize_phone(a["phone"])
     for a in _admins_raw.get("admins", [])
     if a.get("phone") and a.get("prayer")
 }
@@ -103,7 +139,7 @@ async def _register_admin_by_phone(user_id: int, phone: str | None) -> None:
     """Cache chat_id when a phone-number-only admin shares their contact."""
     if not phone:
         return
-    normalized = re.sub(r"\D", "", phone)
+    normalized = normalize_phone(phone)
     if normalized in ADMIN_PHONES:
         _admin_chat_ids.add(user_id)
     if normalized in OPS_PHONES:

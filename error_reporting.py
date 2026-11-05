@@ -76,7 +76,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import traceback
 import uuid
 from datetime import datetime, timedelta
@@ -335,11 +334,9 @@ async def ops_chat_ids() -> set:
     recipients silently is worse than one that never had them: the alerts keep
     "succeeding" with nobody on the other end.
 
-    Phones are compared digits-only, the same normalisation
-    permissions.OPS_PHONES is built with. Neither side strips a country code,
-    so an admins.yaml entry has to be written in the form Telegram actually
-    delivers — "+1..." arrives as 11 digits for a US number (see the worked
-    example in bot.py handle_contact).
+    Both sides of the phone comparison go through
+    permissions.normalize_phone, which is also what OPS_PHONES is built with,
+    so a NANP number matches whether or not it carries its country code.
     """
     ids = set(permissions._ops_chat_ids)
     for u in await storage.get_all_users():
@@ -354,7 +351,7 @@ async def ops_chat_ids() -> set:
             # an EQUIVALENT mutation — no test can kill it, and one written to
             # try would be asserting on an implementation detail.
             continue
-        phone = re.sub(r"\D", "", str(u.get("phone") or ""))
+        phone = permissions.normalize_phone(u.get("phone"))
         if phone and phone in permissions.OPS_PHONES:
             ids.add(chat_id)
     return ids
