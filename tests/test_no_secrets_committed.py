@@ -84,6 +84,17 @@ ALLOWED_LONG_DIGITS = {
     "6767277651",   # Apple track id, same example
     "7575550000",   # README's example admin phone (757 area code + 555)
     "7575550001",   # README's example official phone
+    # The two below are in tests/test_admin_logic.py, asserting the edges of
+    # the country-code strip in permissions.normalize_phone. Neither can be
+    # expressed through SYNTHETIC_PREFIXES: the prefix check reads the START
+    # of the run, and both of these must begin with something else to be the
+    # case they test at all.
+    "27555000123",  # +27 555 000 123 — a non-NANP shape, 11 digits with a
+                    # leading 2, proving the strip does NOT fire. 555 kept in
+                    # the subscriber part so a reader can see it is invented;
+                    # South African mobile prefixes are 06/07/08, never 55.
+    "1555000123",   # ten digits beginning with 1 — a local number, not a
+                    # country code, so the strip must leave it alone.
 }
 
 
@@ -92,9 +103,21 @@ def _is_placeholder(n: str) -> bool:
 
     A leading 1 is a country code, not part of the pattern: "+15550001234"
     is the same placeholder as "5550001234" and must not need its own entry.
+
+    The country-code strip applies to BOTH checks below. It first applied only
+    to the prefix check, which meant an allow-listed number was still a
+    finding the moment anyone wrote it the way Telegram sends it — caught on
+    2026-11-05 by the README's own example admin phone, 7575550000, written as
+    17575550000 in the same change that made both forms match. Fourth time
+    this guard has been widened, and the fourth time the previous bound had
+    been drawn around the example in front of me rather than the hazard: the
+    rule is that a number is a placeholder because of its SHAPE, so every
+    check has to see the same canonical shape.
     """
     core = n[1:] if len(n) == 11 and n.startswith("1") else n
-    return n in ALLOWED_LONG_DIGITS or core.startswith(SYNTHETIC_PREFIXES)
+    return (n in ALLOWED_LONG_DIGITS
+            or core in ALLOWED_LONG_DIGITS
+            or core.startswith(SYNTHETIC_PREFIXES))
 
 # Files that legitimately describe the patterns without containing a secret.
 EXEMPT = {"tests/test_no_secrets_committed.py",

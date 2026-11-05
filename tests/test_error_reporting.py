@@ -12,6 +12,8 @@ from datetime import timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import error_reporting as er
@@ -320,39 +322,49 @@ class TestOpsRecipientsByStoredPhone:
     async def test_stored_phone_is_matched_after_a_restart(self):
         """The whole point: no live contact-share, no username match."""
         users = [{"chat_id": 7, "username": "renamed", "phone": "15550001234"}]
-        assert await self._ids(users, phones={"15550001234"}) == {7}
+        assert await self._ids(users, phones={"5550001234"}) == {7}
 
-    async def test_stored_phone_is_normalised_before_comparison(self):
-        """users.yaml may hold punctuation; OPS_PHONES is digits-only."""
-        users = [{"chat_id": 7, "phone": "+1 (555) 000-1234"}]
-        assert await self._ids(users, phones={"15550001234"}) == {7}
+    @pytest.mark.parametrize("stored", [
+        "15550001234",          # what Telegram actually delivers
+        "5550001234",           # the same number without its country code
+        "+1 (555) 000-1234",    # hand-edited, with punctuation
+    ])
+    async def test_the_stored_form_does_not_matter(self, stored):
+        """Every spelling of one number reaches the same person.
+
+        Until v0.28.6 only an exact digit match counted, so the first of
+        these matched a config entry written the way the README showed and
+        the other two did not.
+        """
+        users = [{"chat_id": 7, "phone": stored}]
+        assert await self._ids(users, phones={"5550001234"}) == {7}
 
     async def test_a_phone_that_is_not_an_ops_phone_is_ignored(self):
         users = [{"chat_id": 7, "phone": "15550009999"}]
-        assert await self._ids(users, phones={"15550001234"}) == set()
+        assert await self._ids(users, phones={"5550001234"}) == set()
 
     async def test_a_user_with_neither_is_ignored(self):
         users = [{"chat_id": 7, "username": "nobody"}]
         assert await self._ids(users, usernames={"bishop"},
-                               phones={"15550001234"}) == set()
+                               phones={"5550001234"}) == set()
 
     async def test_a_matching_phone_without_a_chat_id_is_skipped(self):
         """Unreachable is not reachable — a chat_id is how we send anything."""
         users = [{"chat_id": None, "phone": "15550001234"},
                  {"phone": "15550001234"}]
-        assert await self._ids(users, phones={"15550001234"}) == set()
+        assert await self._ids(users, phones={"5550001234"}) == set()
 
     async def test_username_and_phone_on_one_person_yields_one_id(self):
         """Both routes hitting the same person must not double-count."""
         users = [{"chat_id": 7, "username": "bishop", "phone": "15550001234"}]
         assert await self._ids(users, usernames={"bishop"},
-                               phones={"15550001234"}) == {7}
+                               phones={"5550001234"}) == {7}
 
     async def test_both_routes_together_reach_both_people(self):
         users = [{"chat_id": 1, "username": "bishop"},
                  {"chat_id": 2, "username": "renamed", "phone": "15550001234"}]
         assert await self._ids(users, usernames={"bishop"},
-                               phones={"15550001234"}) == {1, 2}
+                               phones={"5550001234"}) == {1, 2}
 
     async def test_an_empty_ops_phones_set_matches_nobody(self):
         """Guards against a falsy-phone bug matching every user."""
@@ -367,7 +379,7 @@ class TestOpsRecipientsByStoredPhone:
         satisfy every assertion above.
         """
         users = [{"chat_id": 7, "username": "renamed", "phone": "15550001234"}]
-        assert await self._ids(users, phones={"15550001234"}) == {7}
+        assert await self._ids(users, phones={"5550001234"}) == {7}
         assert await self._ids(users, phones=set()) == set()
 
 

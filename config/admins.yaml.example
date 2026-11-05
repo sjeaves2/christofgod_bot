@@ -13,7 +13,13 @@
 
 # Bot administrators.  At least one of `username` or `phone` is required.
 # username: Telegram username without the leading @
-# phone:    Phone number as registered with Telegram (digits only, no + or spaces)
+# phone:    Phone number as registered with Telegram. Punctuation is ignored,
+#           and for a US/Canadian number the leading 1 is optional: 7575550000,
+#           17575550000 and +1 (757) 555-0000 all match the same person. A
+#           number outside the NANP must carry its country code, since that is
+#           what Telegram sends. (Before v0.28.6 only the exact digits Telegram
+#           sent matched, so a US number written without the 1 — as the old
+#           comment here and the README both showed it — matched nothing.)
 # Both may be supplied; the bot will match on either.
 #
 # ops:  optional. Admins with `ops: true` receive direct-message alerts when the

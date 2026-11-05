@@ -181,9 +181,15 @@ admins:
   - username: "your_telegram_username"
     display_name: "Your Name"
 
-  - phone: "7575550000"       # digits only, include country code if outside US
+  - phone: "7575550000"       # digits only; country code optional for US/Canada
     display_name: "Pastor Name"
 ```
+Punctuation is ignored, and for a US or Canadian number the `1` country code is
+optional — `"7575550000"`, `"17575550000"` and `"+1 (757) 555-0000"` all match
+the same person. Numbers outside the NANP must include their country code,
+because that is what Telegram sends and nothing can infer it. Until v0.28.6
+only the exact digits Telegram sent would match, so a US number written the way
+this example shows it matched nothing at all.
 
 **3. Add officials** available for appointment requests in `config/officials.yaml`,
 also gitignored and also copied from its template:
