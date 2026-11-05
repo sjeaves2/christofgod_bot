@@ -291,6 +291,86 @@ class TestOpsRecipients:
             assert await er.ops_chat_ids() == set()
 
 
+class TestOpsRecipientsByStoredPhone:
+    """The stored-phone route, and the restart that used to erase it.
+
+    A `phone:` in admins.yaml is the backstop for an ops admin who changes
+    their Telegram username. It was not actually one: the number was compared
+    only against a live contact-share, so the match lived in the in-memory
+    permissions._ops_chat_ids and was gone at the next restart. Every test
+    here therefore patches `_ops_chat_ids` to an EMPTY set — that empty set IS
+    the restart, and before this change every assertion below returned
+    set().
+    """
+
+    @staticmethod
+    def _ctx(users, usernames=frozenset(), phones=frozenset()):
+        async def _users():
+            return users
+        return (patch("storage.get_all_users", side_effect=_users),
+                patch.object(permissions, "OPS_USERNAMES", set(usernames)),
+                patch.object(permissions, "OPS_PHONES", set(phones)),
+                patch.object(permissions, "_ops_chat_ids", set()))
+
+    async def _ids(self, users, usernames=frozenset(), phones=frozenset()):
+        a, b, c, d = self._ctx(users, usernames, phones)
+        with a, b, c, d:
+            return await er.ops_chat_ids()
+
+    async def test_stored_phone_is_matched_after_a_restart(self):
+        """The whole point: no live contact-share, no username match."""
+        users = [{"chat_id": 7, "username": "renamed", "phone": "15550001234"}]
+        assert await self._ids(users, phones={"15550001234"}) == {7}
+
+    async def test_stored_phone_is_normalised_before_comparison(self):
+        """users.yaml may hold punctuation; OPS_PHONES is digits-only."""
+        users = [{"chat_id": 7, "phone": "+1 (555) 000-1234"}]
+        assert await self._ids(users, phones={"15550001234"}) == {7}
+
+    async def test_a_phone_that_is_not_an_ops_phone_is_ignored(self):
+        users = [{"chat_id": 7, "phone": "15550009999"}]
+        assert await self._ids(users, phones={"15550001234"}) == set()
+
+    async def test_a_user_with_neither_is_ignored(self):
+        users = [{"chat_id": 7, "username": "nobody"}]
+        assert await self._ids(users, usernames={"bishop"},
+                               phones={"15550001234"}) == set()
+
+    async def test_a_matching_phone_without_a_chat_id_is_skipped(self):
+        """Unreachable is not reachable — a chat_id is how we send anything."""
+        users = [{"chat_id": None, "phone": "15550001234"},
+                 {"phone": "15550001234"}]
+        assert await self._ids(users, phones={"15550001234"}) == set()
+
+    async def test_username_and_phone_on_one_person_yields_one_id(self):
+        """Both routes hitting the same person must not double-count."""
+        users = [{"chat_id": 7, "username": "bishop", "phone": "15550001234"}]
+        assert await self._ids(users, usernames={"bishop"},
+                               phones={"15550001234"}) == {7}
+
+    async def test_both_routes_together_reach_both_people(self):
+        users = [{"chat_id": 1, "username": "bishop"},
+                 {"chat_id": 2, "username": "renamed", "phone": "15550001234"}]
+        assert await self._ids(users, usernames={"bishop"},
+                               phones={"15550001234"}) == {1, 2}
+
+    async def test_an_empty_ops_phones_set_matches_nobody(self):
+        """Guards against a falsy-phone bug matching every user."""
+        users = [{"chat_id": 1, "phone": ""}, {"chat_id": 2},
+                 {"chat_id": 3, "phone": None}]
+        assert await self._ids(users, phones=set()) == set()
+
+    async def test_the_phone_route_is_what_makes_this_pass(self):
+        """Paired guard: the same input with the phone route's input removed.
+
+        Without this, a bug that returned every chat_id unconditionally would
+        satisfy every assertion above.
+        """
+        users = [{"chat_id": 7, "username": "renamed", "phone": "15550001234"}]
+        assert await self._ids(users, phones={"15550001234"}) == {7}
+        assert await self._ids(users, phones=set()) == set()
+
+
 class TestReportException:
     async def _report(self, exc, tmp_path, users=None, ops={"bishop"}):
         bot = MagicMock()

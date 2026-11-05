@@ -13,6 +13,7 @@
 -1: Message(ignore_edited_messages)
 -1: Message(_log_command_invocation)
 0: Command(/start -> cmd_start)
+0: Command(/sharecontact -> cmd_sharecontact)
 0: Message(handle_contact)
 0: Command(/stop -> cmd_stop)
 0: Command(/help -> cmd_help)
