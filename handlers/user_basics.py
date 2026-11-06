@@ -83,10 +83,30 @@ ADMIN_COMMANDS_TEXT = """\
 /stats — usage and system stats (/stats usage, /stats 30)
 /backup — send a data backup now (also runs nightly at 3am)
 /setboardofficer — turn the board-officer flag on or off for a registered user
-/sharecontact — re-offer the "share my contact" button, so a `phone:` added to
-    admins.yaml or officials.yaml can be matched to your `chat_id` (/start only
-    offers it to people it does not already recognise)
 /adminhelp — show this list"""
+
+# Shown ONLY to people listed in officials.yaml. Same reasoning as the prayer
+# and board blocks — a different axis from "administrator", and these are the
+# two commands an official needs that nothing else advertises.
+#
+# /enable_appt_proxies was documented NOWHERE until v0.28.9: not in any help
+# block and not in the Telegram menu. An official had to be told it exists by
+# a person. /sharecontact had the same problem for the officials who are not
+# also admins, which is the whole reason this block was added.
+#
+# /sharecontact is NOT gated — anyone may run it, and it is in PUBLIC_COMMANDS
+# so every member sees it in the menu. It is described HERE because this is
+# where the explanation matters: an official's `phone:` in officials.yaml can
+# only be tied to their chat_id by a contact share. English only, like the
+# board block: both describe administrative plumbing, not congregational text.
+OFFICIAL_COMMANDS_TEXT = """\
+*Officials:*
+/sharecontact — re-offer the "share my contact" button. Needed once if your
+    entry in officials.yaml or admins.yaml carries a `phone:`, because a phone
+    is tied to your `chat_id` only when you share a contact. /start offers it
+    automatically, but only to people it does not already recognise.
+`/enable_appt_proxies` — allow named proxies to act on your appointment
+    requests"""
 
 # Shown ONLY to admins with `prayer: true`. Listing these for every admin would
 # advertise a queue that prayer_admin_only then refuses with "Unknown command" —
@@ -117,12 +137,16 @@ time, then weekly, then every day inside 21 days._"""
 
 
 def _commands_text(lang: str, is_adm: bool, is_prayer: bool = False,
-                   is_board: bool = False) -> str:
+                   is_board: bool = False, is_official: bool = False) -> str:
     """Localized user command list, with role sections appended as applicable.
 
     Each extra block is gated on its OWN role, never on "administrator":
     `prayer: true` and `board_officer: true` are both narrower than admin, and
-    the commands should be invisible to admins who cannot use them.
+    the commands should be invisible to admins who cannot use them. The
+    officials block follows the same rule on a fourth axis — being listed in
+    officials.yaml is not being an admin, and until v0.28.9 officials had no
+    help surface at all, which is how /enable_appt_proxies came to be
+    documented nowhere in the bot.
     """
     text = t("user_commands", lang)
     if is_adm:
@@ -131,6 +155,8 @@ def _commands_text(lang: str, is_adm: bool, is_prayer: bool = False,
         text += "\n\n" + PRAYER_COMMANDS_TEXT
     if is_board:
         text += "\n\n" + BOARD_COMMANDS_TEXT
+    if is_official:
+        text += "\n\n" + OFFICIAL_COMMANDS_TEXT
     return text
 
 
@@ -171,7 +197,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     is_adm = permissions.is_admin(update)
     cmd_text = _commands_text(lang, is_adm, permissions.is_prayer_admin(update),
-                              await permissions.is_board_officer(update))
+                              await permissions.is_board_officer(update),
+                              permissions._is_known_official(uid, uname))
 
     await reply_markdown(update.message, t("welcome", lang, bot_name=BOT_DISPLAY_NAME,
         commands=cmd_text),
@@ -314,7 +341,8 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     activity.log_command("help", uid, uname, dname)
     text = _commands_text(lang, permissions.is_admin(update),
                           permissions.is_prayer_admin(update),
-                          await permissions.is_board_officer(update))
+                          await permissions.is_board_officer(update),
+                          permissions._is_known_official(uid, uname))
     # Hint that per-command help is available.
     text += "\n\n" + t("help_topic_hint", lang)
     await reply_markdown(update.message, text)

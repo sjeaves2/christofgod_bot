@@ -200,7 +200,8 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     else:
         reply = "✅ Contact received. Thank you!"
     cmd_text = _commands_text(lang, is_adm, permissions.is_prayer_admin(update),
-                              await permissions.is_board_officer(update))
+                              await permissions.is_board_officer(update),
+                              permissions._is_known_official(uid, uname))
 
     await update.message.reply_text(reply, reply_markup=ReplyKeyboardRemove())
     await reply_markdown(update.message, cmd_text)
@@ -459,6 +460,14 @@ PUBLIC_COMMANDS: list[BotCommand] = [
     BotCommand("myappointments", "List your appointments"),
     BotCommand("cancelappointment", "Cancel a pending or confirmed appointment"),
     BotCommand("reschedule", "Propose a new time for an upcoming appointment"),
+    # Ungated: it stores the caller's own number and nothing else, and
+    # handle_contact refuses a contact belonging to anyone else. It is here
+    # rather than only in the officials block because an admin who is not an
+    # official would otherwise have no way to find it, and /start stops
+    # offering the keyboard the moment it recognises you. See the exemption in
+    # tests/test_public_command_menu.py, which proves the command really is
+    # ungated rather than taking this comment's word for it.
+    BotCommand("sharecontact", "Share your contact so the bot can match your number"),
     BotCommand("settimezone", "Set your time zone for displayed times"),
     BotCommand("language", "Choose your language"),
     BotCommand("notifications", "Choose which reminders you receive"),
