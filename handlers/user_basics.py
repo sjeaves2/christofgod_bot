@@ -225,6 +225,13 @@ async def _register_official_if_known(
 
     def _match_and_set(rec: dict) -> bool:
         matched = False
+        # The OUTER guard is the load-bearing one: without it, a user with no
+        # Telegram username would match every official that has none either,
+        # claiming their chat_id. The inner `rname and` is redundant — it can
+        # only be reached when uname_lower is non-empty, so an empty rname
+        # already fails the comparison. Established by mutation 2026-11-06;
+        # deleting it is an equivalent mutation, so leave it or remove it, but
+        # do not write a test for it.
         if uname_lower:
             rname = (rec.get("telegram_username") or "").lstrip("@").lower()
             if rname and rname == uname_lower:
