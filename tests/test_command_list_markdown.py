@@ -58,8 +58,27 @@ def _strip_code(text: str) -> str:
     return re.sub(r"`[^`]*`", "", text)
 
 
+#: An underscore with word characters on BOTH sides, outside code spans: an
+#: identifier like chat_id or enable_appt_proxies. Parity alone does not catch
+#: these. `/enable_appt_proxies` has TWO underscores, so it balances and is
+#: accepted — and then renders as "enable<i>appt</i>proxies", mangling a
+#: command the reader has to type. Found 2026-11-06 by this very test failing
+#: on text added in the same change, which is the only reason the rule exists.
+INTRA_WORD_UNDERSCORE = re.compile(r"(?<=\w)_(?=\w)")
+
+
 def unbalanced_markers(text: str) -> dict[str, int]:
-    """Markers left unpaired outside code spans. Empty dict means balanced."""
+    """Markers Telegram's Markdown v1 would misread. Empty dict means clean.
+
+    Two distinct faults, not one:
+
+      * an ODD count of a paired marker — Telegram rejects the whole message
+        with 400 and the caller resends it unformatted;
+      * an INTRA-WORD underscore — accepted, then silently rendered with part
+        of an identifier italicised and the underscores eaten.
+
+    The second is worse in one respect: nothing fails, so nothing is logged.
+    """
     stripped = _strip_code(text)
     found = {}
     for marker in PAIRED_MARKERS:
@@ -71,6 +90,9 @@ def unbalanced_markers(text: str) -> dict[str, int]:
         found["`"] = backticks
     if stripped.count("[") != stripped.count("]"):
         found["[]"] = stripped.count("[") - stripped.count("]")
+    intra = INTRA_WORD_UNDERSCORE.findall(stripped)
+    if intra:
+        found["identifier_"] = len(intra)
     return found
 
 
@@ -92,14 +114,11 @@ def _describe(text: str, bad: dict[str, int]) -> str:
 #: Every role combination, since the blocks are concatenated and an odd
 #: marker in one is cancelled or exposed by the next.
 ROLE_COMBINATIONS = [
-    (False, False, False),
-    (True, False, False),
-    (True, True, False),
-    (True, False, True),
-    (True, True, True),
-    (False, True, False),      # prayer without admin: not reachable today,
-    (False, False, True),      # board without admin: IS reachable today
-    (False, True, True),
+    (a, p, b, o)
+    for a in (False, True)
+    for p in (False, True)
+    for b in (False, True)
+    for o in (False, True)
 ]
 
 
@@ -125,10 +144,36 @@ class TestTheValidatorWorks:
     def test_it_passes_balanced_text(self, good):
         assert unbalanced_markers(good) == {}
 
+    @pytest.mark.parametrize("bad", [
+        "an identifier chat_id in prose",
+        "two of them: enable_appt_proxies",
+        "snake_case words render wrong",
+    ])
+    def test_it_flags_an_intra_word_underscore(self, bad):
+        """Even parity is not enough: enable_appt_proxies balances and still
+        renders as enable<i>appt</i>proxies."""
+        assert "identifier_" in unbalanced_markers(bad)
+
+    def test_an_even_number_of_intra_word_underscores_is_still_a_fault(self):
+        """The case that parity misses entirely, stated on its own."""
+        text = "run /enable_appt_proxies now"
+        assert text.count("_") % 2 == 0, "fixture no longer has even parity"
+        assert unbalanced_markers(text) == {"identifier_": 2}
+
+    def test_italic_prose_is_not_mistaken_for_an_identifier(self):
+        """The prayer and board blocks end with a _whole sentence_ in italics;
+        those underscores sit at word boundaries and must stay legal."""
+        assert unbalanced_markers("_Answering a request deletes it._") == {}
+        assert unbalanced_markers("_Notices go out daily at 6am._") == {}
+
     def test_an_underscore_inside_backticks_is_literal(self):
-        """The fix relies on this, so it is asserted rather than assumed."""
+        """The fix relies on this, so it is asserted rather than assumed.
+
+        Bare, `chat_id` trips BOTH rules — odd parity and the intra-word
+        rule — which is why the one-character fix cures both.
+        """
         assert unbalanced_markers("`chat_id`") == {}
-        assert unbalanced_markers("chat_id") == {"_": 1}
+        assert unbalanced_markers("chat_id") == {"_": 1, "identifier_": 1}
 
     def test_it_catches_the_v0_28_5_regression(self):
         """The exact text that shipped, rebuilt. This test must fail on it.
@@ -137,12 +182,18 @@ class TestTheValidatorWorks:
         happens to pass the current constants — and the one bug it exists to
         prevent would slip through again.
         """
-        shipped = ub.ADMIN_COMMANDS_TEXT.replace("`chat_id`", "chat_id")
-        assert shipped != ub.ADMIN_COMMANDS_TEXT, (
-            "could not rebuild the pre-fix text — the fix was reworded, so "
-            "this regression check is no longer checking anything"
+        source = ub.OFFICIAL_COMMANDS_TEXT
+        shipped = source.replace("`chat_id`", "chat_id")
+        assert shipped != source, (
+            "could not rebuild the pre-fix text — the fix was reworded or the "
+            "line moved again, so this regression check is no longer checking "
+            "anything. The bare word was `chat_id`; find where it lives now."
         )
-        assert unbalanced_markers(shipped) == {"_": 1}
+        bad = unbalanced_markers(shipped)
+        assert bad.get("_") == 1, f"parity fault not detected: {bad}"
+        assert bad.get("identifier_") == 1, (
+            f"intra-word underscore not detected: {bad}"
+        )
 
 
 class TestTheCommandBlocks:
@@ -175,22 +226,24 @@ class TestTheAssembledMessage:
     """
 
     @pytest.mark.parametrize("lang", sorted(AVAILABLE_LANGUAGES))
-    @pytest.mark.parametrize("is_adm,is_prayer,is_board", ROLE_COMBINATIONS)
+    @pytest.mark.parametrize("is_adm,is_prayer,is_board,is_official", ROLE_COMBINATIONS)
     def test_every_role_combination_in_every_language(
-            self, lang, is_adm, is_prayer, is_board):
-        text = ub._commands_text(lang, is_adm, is_prayer, is_board)
+            self, lang, is_adm, is_prayer, is_board, is_official):
+        text = ub._commands_text(lang, is_adm, is_prayer, is_board, is_official)
         bad = unbalanced_markers(text)
         assert not bad, (
             f"lang={lang} admin={is_adm} prayer={is_prayer} "
-            f"board={is_board}:\n{_describe(text, bad)}"
+            f"board={is_board} official={is_official}:\n{_describe(text, bad)}"
         )
 
     def test_the_sweep_actually_assembled_something(self):
         """A `_commands_text` that returned "" would pass every case above."""
-        biggest = ub._commands_text("en", True, True, True)
-        smallest = ub._commands_text("en", False, False, False)
+        biggest = ub._commands_text("en", True, True, True, True)
+        smallest = ub._commands_text("en", False, False, False, False)
         assert len(biggest) > len(smallest) > 100
-        assert "/sharecontact" in biggest, (
-            "the admin block is not reaching the assembled text, so the "
-            "combination sweep is not covering it"
-        )
+        for marker, block in [("/adminhelp", "admin"), ("/prayerrequests", "prayer"),
+                              ("/boarditems", "board"), ("/sharecontact", "officials")]:
+            assert marker in biggest, (
+                f"the {block} block is not reaching the assembled text, so the "
+                "combination sweep is not covering it"
+            )

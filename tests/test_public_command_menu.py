@@ -28,14 +28,36 @@ def _public_names() -> set[str]:
     return {c.command for c in bot.PUBLIC_COMMANDS}
 
 
+#: Commands that appear in a role block but are NOT role-gated, so listing
+#: them publicly is correct rather than a leak.
+#:
+#: /sharecontact is described in the officials block because that is where the
+#: explanation matters — an official's `phone:` only binds to their chat_id
+#: through a contact share — but anyone may run it: it stores the caller's own
+#: number and nothing else, and handle_contact refuses someone else's contact.
+#:
+#: An exemption is a hole, so this one is PROVEN, not asserted:
+#: test_every_exemption_is_really_ungated below calls each handler as an
+#: unprivileged user and fails if it is refused. Add a name here only with
+#: that proof passing.
+UNGATED_BUT_ROLE_DOCUMENTED = {"sharecontact"}
+
+
 def _gated_names() -> set[str]:
-    """Commands the role-gated help blocks advertise to their holders only."""
+    """Commands the role-gated help blocks advertise to their holders only.
+
+    OFFICIAL_COMMANDS_TEXT is included deliberately. It was added in v0.28.9
+    and, until this line, was the one block this sweep could not see — so a
+    genuinely official-only command listed in both it and the menu would have
+    passed unnoticed. A new block must be added here or the guard quietly
+    stops covering it.
+    """
     import handlers.user_basics as ub
     names: set[str] = set()
     for block in (ub.ADMIN_COMMANDS_TEXT, ub.PRAYER_COMMANDS_TEXT,
-                  ub.BOARD_COMMANDS_TEXT):
-        names |= set(re.findall(r"^/([a-z_]+)", block, re.M))
-    return names
+                  ub.BOARD_COMMANDS_TEXT, ub.OFFICIAL_COMMANDS_TEXT):
+        names |= set(re.findall(r"^`?/([a-z_]+)", block, re.M))
+    return names - UNGATED_BUT_ROLE_DOCUMENTED
 
 
 class TestTheMenuIsPublished:
@@ -76,6 +98,57 @@ class TestNoGatedCommandIsAdvertised:
             "Tapping one gets 'Unknown command', and listing it tells ~30 "
             "people a queue exists that they cannot open."
         )
+
+    def test_the_officials_block_is_in_the_sweep(self):
+        """The block this sweep could not see until v0.28.9.
+
+        /enable_appt_proxies is genuinely official-only and must therefore be
+        counted as gated; if it is not, the overlap check above is blind to
+        the whole block.
+        """
+        assert "enable_appt_proxies" in _gated_names(), (
+            "the officials block is not being read, so a gated official "
+            "command could be published to all ~30 members unnoticed"
+        )
+
+    async def test_every_exemption_is_really_ungated(self):
+        """An exemption is a hole, so prove the premise rather than trust it.
+
+        Each exempted command is called as a plain member — no admin, no
+        official, no roles — and must NOT answer with the gating refusal.
+        If someone later wraps one of these in @admin_only while leaving it
+        in UNGATED_BUT_ROLE_DOCUMENTED, this fails instead of silently
+        advertising a command that rebuffs everyone who taps it.
+        """
+        import handlers.user_basics as ub
+        import permissions
+
+        assert UNGATED_BUT_ROLE_DOCUMENTED, "nothing exempted; nothing to prove"
+        handlers = {"sharecontact": ub.cmd_sharecontact}
+        missing = UNGATED_BUT_ROLE_DOCUMENTED - handlers.keys()
+        assert not missing, f"no handler wired into this proof for: {missing}"
+
+        for name in sorted(UNGATED_BUT_ROLE_DOCUMENTED):
+            upd = MagicMock()
+            upd.effective_user.id = 999000001
+            upd.effective_user.username = "plainmember"
+            upd.effective_user.full_name = "Plain Member"
+            upd.effective_chat.id = 999000001
+            upd.message.reply_text = AsyncMock()
+            with patch.object(permissions, "is_admin", lambda u: False), \
+                 patch.object(permissions, "_is_known_official", lambda *a: False), \
+                 patch.object(permissions, "is_prayer_admin", lambda u: False), \
+                 patch.object(ub, "get_user_prefs",
+                              AsyncMock(return_value=(None, "en"))), \
+                 patch.object(ub.activity, "log_command", lambda *a, **k: None):
+                await handlers[name](upd, MagicMock())
+            said = " ".join(str(c.args[0]) for c in
+                            upd.message.reply_text.call_args_list if c.args)
+            assert said, f"/{name} replied nothing to a plain member"
+            assert "Unknown command" not in said, (
+                f"/{name} is exempted from the overlap rule as ungated, but it "
+                f"refused a plain member: {said!r}"
+            )
 
     def test_the_known_gated_families_are_absent(self):
         """Named explicitly, so a gated command that stops appearing in a help

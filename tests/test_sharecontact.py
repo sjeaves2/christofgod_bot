@@ -21,6 +21,7 @@ from __future__ import annotations
 import sys
 import warnings
 from pathlib import Path
+from contextlib import ExitStack
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -227,6 +228,156 @@ class TestItIsReachable:
 
 
 class TestItIsDocumented:
-    def test_the_admin_help_text_mentions_it(self):
-        """An admin who needs this has no way to discover it otherwise."""
-        assert "/sharecontact" in ub.ADMIN_COMMANDS_TEXT
+    """Discoverability, which this command lacked until v0.28.9.
+
+    It began life in ADMIN_COMMANDS_TEXT only. That was wrong twice over: an
+    official who is not an admin could run it but never see it, and the people
+    it exists for are precisely those whose config entry carries a `phone:` —
+    officials included. It now appears in the officials block, where the
+    explanation belongs, and in the Telegram menu, where everyone can find it.
+    """
+
+    def test_the_officials_block_explains_it(self):
+        assert "/sharecontact" in ub.OFFICIAL_COMMANDS_TEXT
+
+    def test_it_is_not_duplicated_in_the_admin_block(self):
+        """All current admins are also officials, so listing it in both would
+        print it twice in one /help for every one of them."""
+        assert "/sharecontact" not in ub.ADMIN_COMMANDS_TEXT
+
+    def test_the_telegram_menu_advertises_it(self):
+        """The route for an admin who is not an official, and for members."""
+        import bot
+        assert "sharecontact" in {c.command for c in bot.PUBLIC_COMMANDS}
+
+    def test_an_official_who_is_not_an_admin_sees_it(self):
+        """The gap that prompted all of this, stated as the real assembly."""
+        text = ub._commands_text("en", is_adm=False, is_prayer=False,
+                                 is_board=False, is_official=True)
+        assert "/sharecontact" in text
+        assert "/adminhelp" not in text, "the admin block leaked in"
+
+    def test_an_ordinary_member_does_not_get_the_officials_block(self):
+        text = ub._commands_text("en", is_adm=False, is_prayer=False,
+                                 is_board=False, is_official=False)
+        assert "/enable_appt_proxies" not in text
+        assert "*Officials:*" not in text
+
+    def test_the_officials_block_documents_the_proxy_command_too(self):
+        """It was documented NOWHERE before this block existed — not in any
+        help text and not in the Telegram menu."""
+        assert "/enable_appt_proxies" in ub.OFFICIAL_COMMANDS_TEXT
+
+
+class TestTheBlockReachesPeopleThroughTheRealCommands:
+    """Every entry point that assembles a command list, driven for real.
+
+    Found by mutation: hard-coding `is_official=False` at all three call
+    sites — cmd_help, cmd_start and bot.handle_contact — passed the ENTIRE
+    suite of 2247 tests. Asserting on `_commands_text` proves the block can
+    be assembled; it proves nothing about anyone ever receiving it, and a
+    threaded argument that no test supplies is an argument that can be
+    dropped silently.
+
+    `is_board_officer` is patched because it is async and reads the real
+    data/users.yaml; everything else is patched to put a plain official in
+    front of the handler.
+    """
+
+    @staticmethod
+    def _as_official():
+        """Patches making the caller an official and nothing else."""
+        return [
+            patch.object(ub.permissions, "_is_known_official", lambda *a: True),
+            patch.object(ub.permissions, "is_admin", lambda u: False),
+            patch.object(ub.permissions, "is_prayer_admin", lambda u: False),
+            patch.object(ub.permissions, "is_board_officer",
+                         AsyncMock(return_value=False)),
+            patch.object(ub, "get_user_prefs", AsyncMock(return_value=(None, "en"))),
+            patch.object(ub.activity, "log_command", lambda *a, **k: None),
+        ]
+
+    @staticmethod
+    def _replies(upd):
+        return " ".join(
+            str(c.args[0]) for c in upd.message.reply_text.call_args_list if c.args
+        )
+
+    async def test_help_shows_it_to_an_official(self):
+        """/help is where people actually look."""
+        upd, ctx = _update(), MagicMock()
+        ctx.args = []
+        with ExitStack() as stack:
+            for p in self._as_official():
+                stack.enter_context(p)
+            await ub.cmd_help(upd, ctx)
+        text = self._replies(upd)
+        assert "/sharecontact" in text, "an official running /help cannot see it"
+        assert "/adminhelp" not in text, "the admin block leaked to a non-admin"
+
+    async def test_start_shows_it_to_an_official(self):
+        upd, ctx = _update(), MagicMock()
+        ctx.args = []
+        with ExitStack() as stack:
+            for p in self._as_official():
+                stack.enter_context(p)
+            stack.enter_context(patch.object(
+                ub.storage, "get_all_users",
+                AsyncMock(return_value=[{"chat_id": 111, "username": "someone"}])))
+            stack.enter_context(patch.object(ub.storage, "save_users", AsyncMock()))
+            stack.enter_context(patch.object(ub, "_register_official_if_known",
+                                             AsyncMock()))
+            stack.enter_context(patch.object(ub.permissions,
+                                             "_register_admin_by_username",
+                                             AsyncMock()))
+            await ub.cmd_start(upd, ctx)
+        assert "/sharecontact" in self._replies(upd)
+
+    async def test_the_contact_share_reply_shows_it_to_an_official(self):
+        """bot.handle_contact — the moment an official has just identified
+        themselves is exactly when the officials block is most useful."""
+        import bot
+        upd = _update()
+        upd.message.contact.user_id = upd.effective_user.id
+        upd.message.contact.phone_number = "+15550001234"
+        ctx = MagicMock()
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(
+                bot.permissions, "_is_known_official", lambda *a: True))
+            stack.enter_context(patch.object(bot.permissions, "is_admin",
+                                             lambda u: False))
+            stack.enter_context(patch.object(bot.permissions, "is_prayer_admin",
+                                             lambda u: False))
+            stack.enter_context(patch.object(bot.permissions, "is_board_officer",
+                                             AsyncMock(return_value=False)))
+            stack.enter_context(patch.object(bot.permissions,
+                                             "_register_admin_by_phone", AsyncMock()))
+            stack.enter_context(patch.object(bot, "_register_official_if_known",
+                                             AsyncMock()))
+            stack.enter_context(patch.object(bot, "get_user_prefs",
+                                             AsyncMock(return_value=(None, "en"))))
+            stack.enter_context(patch.object(
+                bot.storage, "get_all_users",
+                AsyncMock(return_value=[{"chat_id": 111}])))
+            stack.enter_context(patch.object(bot.storage, "save_users", AsyncMock()))
+            stack.enter_context(patch.object(bot.activity, "log_command",
+                                             lambda *a, **k: None))
+            await bot.handle_contact(upd, ctx)
+        assert "/sharecontact" in self._replies(upd)
+
+    async def test_an_ordinary_member_gets_none_of_it_through_help(self):
+        """Paired guard: the three tests above would pass just as well if the
+        block were appended unconditionally."""
+        upd, ctx = _update(), MagicMock()
+        ctx.args = []
+        with patch.object(ub.permissions, "_is_known_official", lambda *a: False), \
+             patch.object(ub.permissions, "is_admin", lambda u: False), \
+             patch.object(ub.permissions, "is_prayer_admin", lambda u: False), \
+             patch.object(ub.permissions, "is_board_officer",
+                          AsyncMock(return_value=False)), \
+             patch.object(ub, "get_user_prefs", AsyncMock(return_value=(None, "en"))), \
+             patch.object(ub.activity, "log_command", lambda *a, **k: None):
+            await ub.cmd_help(upd, ctx)
+        text = self._replies(upd)
+        assert "*Officials:*" not in text
+        assert "/enable_appt_proxies" not in text
