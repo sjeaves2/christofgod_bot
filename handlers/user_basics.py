@@ -58,6 +58,15 @@ from telegram.helpers import escape_markdown
 
 logger = logging.getLogger(__name__)
 
+# These three blocks are sent with ParseMode.MARKDOWN (see reply_markdown),
+# so they are not free prose: a LONE `*` or `_` opens an entity Telegram never
+# closes and the whole message is rejected with 400, then resent unformatted.
+# An identifier like chat_id therefore has to be wrapped in backticks, which
+# is what the `/sharecontact` line below gets wrong in v0.28.5 and v0.28.6 —
+# three admins got plain-text help for a day before anyone noticed, because
+# the fallback hid it. The blocks are also CONCATENATED, so an odd marker in
+# one pairs with a marker in the next; tests/test_command_list_markdown.py
+# checks every role combination in every language for exactly that.
 ADMIN_COMMANDS_TEXT = """\
 *Admin commands:*
 /addevent — add a special event
@@ -75,7 +84,7 @@ ADMIN_COMMANDS_TEXT = """\
 /backup — send a data backup now (also runs nightly at 3am)
 /setboardofficer — turn the board-officer flag on or off for a registered user
 /sharecontact — re-offer the "share my contact" button, so a `phone:` added to
-    admins.yaml or officials.yaml can be matched to your chat_id (/start only
+    admins.yaml or officials.yaml can be matched to your `chat_id` (/start only
     offers it to people it does not already recognise)
 /adminhelp — show this list"""
 
