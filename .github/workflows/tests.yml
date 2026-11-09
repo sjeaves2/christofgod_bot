@@ -18,6 +18,26 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Manual trigger, so a run can be repeated on demand.
+  #
+  # Added 2026-11-09 after a release gate could not be met. GitHub dropped one
+  # matrix leg from two consecutive runs of the same code — the pull_request
+  # run for #87 ran 3.13 but never scheduled 3.12, and the push run for its
+  # merge ran 3.12 but never scheduled 3.13. Each run then reported `failure`
+  # although every job it DID schedule passed: no annotation, no failed step,
+  # fifty-one seconds. Both legs passed, but across two runs, so there was no
+  # green run on main.
+  #
+  # Neither recovery existed. GitHub refused the retry ("This workflow run
+  # cannot be retried"), the only other triggers are a push to main and a
+  # weekly cron, and that week's cron had already fired before the merge. The
+  # choices left were to tag against the gate or wait a week for a scheduled
+  # run — on code that was fine.
+  #
+  # One line removes that corner: any green run can now be demanded with
+  # `gh workflow run tests.yml --ref main`. It cannot be triggered by a fork
+  # or an outside contributor; workflow_dispatch requires write access.
+  workflow_dispatch:
   schedule:
     # Mondays 06:00 UTC. An advisory is published against code that has not
     # changed, so waiting for the next commit means waiting indefinitely — this
