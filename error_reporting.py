@@ -538,7 +538,22 @@ def _retain_traces(text: str, error_ids: set) -> str:
     return "".join(kept)
 
 
-def reset_error_log() -> int:
+def pending_error_ids() -> set:
+    """Error ids of the alerts currently held on disk.
+
+    Read BEFORE flushing, so the traces behind alerts the flush delivers can
+    still be retained — see reset_error_log and bot.post_init. After a
+    successful flush those entries are gone from the queue and their ids
+    cannot be recovered.
+
+    Falsy ids are dropped rather than passed along. `_retain_traces` tests
+    each id with `eid in line`, and None or "" would match every header line,
+    silently turning "clear the log" into "keep everything".
+    """
+    return {e.get("error_id") for e in _load_pending() if e.get("error_id")}
+
+
+def reset_error_log(also_retain: set | None = None) -> int:
     """Clear logs/errors.log at startup and forget in-memory alert state.
 
     A restart normally means new code, so traces from the previous run refer to
@@ -551,11 +566,22 @@ def reset_error_log() -> int:
     process after a sustained outage — so clearing it at startup would discard
     precisely the alerts this is meant to preserve. post_init flushes it.
 
-    The traces those held alerts point at are kept too. Every alert ends with
-    "Full trace: logs/errors.log (search ERR-XXXXXX)", and clearing the file
-    wholesale would send the admin to an empty log — the one case where last
-    run's traces are NOT stale, because the alert about them has not been
-    delivered yet.
+    Traces are kept for two sets of alerts, because every alert ends with
+    "Full trace: logs/errors.log (search ERR-XXXXXX)" and clearing the file
+    wholesale sends the reader to an empty log:
+
+      * alerts STILL held, whose send failed again — found via _load_pending
+      * alerts in *also_retain*, which post_init captures before flushing
+
+    The second set is the bug this parameter exists for. post_init flushes the
+    queue and THEN calls this, so a DELIVERED alert is no longer pending by the
+    time this runs: before v0.28.12 its trace was deleted seconds after the
+    admin was told to go and read it. The alert that arrived was the one whose
+    trace did not survive — the exact inverse of what was intended.
+
+    A dangling pointer is worse than no pointer. The reader concludes the
+    logging is broken, or that they misread the id, and stops trusting alerts
+    that did arrive.
     """
     _alert_state.clear()
     _episodes.clear()
@@ -563,13 +589,14 @@ def reset_error_log() -> int:
         if not ERRORS_LOG.exists():
             return 0
         size = ERRORS_LOG.stat().st_size
+        keep_ids = pending_error_ids() | {e for e in (also_retain or ()) if e}
         retained = _retain_traces(ERRORS_LOG.read_text(encoding="utf-8"),
-                                  {e.get("error_id") for e in _load_pending()})
+                                  keep_ids)
         ERRORS_LOG.write_text(retained, encoding="utf-8")
         size -= len(retained.encode("utf-8"))
         if retained:
-            logger.info("Kept the trace(s) behind %d undelivered alert(s).",
-                        len(_load_pending()))
+            logger.info("Kept the trace(s) behind %d alert(s) still being "
+                        "referenced.", len(keep_ids))
         if size:
             logger.info("Cleared %s (%d bytes) from the previous run.", ERRORS_LOG.name, size)
         return size

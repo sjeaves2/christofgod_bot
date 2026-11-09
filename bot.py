@@ -604,13 +604,19 @@ def _register_jobs(app: Application) -> None:
 
 
 async def post_init(app: Application) -> None:
+    # Which traces are spoken for, read BEFORE the flush. A delivered alert is
+    # removed from the queue, so after flushing there is no way to tell that it
+    # ever pointed at a trace — and reset_error_log would delete the trace
+    # seconds after the admin was told to go and read it.
+    held_error_ids = error_reporting.pending_error_ids()
     # Held alerts first, before anything else can fail: if the watchdog exited
     # the process over a sustained outage, the alert explaining why is sitting
     # on disk and this is the first moment it can be delivered.
     await error_reporting.flush_pending_alerts(app.bot)
-    # A restart usually means new code, so last run's traces are stale.
-    # (reset_error_log leaves the held alerts alone — deliberately.)
-    error_reporting.reset_error_log()
+    # A restart usually means new code, so last run's traces are stale — except
+    # the ones an alert points at, delivered just above or still waiting.
+    # (reset_error_log leaves the held alerts themselves alone — deliberately.)
+    error_reporting.reset_error_log(also_retain=held_error_ids)
     await schedule_all_upcoming(app)
     await alert_on_bad_service_links(app)
 
