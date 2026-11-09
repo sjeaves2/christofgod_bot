@@ -770,20 +770,29 @@ def _replace_appt(appts: list[dict], appt: dict) -> None:
     nothing. Gutting the loop survives the entire dispatch snapshot, because
     there is no behaviour to observe.
 
-    It is kept, and extracted rather than deleted, for two reasons. It is the
-    contract the save path assumes — records are loaded as a list and saved as
-    a list, so a caller holding a COPY must put it back — and that case is
-    what the direct tests in tests/test_appt_callback_dispatch.py pin, since
-    no test driving the router can. And deleting nine copies of a defensive
-    loop in the same commit that restructures the branches around them would
-    mix a behaviour question into a pure move.
+    It is kept, and extracted rather than deleted, because it is the contract
+    the save path assumes: records are loaded as a list and saved as a list,
+    so a caller holding a COPY must put it back. That case is what the direct
+    tests in tests/test_appt_callback_dispatch.py pin
+    (test_replace_appt_writes_a_copy_back), since no test driving the router
+    can — through the router it is a no-op either way.
 
-    This loop was written out nine times in this module. Six are in other
-    functions and are left alone: they are covered by the suite but not by
-    appt_callback_dispatch.snapshot, and a mechanical change is worth making
-    under a pin rather than beside one. A tenth site, in
-    cmd_cancelappointment, sets a status field instead of replacing the record
-    and is deliberately NOT this function.
+    As of v0.28.13 this is the ONLY copy of the loop. It was written out eight
+    times; the six inline copies in _finalize_appointment,
+    handle_counter_propose_message (three branches), rs_newtime and
+    _handle_reschedule_response now call this instead. That was a pure move —
+    every one of them was a no-op for the same aliasing reason, verified by
+    deleting all six and seeing 2303/2303 still pass.
+
+    They were consolidated rather than deleted deliberately. **The suite
+    cannot tell this loop live from dead**, so if some future caller does hold
+    a copy, deleting the write-back would break persistence with nothing
+    failing. One tested place to answer that question is worth more than six
+    silent assumptions that `next()` returned a live reference.
+
+    ca_confirm keeps its own loop and is deliberately NOT this function: it
+    sets `appts[i]["status"]` and stamps the action by index rather than
+    replacing the record, and it breaks on the first match.
     """
     for index, existing in enumerate(appts):
         if existing["id"] == appt["id"]:
@@ -1050,9 +1059,7 @@ async def _finalize_appointment(
     """Save confirmed appointment and send ICS to both the user and the official."""
     _stamp_appt_action(appt)
     appt.pop("reminders_sent", None)  # re-arm reminder DMs for the (new) time
-    for i, a in enumerate(appts):
-        if a["id"] == appt["id"]:
-            appts[i] = appt
+    _replace_appt(appts, appt)
     await storage.save_appointments(appts)
 
     confirmed_dt = datetime.fromisoformat(appt["confirmed_datetime"])
@@ -1129,9 +1136,7 @@ async def handle_counter_propose_message(
     if role == "user" and text.lower() == "cancel":
         appt["status"] = "cancelled"
         _stamp_appt_action(appt)
-        for i, a in enumerate(appts):
-            if a["id"] == appt_id:
-                appts[i] = appt
+        _replace_appt(appts, appt)
         await storage.save_appointments(appts)
         await update.message.reply_text("Request cancelled.")
         return
@@ -1168,9 +1173,7 @@ async def handle_counter_propose_message(
         # Official suggests new time → notify user
         appt["counter_datetime"] = new_dt.isoformat()
         appt["status"] = "counter_proposed"
-        for i, a in enumerate(appts):
-            if a["id"] == appt_id:
-                appts[i] = appt
+        _replace_appt(appts, appt)
         await storage.save_appointments(appts)
         await update.message.reply_text(f"✅ Suggested time sent to the user: {new_dt_str}")
         kb = InlineKeyboardMarkup([
@@ -1192,9 +1195,7 @@ async def handle_counter_propose_message(
     else:
         # User suggests alternative → notify the negotiator (official or their proxy)
         appt["user_counter_datetime"] = new_dt.isoformat()
-        for i, a in enumerate(appts):
-            if a["id"] == appt_id:
-                appts[i] = appt
+        _replace_appt(appts, appt)
         await storage.save_appointments(appts)
         await update.message.reply_text(f"✅ Your suggested time has been forwarded: {new_dt_str}")
         off = permissions._official_by_id(appt["official_id"])
@@ -1554,9 +1555,7 @@ async def rs_newtime(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         appt["negotiator_chat_id"] = uid
         appt["negotiator_name"] = name or "The official"
         appt["negotiator_is_proxy"] = is_proxy
-    for i, a in enumerate(appts):
-        if a["id"] == appt_id:
-            appts[i] = appt
+    _replace_appt(appts, appt)
     await storage.save_appointments(appts)
 
     new_dt_str = format_dt(new_dt)
@@ -1618,9 +1617,7 @@ async def _handle_reschedule_response(
     def _clear_and_store():
         appt.pop("reschedule_proposed_datetime", None)
         appt.pop("reschedule_proposed_by", None)
-        for i, a in enumerate(appts):
-            if a["id"] == appt_id:
-                appts[i] = appt
+        _replace_appt(appts, appt)
 
     proposer_chat = (appt["user_chat_id"] if proposed_by == "user"
                      else appt.get("negotiator_chat_id")
