@@ -208,3 +208,55 @@ class TestOneCommitDoesNotRunTheWorkflowTwice:
         would spend a full CI run on each one, re-testing a commit that was
         already green on main."""
         assert "tags" not in (triggers.get("push") or {})
+
+    def test_a_manual_trigger_does_not_add_an_automatic_event(self, triggers):
+        """workflow_dispatch must not reintroduce the duplication above.
+
+        It fires only when somebody asks for it, so it cannot double up with
+        push or pull_request — but assert it rather than assume it, because
+        the obvious wrong fix for "I cannot re-run CI" is a broader `push:`.
+        """
+        assert "workflow_dispatch" in triggers
+        assert not _push_fires(triggers, "some-feature-branch")
+
+
+class TestCIRunsCanBeRepeatedOnDemand:
+    """A release gate you cannot satisfy is a release gate that gets skipped.
+
+    On 2026-11-09 GitHub dropped one matrix leg from two consecutive runs of
+    the same code: the pull_request run for #87 scheduled 3.13 but never
+    3.12, the push run for its merge scheduled 3.12 but never 3.13. Each run
+    reported `failure` while every job it did schedule passed. Both legs
+    passed, but across two runs, so `main` had no green run.
+
+    Recovery did not exist. GitHub refused the retry outright, and the only
+    other triggers were a push to main and a weekly cron that had already
+    fired. The remaining choices were to tag against the standing "green on
+    main first" rule, or wait a week — for code that was fine.
+    """
+
+    def test_a_run_can_be_started_by_hand(self, triggers):
+        assert "workflow_dispatch" in triggers, (
+            "without workflow_dispatch the only ways to get a green run on "
+            "main are another push or the weekly cron, so a dropped matrix "
+            "leg blocks tagging for up to a week"
+        )
+
+    def test_it_covers_the_test_job_and_not_a_separate_stub(self, wf):
+        """The trigger is worthless if the dispatched run skips the matrix.
+
+        A dispatch must exercise the same job, on the same interpreters, as a
+        push to main — otherwise a green dispatched run would not be evidence
+        of anything.
+        """
+        job = wf["jobs"]["test"]
+        versions = job["strategy"]["matrix"]["python-version"]
+        assert [str(v) for v in versions] == ["3.12", "3.13"], (
+            f"dispatched runs would cover {versions}, which is not what a "
+            f"push to main covers"
+        )
+        conditioned = job.get("if")
+        assert conditioned is None, (
+            f"the test job is gated on `if: {conditioned}` — a manually "
+            f"dispatched run could skip it entirely and still report green"
+        )
