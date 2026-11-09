@@ -251,13 +251,40 @@ async def _refresh_user_identity(uid: int, uname: str | None, dname: str) -> Non
 
 
 async def _known_admin_chat_ids() -> set:
-    """Chat ids we can message admins on: phone-registered admins plus any
-    registered user whose current username is listed in admins.yaml."""
+    """Chat ids we can message admins on.
+
+    Three routes, matching error_reporting.ops_chat_ids(). The first two are
+    both perishable:
+
+      * `permissions._admin_chat_ids` — somebody shared a contact during THIS
+        process. Rebuilt from empty on every start, so it says nothing about
+        anyone after a restart.
+      * a registered user whose CURRENT username is in admins.yaml. Stops
+        matching the day that person changes their Telegram handle.
+      * a registered user whose STORED phone is in admins.yaml.
+
+    The stored-phone route was missing until v0.28.10. `permissions` already
+    treats a phone as conferring admin rights — _register_admin_by_phone adds
+    the sharer to `_admin_chat_ids` — but that set is in-memory only, so a
+    `phone:`-configured admin with no username could use admin commands until
+    the next restart and then silently stop being messaged. The config said
+    they were an admin; delivery disagreed, and nothing reported the gap.
+    """
     ids = set(permissions._admin_chat_ids)
     for u in await storage.get_all_users():
+        chat_id = u.get("chat_id")
+        if not chat_id:
+            continue
         uname = (u.get("username") or "").lstrip("@").lower()
-        if uname and uname in permissions.ADMIN_USERNAMES and u.get("chat_id"):
-            ids.add(u["chat_id"])
+        if uname and uname in permissions.ADMIN_USERNAMES:
+            ids.add(chat_id)
+            # Skips a redundant phone compare, nothing more: both branches can
+            # only add this same chat_id and `ids` is a set. Deleting this line
+            # is an EQUIVALENT mutation — no test can kill it.
+            continue
+        phone = permissions.normalize_phone(u.get("phone"))
+        if phone and phone in permissions.ADMIN_PHONES:
+            ids.add(chat_id)
     return ids
 
 

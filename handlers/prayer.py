@@ -214,12 +214,35 @@ async def purge_old_stubs(now: "datetime | None" = None) -> int:
 
 
 async def prayer_admin_chat_ids() -> set:
-    """Chat ids of admins with `prayer: true` who have started the bot."""
+    """Chat ids of admins with `prayer: true` who have started the bot.
+
+    Three routes, matching error_reporting.ops_chat_ids(). See the note in
+    bot._known_admin_chat_ids — this had the same gap for the same reason.
+
+    The stored-phone route grants NO access that admins.yaml did not already
+    grant: permissions._register_admin_by_phone already adds a PRAYER_PHONES
+    match to `_prayer_chat_ids`, and is_prayer_admin already honours it. What
+    was broken is that the grant evaporated at the next restart, so a
+    `phone:`-configured prayer admin could read requests for one process
+    lifetime and then quietly stop receiving them.
+
+    Delivery failure matters more here than anywhere else in the bot: a
+    prayer request that reaches nobody is somebody in distress being ignored,
+    and the sender is told it went through.
+    """
     ids = set(permissions._prayer_chat_ids)
     for u in await storage.get_all_users():
+        chat_id = u.get("chat_id")
+        if not chat_id:
+            continue
         uname = (u.get("username") or "").lstrip("@").lower()
-        if uname and uname in permissions.PRAYER_USERNAMES and u.get("chat_id"):
-            ids.add(u["chat_id"])
+        if uname and uname in permissions.PRAYER_USERNAMES:
+            ids.add(chat_id)
+            # Equivalent mutation if deleted — see _known_admin_chat_ids.
+            continue
+        phone = permissions.normalize_phone(u.get("phone"))
+        if phone and phone in permissions.PRAYER_PHONES:
+            ids.add(chat_id)
     return ids
 
 
