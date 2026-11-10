@@ -1,0 +1,31 @@
+# systemd unit TEMPLATE for the daily config snapshot.
+#
+# __REPO_DIR__ and __RUN_USER__ are substituted by deploy/setup.sh, exactly as
+# for christofgod-bot.service.template, so the unit follows wherever the repo
+# is cloned and whoever runs it.
+#
+# To install by hand instead:
+#   sed -e "s|__REPO_DIR__|$PWD|g" -e "s|__RUN_USER__|$(id -un)|g" \
+#       deploy/christofgod-config-backup.service.template |
+#     sudo tee /etc/systemd/system/christofgod-config-backup.service
+#   sudo install -m 644 deploy/christofgod-config-backup.timer \
+#       /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now christofgod-config-backup.timer
+
+[Unit]
+Description=Daily snapshot of christofgod_bot untracked config files
+Documentation=file://__REPO_DIR__/deploy/backup-config.sh
+
+[Service]
+Type=oneshot
+User=__RUN_USER__
+ExecStart=__REPO_DIR__/deploy/backup-config.sh
+
+# The snapshots contain the bot token and real personal data. The script
+# chmods every file it writes, but a tight umask means even a file added here
+# later cannot land group- or world-readable by accident.
+UMask=0077
+
+# Nothing waits on this; let the bot have the CPU.
+Nice=10

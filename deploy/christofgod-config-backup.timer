@@ -1,0 +1,26 @@
+# Daily timer for the config snapshot. No substitution needed, so this is
+# installed verbatim rather than rendered from a template.
+
+[Unit]
+Description=Daily config backup for christofgod_bot
+
+[Timer]
+# 04:15 local, and the time is load-bearing — do not round it to 03:00 or
+# tuck it in before 03:00:
+#   * 02:55 is the unattended-upgrades automatic reboot.
+#   * 03:00–03:45 belongs to the bot's nightly data backup, which retries
+#     RETRY_ATTEMPTS=3 times at RETRY_DELAY=15min on a failed send.
+# 04:15 is clear of both with margin. Server TZ and bot TZ are both
+# America/New_York, so this needs no conversion.
+OnCalendar=*-*-* 04:15:00
+
+# Catch up a run missed to a reboot or a shutdown that straddled 04:15.
+# Without this, the 02:55 auto-reboot landing badly could silently leave a
+# hole in the retention window — and a backup you find out was missing only
+# when you need it is the failure this whole unit exists to prevent.
+Persistent=true
+
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
