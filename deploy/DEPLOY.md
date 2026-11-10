@@ -216,6 +216,16 @@ cd ~/repos/christofgod_bot && ./deploy/update.sh v0.9.0   # a specific release
 imports **before** restarting, and rolls back if it does not — so a bad pull
 leaves the running bot alone instead of taking the congregation's bot offline.
 
+> **Use `update.sh`. Do not deploy by hand with `git checkout`.**
+> On 2026-11-10 a hand-run `git checkout main` on the server destroyed
+> `config/admins.yaml` and `config/officials.yaml`. The server's local `main`
+> was months-stale pre-rewrite history that still **tracked** those two files;
+> they are gitignored now, and git replaces or deletes ignored files without
+> warning. Checking the release tag back out then removed them, and the only
+> copy on the box was six days old. If you must intervene by hand, check out
+> the **tag** (`git checkout v0.28.14`) and never a branch, and take a config
+> snapshot first (`./deploy/backup-config.sh`).
+
 ## Before you migrate — two housekeeping items
 
 1. **Do not copy `logs/bot.log`.** It has historically contained the live bot
@@ -235,8 +245,24 @@ leaves the running bot alone instead of taking the congregation's bot offline.
   at each restart). systemd also keeps a copy in journald.
 * **Errors.** Unhandled exceptions DM admins with `ops: true`, carrying an
   `ERR-XXXXXX` id that matches an entry in `logs/errors.log`.
-* **Backups.** Lightsail snapshots cover the whole disk. `data/` is what matters
-  — it is the only copy of registrations and appointments.
+* **Backups.** Three separate things, and they do not overlap:
+  * Lightsail snapshots cover the whole disk.
+  * The bot DMs a zip of `data/` to ops admins nightly at 03:00 — `data/` is
+    the only copy of registrations and appointments.
+  * `christofgod-config-backup.timer` snapshots `config/*.yaml` daily at 04:15
+    to `~/config-backups/YYYY-MM-DD/`, kept 14 days (`deploy/backup-config.sh`).
+
+  The third exists because the second **cannot** cover `config/`:
+  `config.yaml` holds the live bot token and `admins.yaml`/`officials.yaml`
+  name real people, so they must never go through Telegram. Those three files
+  are gitignored, which means git will replace or delete them without warning
+  — losing them loses admin rights, prayer-reader assignments and officials'
+  `chat_id` bindings, none of which exist anywhere else. Restoring from a
+  snapshot is just `cp -p ~/config-backups/<date>/*.yaml config/` followed by a
+  restart.
+
+  Check it with `systemctl list-timers christofgod-config-backup.timer` and
+  `journalctl -u christofgod-config-backup`.
 * **Resources.** If you ever want to check: `free -h`, `df -h`,
   `systemctl status christofgod-bot`.
 

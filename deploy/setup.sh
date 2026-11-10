@@ -13,6 +13,7 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV="$REPO_DIR/.venv"
 SERVICE_NAME="christofgod-bot"
+BACKUP_NAME="christofgod-config-backup"
 
 cd "$REPO_DIR"
 
@@ -116,6 +117,21 @@ sed -e "s|__REPO_DIR__|${REPO_DIR}|g" -e "s|__RUN_USER__|${RUN_USER}|g" \
 echo "    service will run as ${RUN_USER} from ${REPO_DIR}"
 sudo systemctl daemon-reload
 sudo systemctl enable "$SERVICE_NAME"
+
+echo "==> Installing the daily config backup timer"
+# config/config.yaml, admins.yaml and officials.yaml are the three files the
+# bot's own nightly backup deliberately CANNOT cover (token, real people — see
+# handlers/backup.py), so they have no other copy. Installed here rather than
+# left as a manual step because a rebuilt box would otherwise come up with no
+# config backup and nothing to say so. See deploy/backup-config.sh for the
+# incident that prompted it.
+sed -e "s|__REPO_DIR__|${REPO_DIR}|g" -e "s|__RUN_USER__|${RUN_USER}|g" \
+    "deploy/${BACKUP_NAME}.service.template" \
+    | sudo tee "/etc/systemd/system/${BACKUP_NAME}.service" > /dev/null
+sudo install -m 644 "deploy/${BACKUP_NAME}.timer" "/etc/systemd/system/"
+sudo systemctl daemon-reload
+sudo systemctl enable --now "${BACKUP_NAME}.timer"
+echo "    config snapshots: \$HOME/config-backups, kept 14 days, daily at 04:15"
 
 echo "==> Starting the bot"
 sudo systemctl restart "$SERVICE_NAME"
