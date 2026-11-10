@@ -1,5 +1,7 @@
 """Tests for cache.py — file-backed in-memory cache."""
 
+import ast
+import asyncio
 import sys
 from pathlib import Path
 
@@ -7,6 +9,8 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from cache import FileCache
+
+SOURCE = Path(__file__).parent.parent / "cache.py"
 
 
 # ---------------------------------------------------------------------------
@@ -237,16 +241,16 @@ class TestSaveKey:
         data = await cache.get()
         assert data == {"other": 1, "fresh": [1, 2]}
 
-    async def test_a_save_with_no_preceding_read_starts_a_fresh_document(
+    async def test_a_save_with_no_preceding_read_keeps_the_other_keys(
             self, tmp_path):
-        """The documented LIMITATION, pinned so it is a known quantity rather
-        than a surprise.
+        """Fixed in v0.28.14. This test is the INVERSION of the one that
+        pinned the bug, as that test's own failure message asked for.
 
-        `_data` is None until something loads the file, so an unread file's
-        other keys are lost. Latent, not live: every caller in storage.py reads
-        before writing. Fixing it means awaiting get() first, which makes the
-        write path reload from disk — a behaviour change that breaks tests
-        relying on the cached copy, so it is deliberately NOT done here.
+        Before: `_data` is None on a cold cache, so `_data or {}` started a
+        fresh document and the file's other top-level keys were silently
+        dropped. It never fired in production — every caller in storage.py
+        reads first, and each of those files holds one top-level key — so this
+        is the only test standing between the bug and a return to it.
         """
         import yaml
         p = tmp_path / "s.yaml"
@@ -254,9 +258,138 @@ class TestSaveKey:
                      encoding="utf-8")
         cache = FileCache(p)          # nothing has read it yet
         await cache.save_key("users", [{"id": 1}])
-        assert "keep" not in await cache.get(), (
-            "save_key now preserves keys across an unread file — if that was "
-            "done deliberately, this test should be inverted, not deleted"
+
+        data = await cache.get()
+        assert data["keep"] == "this", (
+            "a cold save_key dropped another top-level key — the v0.28.14 "
+            "regression, and it loses data silently"
+        )
+        assert data["users"] == [{"id": 1}]
+        assert yaml.safe_load(p.read_text(encoding="utf-8")) == {
+            "users": [{"id": 1}], "keep": "this"
+        }, "the merge happened in memory but not on disk"
+
+    async def test_a_cold_save_inside_the_throttle_window_still_loads(
+            self, tmp_path):
+        """The branch the obvious fix misses.
+
+        `_refresh_locked` only stats the file once per `_MTIME_CHECK_INTERVAL`.
+        A cache constructed and written to within that window takes the
+        throttled path, where the original code returned `_data` untouched —
+        still None — and the merge would start from {} again. So "call the
+        refresh helper" is not sufficient on its own; the cold-cache check in
+        the throttled branch is load-bearing.
+
+        Simulated by stamping `_last_check`, which is what a cache that was
+        read moments ago looks like.
+        """
+        import time as _time
+        import yaml
+        p = tmp_path / "s.yaml"
+        p.write_text(yaml.safe_dump({"users": [], "keep": "this"}),
+                     encoding="utf-8")
+        cache = FileCache(p)
+        cache._last_check = _time.time()   # inside the throttle window
+        assert cache._data is None, "fixture no longer sets up a cold cache"
+
+        await cache.save_key("users", [{"id": 1}])
+        assert (await cache.get())["keep"] == "this", (
+            "the throttled branch left _data as None and the merge started "
+            "from an empty document"
+        )
+
+    async def test_save_key_does_not_deadlock(self, tmp_path):
+        """`asyncio.Lock` is not reentrant.
+
+        The tempting one-line fix is `data = await self.get() or {}`, but
+        save_key now holds the lock while it refreshes, so an inner `get()`
+        would wait on a lock its own caller holds — and the bot would HANG
+        rather than fail. A hang in the suite looks like a stuck CI job, not a
+        red test, so it is given an explicit timeout here.
+        """
+        cache = FileCache(tmp_path / "s.yaml")
+        await asyncio.wait_for(cache.save_key("users", [{"id": 1}]), timeout=5)
+        assert (await cache.get())["users"] == [{"id": 1}]
+
+    async def test_concurrent_saves_do_not_lose_each_other(self, tmp_path):
+        """Both keys survive two save_keys issued together.
+
+        Honest about its reach: this does NOT distinguish the single-lock
+        implementation from an `await get()` / `await save()` pair. It was
+        written believing it would, and it does not — an uncontended
+        `asyncio.Lock` acquire never yields, so that pair has no suspension
+        point between read and write and nothing can interleave either way.
+        Both implementations pass, measured, not guessed.
+
+        It is kept because it pins the OUTCOME that matters (no writer erases
+        another's key) and would catch a future rewrite that genuinely does
+        suspend mid-update. The structural difference is pinned separately in
+        TestSaveKeyIsAtomicByConstruction below.
+        """
+        cache = FileCache(tmp_path / "s.yaml")
+        await cache.save({})
+        await asyncio.gather(
+            cache.save_key("users", [{"id": 1}]),
+            cache.save_key("items", [{"id": 2}]),
+        )
+        data = await cache.get()
+        assert data == {"users": [{"id": 1}], "items": [{"id": 2}]}, (
+            f"a concurrent save_key lost the other writer's key: {data}"
+        )
+
+    async def test_a_cold_save_to_a_missing_file_still_works(self, tmp_path):
+        """The refresh must not turn a missing file into an error. First write
+        of a brand-new data file goes through exactly this path."""
+        p = tmp_path / "nested" / "new.yaml"
+        cache = FileCache(p)
+        await cache.save_key("users", [{"id": 1}])
+        assert (await cache.get()) == {"users": [{"id": 1}]}
+        assert p.exists()
+
+    async def test_the_merge_sees_a_fresh_read_not_a_stale_snapshot(
+            self, tmp_path):
+        """A reload between read and write must not be clobbered.
+
+        This is the narrow case the two-call version WOULD get wrong if it
+        ever suspended: holding a reference to the pre-reload dict and writing
+        it back afterwards. Simulated here by forcing the reload to land
+        inside the update, which single acquisition makes impossible.
+        """
+        import yaml
+        p = tmp_path / "s.yaml"
+        p.write_text(yaml.safe_dump({"users": [], "note": "on disk"}),
+                     encoding="utf-8")
+        cache = FileCache(p)
+        cache._data = {"users": [], "note": "stale cache"}
+        cache._last_check = 0.0        # next access will stat and reload
+
+        await cache.save_key("users", [{"id": 1}])
+        assert (await cache.get())["note"] == "on disk", (
+            "save_key wrote a stale snapshot over the reloaded document"
+        )
+
+    async def test_an_external_edit_is_merged_rather_than_clobbered(
+            self, tmp_path):
+        """The deliberate behaviour change, pinned so it is not mistaken for a
+        bug later.
+
+        These YAML files are hand-edited by admins. The write path now sees an
+        edit made within `_RELOAD_WINDOW` instead of overwriting it from a
+        stale cache. Documented in save_key's docstring as intended.
+        """
+        import yaml
+        p = tmp_path / "s.yaml"
+        cache = FileCache(p)
+        await cache.save({"users": [], "note": "original"})
+
+        # An admin edits the file by hand, just now.
+        p.write_text(yaml.safe_dump({"users": [], "note": "hand edited"}),
+                     encoding="utf-8")
+        cache._last_check = 0.0        # let the next access stat the file
+
+        await cache.save_key("users", [{"id": 1}])
+        assert (await cache.get())["note"] == "hand edited", (
+            "the admin's hand edit was clobbered by the stale cache"
         )
 
 
@@ -298,3 +431,83 @@ class TestStorageUsesLateBinding:
             storage.prayer_cache = original
         assert not any(r.get("id") == "PR-ISOLATED"
                        for r in await storage.get_prayer_requests())
+
+
+class TestSaveKeyIsAtomicByConstruction:
+    """save_key must hold the lock across the whole read-modify-write.
+
+    Structural, deliberately. The alternative implementation —
+
+        data = await self.get() or {}
+        data[key] = value
+        await self.save(data)
+
+    behaves identically today and passes every behavioural test in this file,
+    which was measured rather than assumed. The difference only becomes real
+    once something in that gap yields, and then it is a silent lost write. So
+    the guard has to be structural or it does not exist: a behavioural test
+    here would be a test that proves nothing.
+
+    See save_key's docstring for why single acquisition is the shape, and for
+    the correction of an earlier, wrong claim that the two-call version races
+    today.
+    """
+
+    @staticmethod
+    def _save_key_node() -> ast.AsyncFunctionDef:
+        tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "save_key":
+                return node
+        raise AssertionError("FileCache.save_key not found — renamed?")
+
+    def test_it_takes_the_lock_exactly_once(self):
+        node = self._save_key_node()
+        locks = [n for n in ast.walk(node)
+                 if isinstance(n, ast.AsyncWith)
+                 and "self._lock" in ast.unparse(n.items[0].context_expr)]
+        assert len(locks) == 1, (
+            f"save_key acquires self._lock {len(locks)} times; it must hold it "
+            f"once across the whole read-modify-write"
+        )
+
+    def test_it_does_not_call_the_locking_public_methods(self):
+        """`get` and `save` each take the lock themselves.
+
+        Calling either from inside save_key's locked block DEADLOCKS the bot —
+        asyncio.Lock is not reentrant — and calling them instead of the block
+        gives up atomicity. Both are caught here.
+
+        The docstring is stripped before unparsing. save_key's own docstring
+        DISCUSSES `await self.get()`, so unparsing the whole node matches that
+        prose and fails against correct code — it did, on this test's first
+        run. Same trap as the `break` search in test_appt_write_back.py: ask
+        about the code, not the text that happens to sit next to it.
+        """
+        node = self._save_key_node()
+        statements = [n for n in node.body
+                      if not (isinstance(n, ast.Expr)
+                              and isinstance(n.value, ast.Constant)
+                              and isinstance(n.value.value, str))]
+        assert statements, "save_key has no code outside its docstring"
+        body = "\n".join(ast.unparse(n) for n in statements)
+        for forbidden in ("await self.get()", "await self.save("):
+            assert forbidden not in body, (
+                f"save_key calls {forbidden} — see its docstring: inside the "
+                f"lock this deadlocks, outside it the update stops being "
+                f"atomic by construction"
+            )
+
+    def test_the_locked_helpers_do_not_take_the_lock_themselves(self):
+        """The helpers exist to be called with the lock already held. If one
+        acquires it, every caller deadlocks."""
+        tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
+        for name in ("_refresh_locked", "_write_locked"):
+            node = next((n for n in ast.walk(tree)
+                         if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                         and n.name == name), None)
+            assert node is not None, f"{name} is gone; update this guard with it"
+            assert "self._lock" not in ast.unparse(node), (
+                f"{name} acquires the lock, but its callers already hold it — "
+                f"this deadlocks rather than failing"
+            )
