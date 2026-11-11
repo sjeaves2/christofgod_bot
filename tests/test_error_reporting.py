@@ -67,6 +67,69 @@ class TestTheSuiteCannotTouchTheRealLogs:
                 f"logs/ directory. Add it to the _isolate_logs fixture in "
                 f"tests/conftest.py — a test run must never write there.")
 
+    # ------------------------------------------------------------------
+    # The ActivityLogger, which the two tests above do NOT cover: it is an
+    # object held by value in 15 modules, not a Path constant in this one.
+    #
+    # That gap was real. Until 2026-11-11 the conftest rebinding was a
+    # hardcoded list of eight modules, and the six it missed (handlers.board,
+    # handlers.prayer, handlers.worship, handlers.backup, handlers.shared,
+    # network_watchdog) kept the production logger: a measured 99 lines per
+    # suite run into the real logs/bot_activity.log, mostly `[COMMAND] Board`.
+    # deploy/DEPLOY.md asserted that isolation prevented this. It did not.
+    #
+    # Nothing failed, for the same reason PENDING_ALERTS went unnoticed for
+    # three releases: logs/ is gitignored, so git status never showed it.
+    # ------------------------------------------------------------------
+
+    def _modules_holding_an_activity_logger(self):
+        """{module name: logger} for every loaded module holding one."""
+        found = {}
+        for name, module in list(sys.modules.items()):
+            if module is None:
+                continue
+            try:
+                logger = getattr(module, "activity", None)
+            except Exception:  # noqa: BLE001 - a lazy module must not break the scan
+                continue
+            if logger is not None and hasattr(logger, "logs_dir"):
+                found[name] = logger
+        return found
+
+    def test_the_activity_scan_finds_the_modules_it_is_meant_to_check(self):
+        """Vacuity guard. A scan that finds nothing passes forever, which is
+        how the hardcoded list survived as long as it did.
+
+        It imports handlers.board rather than counting what happens to be
+        loaded. A first draft of this test asserted `len(found) >= 5` and so
+        passed under the full suite but FAILED when this file ran alone — the
+        count depends on test selection, which is not a property of the code.
+        handlers.board is one of the six modules the old hardcoded list missed,
+        and `from settings import activity` binds it by value on import.
+        """
+        import importlib
+
+        importlib.import_module("handlers.board")
+        found = self._modules_holding_an_activity_logger()
+        assert "settings" in found, sorted(found)
+        assert "handlers.board" in found, (
+            f"the scan cannot see a module that binds the logger by value; "
+            f"found {sorted(found)}")
+
+    def test_no_module_logs_activity_into_the_repository(self):
+        """The real property: whatever conftest rebinds, no loaded module may
+        hold a logger pointed at the repository's own logs/."""
+        repo_logs = (Path(__file__).resolve().parents[1] / "logs").resolve()
+        offenders = sorted(
+            name for name, logger in self._modules_holding_an_activity_logger().items()
+            if Path(logger.logs_dir).resolve() == repo_logs)
+        assert not offenders, (
+            f"{offenders} still hold the PRODUCTION ActivityLogger, so this run "
+            f"is appending fake COMMAND lines to {repo_logs}/bot_activity.log "
+            f"and distorting /stats. _isolate_logs in tests/conftest.py rebinds "
+            f"by identity over sys.modules — a module that escapes it captured "
+            f"the logger under another name.")
+
 
 class TestClassification:
     def test_network_errors_are_transient(self):
