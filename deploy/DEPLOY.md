@@ -235,8 +235,21 @@ leaves the running bot alone instead of taking the congregation's bot offline.
 2. **Leave `logs/bot_activity.log` behind.** Years of test runs wrote real
    COMMAND entries into it, which is why `/stats` reported ~10,600 commands for
    a twelve-member congregation. Starting empty makes `/stats` meaningful from
-   day one. (Test isolation now prevents this; the old data cannot be cleaned
-   reliably.)
+   day one. The old data cannot be cleaned reliably.
+
+   This note used to claim "test isolation now prevents this." **It did not,
+   until 2026-11-11.** `tests/conftest.py` rebound the shared `ActivityLogger`
+   in a hardcoded list of eight modules, and six others import it by value —
+   so a full suite run was measured appending 99 lines, mostly
+   `[COMMAND] Board`, to the developer's real `logs/bot_activity.log`. The
+   rebinding is now derived by identity from `sys.modules`, and
+   `TestTheSuiteCannotTouchTheRealLogs` fails if any loaded module holds a
+   logger writing inside the repository. A full suite run now leaves the file
+   byte-identical.
+
+   Production was never affected: `logs/` is gitignored and `migrate.sh` skips
+   it, so the pollution stayed on developer machines. That is also why nothing
+   noticed for so long.
 
 ## Operating notes
 
