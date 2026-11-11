@@ -92,6 +92,98 @@ class TestClassification:
         assert er.is_transient(_raise(ValueError, "real bug")) is False
 
 
+def _network_error_subclasses():
+    """Every loaded subclass of telegram.error.NetworkError, recursively.
+
+    `import telegram.error` is explicit: __subclasses__() only sees classes
+    that have actually been imported, so without it this walk could come back
+    short and the guard below would pass by looking at nothing.
+    """
+    import telegram.error  # noqa: F401 - imported for its side effect
+    from telegram.error import NetworkError
+
+    found = []
+
+    def walk(cls):
+        for sub in cls.__subclasses__():
+            found.append(sub)
+            walk(sub)
+
+    walk(NetworkError)
+    return found
+
+
+class TestNetworkErrorSubclassDrift:
+    """is_transient() ends with `isinstance(exc, NetworkError) -> True`, which
+    gives every NetworkError subclass a verdict WITHOUT anyone deciding it.
+
+    Today that line is a no-op: the only subclasses PTB defines are BadRequest
+    (named in ALWAYS_ALERT_TYPES, so it escapes) and TimedOut (named in
+    TRANSIENT_TYPES). Both are already classified by name, so removing the
+    isinstance check changes no behaviour at all.
+
+    The risk is the next PTB release. If it models a real fault as a
+    NetworkError subclass, that fault is silently held for SUSTAINED_FOR, and
+    a one-off never alerts at all — a lone occurrence is an episode of zero
+    length. Nothing would go red, because `is_transient` would keep returning
+    a plausible answer.
+
+    So this guard asks about the DECLARATION, not the behaviour, and that is
+    the whole point: no behavioural test can fail here, because the fallback
+    always produces a verdict. It fails on an unclassified newcomer and forces
+    the transient-or-real call to be made at upgrade time.
+
+    Honest about what it does not do: adding a newcomer to the wrong list
+    satisfies it. It makes the decision mandatory, not correct.
+    """
+
+    def test_every_subclass_is_deliberately_classified(self):
+        subs = _network_error_subclasses()
+        undecided = [
+            cls.__name__ for cls in subs
+            if not issubclass(cls, er.ALWAYS_ALERT_TYPES)
+            and cls.__name__ not in er.TRANSIENT_TYPES
+        ]
+        assert not undecided, (
+            "python-telegram-bot has NetworkError subclass(es) this module has "
+            f"never classified: {sorted(undecided)}. is_transient() is holding "
+            "them as transient via its isinstance fallback, so a real fault "
+            "among them waits SUSTAINED_FOR and a one-off never alerts. Decide "
+            "each one: add it to ALWAYS_ALERT_TYPES if it is a real fault, or "
+            "to TRANSIENT_TYPES if it is connectivity noise."
+        )
+
+    def test_the_known_subclasses_keep_their_verdicts(self):
+        """Behavioural companion. This one CAN pass while the guard above
+        fails, which is exactly why both exist."""
+        from telegram.error import BadRequest, TimedOut
+        assert er.is_transient(_raise(TimedOut, "timed out")) is True
+        assert er.is_transient(_raise(BadRequest, "can't parse entities")) is False
+
+    def test_the_walk_is_not_vacuous(self):
+        """A rename or a failed import would make the guard above iterate over
+        nothing and pass for the wrong reason."""
+        names = {cls.__name__ for cls in _network_error_subclasses()}
+        assert {"BadRequest", "TimedOut"} <= names, (
+            f"expected PTB's known NetworkError subclasses, found {sorted(names)}"
+        )
+
+    def test_the_walk_recurses(self):
+        """The guard must see a sub-subclass too, not just direct children."""
+        from telegram.error import NetworkError
+
+        class _Deep(NetworkError):
+            pass
+
+        class _Deeper(_Deep):
+            pass
+
+        try:
+            assert _Deeper in _network_error_subclasses()
+        finally:
+            del _Deep, _Deeper
+
+
 class TestFingerprint:
     def test_includes_type_and_location(self):
         fp = er.fingerprint(_raise(ValueError, "x"))
