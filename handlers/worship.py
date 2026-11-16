@@ -109,6 +109,17 @@ NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
 # it is rather than made clever.
 MAX_MESSAGE_CHARS = 3900
 
+# How long Apple's preview clips run. Sent to Telegram as the audio duration so
+# the player draws a scrubber the right length; the full track time would draw
+# a four-minute bar over a thirty-second file.
+#
+# Apple does not promise this and does not report it — the length is a property
+# of the m4a, which only Telegram ever fetches. 30 is what every clip measured
+# on 2026-11-16 ran to. If it is ever wrong the scrubber is wrong and nothing
+# else is, which is why a value is hardcoded rather than the file downloaded to
+# measure it.
+PREVIEW_SECONDS = 30
+
 
 def _state(context: ContextTypes.DEFAULT_TYPE) -> dict[str, Any]:
     return context.user_data.setdefault(STATE_KEY, {"songs": []})
@@ -159,18 +170,41 @@ def split_for_telegram(text: str, limit: int = MAX_MESSAGE_CHARS) -> list[str]:
 # Keyboards
 # ---------------------------------------------------------------------------
 
-def results_keyboard(results: list[Song]) -> InlineKeyboardMarkup:
-    """One button per candidate, plus a way out when none of them is right.
+def render_candidates(results: list[Song]) -> str:
+    """The candidates as a numbered block, each with what tells it apart.
 
-    The album is in the label because it is sometimes the ONLY difference: a
-    search for "Great Is Thy Faithfulness" returns CeCe Winans twice, from
-    The Hymns and from Alone in His Presence.
+    HTML, like render_list — Song.detail bolds the title and escapes for HTML.
+
+    This exists because the BUTTON is the wrong place for this. Telegram
+    truncates a long label (see _result_label), and 60 characters cannot hold
+    a title, an artist, an album, a running time and a year — "Great Is Thy
+    Faithfulness — CeCe Winans (Alone in His Presence)" is 50 on its own. In
+    the message body there is no such limit, so the facts go here and the
+    buttons shrink to their numbers.
     """
-    rows = [
-        [InlineKeyboardButton(_result_label(song),
-                              callback_data=f"{CB_SONG_PREFIX}pick:{n}")]
-        for n, song in enumerate(results)
-    ]
+    return "\n\n".join(song.detail(n) for n, song in enumerate(results, 1))
+
+
+def results_keyboard(results: list[Song]) -> InlineKeyboardMarkup:
+    """A numbered button per candidate, plus a way out when none is right.
+
+    Numbers, not labels: render_candidates carries the identifying detail in
+    the message body, where it is not truncated. The buttons are packed onto
+    one row because five "3"s side by side are easier to hit than five
+    full-width rows, and the number is all the target needs to be.
+
+    The preview row is only offered when at least one candidate actually has
+    a clip — a button that silently does nothing is worse than no button.
+    """
+    rows = [[
+        InlineKeyboardButton(str(n + 1),
+                             callback_data=f"{CB_SONG_PREFIX}pick:{n}")
+        for n, _ in enumerate(results)
+    ]]
+    if any(song.preview_url for song in results):
+        rows.append([InlineKeyboardButton(
+            "🔊 Play me a bit of each",
+            callback_data=f"{CB_SONG_PREFIX}preview")])
     rows.append([InlineKeyboardButton("🔁 None of these — search again",
                                       callback_data=f"{CB_SONG_PREFIX}none")])
     rows.append([InlineKeyboardButton("✖ Cancel the whole list",
@@ -290,12 +324,142 @@ async def sl_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         )
         return SL_QUERY
 
-    _state(context)["results"] = results
-    await update.message.reply_text(
-        f"Found {len(results)} match(es) for “{query}”. Which one?",
-        reply_markup=results_keyboard(results),
-    )
+    state = _state(context)
+    state["results"] = results
+    # Kept so sl_preview can re-post the picker with the same heading. Cleared
+    # alongside `results` wherever those are dropped.
+    state["query"] = query
+    await _show_candidates(update.message.reply_text, query, results)
     return SL_PICK
+
+
+async def _show_candidates(send, query: str, results: list[Song]) -> None:
+    """The picker: the numbered detail block and its keyboard.
+
+    One function because sl_preview re-posts the same screen BELOW the clips
+    it just sent, and a picker that differed between the two routes would be
+    two things to keep in step. parse_mode must stay HTML: Song.detail emits
+    <b> tags and escapes for HTML, so plain text would show the admin the raw
+    markup.
+    """
+    await send(
+        f"🔍 {len(results)} match(es) for “{query}”. Which one?\n\n"
+        f"{render_candidates(results)}",
+        reply_markup=results_keyboard(results),
+        parse_mode=ParseMode.HTML,
+        link_preview_options=NO_PREVIEW,
+    )
+
+
+async def sl_preview(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Send a thirty-second clip of each candidate, then re-post the picker.
+
+    WHY A BUTTON AND NOT AUTOMATIC
+    ------------------------------
+    Five clips are five messages and about 5 MB that Telegram fetches from
+    Apple. Most searches are not ambiguous — the admin types a title, knows
+    the recording, and taps 1. Paying that on every search to help the
+    minority of searches that need it would make the common case worse, so
+    the clips are asked for.
+
+    WHY THE PICKER IS RE-POSTED
+    ---------------------------
+    The clips push the original picker up out of view, and an admin who has
+    just listened to five songs wants the buttons under the one they heard
+    last. The old keyboard is stripped rather than left live, so the preview
+    button cannot be tapped a second time and produce ten clips. The state
+    does not change: `results` is untouched, so the indices behind the new
+    buttons mean exactly what the old ones meant.
+    """
+    query = update.callback_query
+    await query.answer()
+    state = _state(context)
+    results: list[Song] = state.get("results") or []
+    if not results:
+        # Only reachable from a keyboard that outlived its search.
+        await query.edit_message_text(
+            "Those results are no longer on offer. Send the song name again.")
+        return SL_QUERY
+
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except TelegramError as exc:
+        # Losing the race to strip the old keyboard is not worth abandoning
+        # the previews for; the worst case is a second set of clips.
+        logger.warning("Could not clear the picker keyboard: %s", exc)
+
+    sent = await _send_previews(query.message.chat_id, context, results)
+    if not sent:
+        await query.message.reply_text(
+            "⚠️ I could not fetch any previews just now. "
+            "The details below should still help, or search again."
+        )
+    await _show_candidates(query.message.reply_text,
+                           state.get("query") or "those", results)
+    return SL_PICK
+
+
+async def _send_previews(chat_id: int, context: ContextTypes.DEFAULT_TYPE,
+                         results: list[Song]) -> int:
+    """Clips for every candidate that has one. Returns how many were sent.
+
+    Sequential, not gathered: five concurrent sends to one chat invite
+    Telegram's flood limits, and the admin is going to listen to them one at
+    a time anyway. Five fetches of about a megabyte take a few seconds.
+
+    One failure must not cost the others, so each send is caught on its own —
+    the same reasoning as the per-recipient handling in sl_send. The caller
+    reports nothing being sent; a single clip missing from five is visible in
+    the numbering without being announced.
+
+    THE TITLE AND THUMBNAIL ARE OURS TO SET
+    ---------------------------------------
+    Telegram prefers an audio file's OWN tags over the title and performer a
+    caller passes, which would have made these arguments decorative. They are
+    not: a preview clip was downloaded and inspected on 2026-11-16 and its
+    MPEG-4 metadata box contains no ©nam, ©ART, ©alb or covr atom at all, so
+    there is nothing for Telegram to prefer. Should Apple start tagging the
+    clips, the symptom is the numbering disappearing from the player — the
+    clips would still play, and would no longer be matched to their buttons.
+
+    NO AWS-IP EXPOSURE ON THIS PATH
+    -------------------------------
+    Unlike search_songs, nothing here fetches anything: the URL is handed to
+    Telegram and TELEGRAM fetches it. So the failure that hid in
+    deep-translator for months — an endpoint refusing AWS addresses, silently,
+    from production only — cannot arise on this path, and there is nothing to
+    verify from the Lightsail box. The flip side is that a broken preview URL
+    surfaces only as a TelegramError from the send, which is why one is caught
+    and logged per clip rather than assumed impossible.
+    """
+    sent = 0
+    for index, song in enumerate(results, 1):
+        if not song.preview_url:
+            continue
+        try:
+            await context.bot.send_audio(
+                chat_id=chat_id,
+                audio=song.preview_url,
+                # Telegram shows title and performer in the player. The
+                # number leads the title so a clip is matched to its button
+                # without reading the caption.
+                title=f"{index}. {song.title}",
+                performer=song.artist,
+                caption=song.detail(index),
+                parse_mode=ParseMode.HTML,
+                thumbnail=song.artwork_url or None,
+                # The clip, NOT the track. Apple's previews run about thirty
+                # seconds; song.duration_ms is the full recording and would
+                # tell the player to draw a four-minute scrubber over a
+                # thirty-second file.
+                duration=PREVIEW_SECONDS,
+            )
+            sent += 1
+        except TelegramError as exc:
+            logger.warning("Preview %d (%r) failed: %s: %s",
+                           index, song.title, type(exc).__name__, exc)
+    logger.info("Sent %d of %d preview clip(s).", sent, len(results))
+    return sent
 
 
 async def sl_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -312,6 +476,7 @@ async def sl_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     song = results[index]
     state["songs"].append(song)
     state.pop("results", None)
+    state.pop("query", None)
     count = len(state["songs"])
     await query.edit_message_text(
         f"✅ Added {count}. {song.title} by {song.artist}\n\n"
@@ -324,7 +489,9 @@ async def sl_search_again(update: Update,
                           context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
-    _state(context).pop("results", None)
+    state = _state(context)
+    state.pop("results", None)
+    state.pop("query", None)
     await query.edit_message_text(
         "No problem. Send the song name again — adding the artist, or part of "
         "the title, usually helps."
@@ -610,6 +777,7 @@ def song_list_conversation() -> ConversationHandler:
             ],
             SL_PICK: [
                 _cb_indexed(sl_pick, "pick"),
+                _cb(sl_preview, "preview"),
                 _cb(sl_search_again, "none"),
                 _cb(sl_cancel, "cancel"),
             ],
