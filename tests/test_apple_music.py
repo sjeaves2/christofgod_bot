@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+import pytest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -762,3 +763,134 @@ class TestFetchingArtwork:
 
     async def test_the_limit_is_telegrams_thumbnail_limit(self):
         assert am.MAX_ARTWORK_BYTES == 200 * 1024
+
+
+class TestFetchingThePreviewClip:
+    """The audio bytes. Downloaded because a LINKED clip loses its thumbnail.
+
+    sendAudio's `thumbnail` documentation says "Ignored if the file is not
+    uploaded using multipart/form-data", where *the file* is the audio. So
+    while `audio` is an HTTP URL — which that field explicitly allows —
+    Telegram discards the thumbnail however correctly it is supplied. That is
+    why v0.29.1 shipped a valid thumbnail nobody ever saw.
+    """
+
+    M4A = b"\x00\x00\x00\x18ftypM4A " + b"\x00" * 64
+    URL = "https://audio-ssl.itunes.apple.com/itunes-assets/a/mzaf_1.m4a"
+
+    def _client(self, payload, status=200, raises=None, record=None):
+        class _Resp:
+            def __init__(self):
+                self.status_code = status
+                self.content = payload
+
+            def raise_for_status(self):
+                if self.status_code >= 400:
+                    raise RuntimeError(f"HTTP {self.status_code}")
+
+        class _Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            async def get(self, url, params=None):
+                if record is not None:
+                    record.append(url)
+                if raises is not None:
+                    raise raises
+                return _Resp()
+
+        return patch.object(am.httpx, "AsyncClient", lambda *a, **k: _Client())
+
+    async def test_an_m4a_comes_back_as_bytes(self):
+        with self._client(self.M4A):
+            assert await am.fetch_preview(self.URL) == self.M4A
+
+    async def test_an_empty_url_does_not_reach_the_network(self):
+        calls = []
+        with self._client(self.M4A, record=calls):
+            assert await am.fetch_preview("") is None
+        assert calls == []
+
+    async def test_an_http_error_yields_none(self):
+        with self._client(self.M4A, status=404):
+            assert await am.fetch_preview(self.URL) is None
+
+    async def test_a_network_failure_yields_none(self):
+        """Which the caller turns into a fallback to the URL, not a lost clip."""
+        with self._client(None, raises=OSError("no route")):
+            assert await am.fetch_preview(self.URL) is None
+
+    async def test_a_non_mp4_body_is_refused(self):
+        """An HTML error page served with a 200 is the case that matters —
+        uploading it to Telegram as audio would fail the whole send."""
+        for body in (b"<!DOCTYPE html><html>Error page here",
+                     b"\xff\xd8\xff" + b"a jpeg, somehow",
+                     b"RIFF....WAVE", b"", b"\x00\x00\x00\x18ftyX"):
+            with self._client(body):
+                assert await am.fetch_preview(self.URL) is None, body[:12]
+
+    async def test_the_box_type_is_checked_at_offset_four(self):
+        """`ftyp` at the start, rather than at offset 4, is not a container.
+
+        The first four bytes are the box LENGTH, so a body beginning with
+        `ftyp` has it in the wrong place — and a naive startswith() check
+        would accept it.
+        """
+        with self._client(b"ftyp" + b"\x00" * 64):
+            assert await am.fetch_preview(self.URL) is None
+
+    async def test_something_enormous_is_refused(self):
+        huge = b"\x00\x00\x00\x18ftypM4A " + b"\x00" * am.MAX_PREVIEW_BYTES
+        with self._client(huge):
+            assert await am.fetch_preview(self.URL) is None
+
+    async def test_a_real_sized_clip_is_well_inside_the_limit(self):
+        """Clips measured 949-1050 kB on 2026-11-16; the cap is 8 MB.
+
+        A cap set near the real size would start refusing clips the first
+        time Apple changed its encoder.
+        """
+        assert am.MAX_PREVIEW_BYTES > 4 * 1024 * 1024
+        realistic = b"\x00\x00\x00\x18ftypM4A " + b"\x00" * (1050 * 1024)
+        with self._client(realistic):
+            assert await am.fetch_preview(self.URL) == realistic
+
+
+class TestTheSuiteCannotReachTheNetwork:
+    """conftest closes the socket layer for the whole session.
+
+    Twice on 2026-11-16 a new fetcher was added to the preview path and the
+    worship tests did not substitute it, so the suite issued real requests
+    and the never-raises contract swallowed the failures. Patching by name
+    covered what someone remembered; this covers what they did not.
+    """
+
+    def test_an_outbound_connection_is_refused(self):
+        import socket
+        with pytest.raises(RuntimeError, match="offline"):
+            socket.getaddrinfo("itunes.apple.com", 443)
+
+    def test_the_error_names_the_host_it_blocked(self):
+        import socket
+        with pytest.raises(RuntimeError, match="audio-ssl.apple.test"):
+            socket.create_connection(("audio-ssl.apple.test", 443))
+
+    def test_loopback_is_still_allowed(self):
+        """Deliberate: pytest plugins and debuggers need it, and 127.0.0.1
+        cannot reach Apple. Breaking the tooling to enforce a rule about a
+        CDN would be a bad trade."""
+        import socket
+        assert socket.getaddrinfo("127.0.0.1", 80)
+
+    async def test_a_real_fetch_attempt_is_blocked_not_silently_empty(self):
+        """The leak this exists to stop, end to end: an UNPATCHED fetch.
+
+        It still returns None, because never-raises is the contract — but the
+        reason is now a RuntimeError naming the host, which lands in the log
+        instead of looking like "Apple had no artwork".
+        """
+        assert await am.fetch_artwork(
+            "https://is1-ssl.mzstatic.com/image/a/300x300bb.jpg") is None
