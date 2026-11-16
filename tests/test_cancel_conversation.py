@@ -36,6 +36,37 @@ from localization import AVAILABLE_LANGUAGES, t  # noqa: E402
 LANGS = list(AVAILABLE_LANGUAGES)
 
 
+def _delegates_to_shared_cancel(callback) -> bool:
+    """True when *callback*'s own body calls cancel_conversation.
+
+    Read off the AST of the function's source. A name test would be satisfied
+    by anything called `*_cancel_*`, and a docstring test by a promise, so
+    neither would catch the case worth catching: a wrapper that reimplements
+    the reply instead of delegating, leaving one conversation's /cancel
+    wording to drift away from the rest.
+
+    Returns False rather than raising when the source cannot be read — a
+    callback this cannot inspect has not been shown to delegate, and the
+    caller treats "not shown" as "not allowed".
+    """
+    import ast
+    import textwrap
+    try:
+        source = textwrap.dedent(inspect.getsource(callback))
+        tree = ast.parse(source)
+    except (OSError, TypeError, SyntaxError):
+        return False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = (func.attr if isinstance(func, ast.Attribute)
+                else getattr(func, "id", None))
+        if name == "cancel_conversation":
+            return True
+    return False
+
+
 def _update():
     upd = MagicMock()
     upd.effective_user.id = 7
@@ -166,16 +197,44 @@ class TestEveryCallbackIsAwaitable:
         assert not missing, f"conversations with no /cancel fallback: {missing}"
 
     def test_all_cancel_fallbacks_use_the_shared_handler(self):
-        """One implementation, so a fix or a wording change lands everywhere."""
+        """One implementation, so a fix or a wording change lands everywhere.
+
+        A fallback may be the shared handler itself, or a wrapper that
+        DELEGATES to it — but nothing else. The distinction matters because
+        the thing being protected is the behaviour, not the function object:
+        the wording, the activity-log entry and the state clearing must be
+        identical in every conversation, and a wrapper that calls
+        cancel_conversation still gets all three from one place.
+
+        This asserted callback IDENTITY until 2026-11-16, when
+        handlers.worship needed to delete its preview clips from the CHAT
+        before the state holding their message ids was dropped — something
+        the shared handler must not know about, since it serves every
+        conversation. Identity would have forced either a copy of the shared
+        body or teaching the shared handler about songs.
+
+        Delegation is proved from the SOURCE, not from a name or a docstring:
+        a function called `sl_cancel_command` that quietly reimplemented the
+        reply would pass any check based on naming. Walking the AST for a
+        call to cancel_conversation is the cheapest thing that cannot be
+        satisfied by good intentions.
+        """
         wrong = []
         for h in self._handlers():
             if not isinstance(h, ConversationHandler):
                 continue
             for fb in h.fallbacks:
-                if isinstance(fb, CommandHandler) and "cancel" in fb.commands:
-                    if fb.callback is not SHARED.cancel_conversation:
-                        wrong.append(getattr(fb.callback, "__name__", str(fb.callback)))
-        assert not wrong, f"/cancel fallbacks not using cancel_conversation: {wrong}"
+                if not (isinstance(fb, CommandHandler) and "cancel" in fb.commands):
+                    continue
+                if fb.callback is SHARED.cancel_conversation:
+                    continue
+                if _delegates_to_shared_cancel(fb.callback):
+                    continue
+                wrong.append(getattr(fb.callback, "__name__", str(fb.callback)))
+        assert not wrong, (
+            f"/cancel fallbacks that neither are nor delegate to "
+            f"cancel_conversation: {wrong}"
+        )
 
 
 class TestHandlerOrdering:

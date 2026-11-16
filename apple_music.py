@@ -337,6 +337,66 @@ def _duration_ms(raw: object) -> int | None:
     return None
 
 
+#: Telegram rejects a sendAudio thumbnail over 200 kB. Artwork at
+#: ARTWORK_SIZE measures about 22 kB, so this is a sanity bound on a
+#: third-party response rather than a real expectation — but without it a URL
+#: that unexpectedly serves something enormous would be read into memory on a
+#: 412 MB box before Telegram threw it away.
+MAX_ARTWORK_BYTES = 200 * 1024
+
+#: JPEG's magic number. Telegram requires the thumbnail to be JPEG and will
+#: reject anything else, so a PNG or an HTML error page dressed as an image is
+#: better caught here, where it costs a missing thumbnail, than there, where it
+#: costs the whole clip.
+_JPEG_MAGIC = b"\xff\xd8\xff"
+
+
+async def fetch_artwork(url: str) -> bytes | None:
+    """The JPEG at *url* as bytes, or None.
+
+    WHY THIS EXISTS AT ALL — THE BOT DID NOT USED TO FETCH ANYTHING
+    ---------------------------------------------------------------
+    sendAudio's `thumbnail` is the one field that will NOT take a URL.
+    Telegram treats it as a file_id and accepts only a freshly uploaded file,
+    so python-telegram-bot handing our URL through as a plain string meant the
+    artwork was silently discarded — shipped that way in v0.29.0 and spotted
+    by the user on the first live run, because a dropped thumbnail raises
+    nothing. The `audio` field is unaffected: URLs are fine there, which is
+    why the clips themselves always worked.
+
+    So the bytes have to come from here. That is a real change in kind: this
+    path previously had Telegram do every fetch, and therefore could not
+    suffer the deep-translator failure where an endpoint refused AWS addresses
+    and nothing in production worked for months. It can now, so it was
+    verified from 44.214.123.92 itself on 2026-11-16 — 200, 22442 bytes, 50ms
+    — and that check belongs in any future change to this function.
+
+    Never raises, like search_songs: a missing thumbnail must cost the
+    thumbnail and nothing else. Returns None on any failure, and the caller
+    sends the clip without one.
+    """
+    if not url:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+            data = response.content
+    except Exception as exc:   # noqa: BLE001 - the contract is never to raise
+        logger.warning("Artwork fetch for %r failed: %s: %s",
+                       url, type(exc).__name__, exc)
+        return None
+
+    if len(data) > MAX_ARTWORK_BYTES:
+        logger.warning("Artwork at %r is %d bytes, over the %d limit.",
+                       url, len(data), MAX_ARTWORK_BYTES)
+        return None
+    if not data.startswith(_JPEG_MAGIC):
+        logger.warning("Artwork at %r is not a JPEG (%r).", url, data[:4])
+        return None
+    return data
+
+
 def _as_song(result: dict) -> Song | None:
     """One API result as a Song, or None when it is not a usable track."""
     if result.get("kind") != "song":

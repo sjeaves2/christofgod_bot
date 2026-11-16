@@ -651,3 +651,114 @@ class TestTheDetailLine:
 
     def test_an_apostrophe_is_left_literal(self):
         assert "Ain't No Grave" in am.Song("Ain't No Grave", "a", "", "u").detail(1)
+
+
+class TestFetchingArtwork:
+    """The bytes for sendAudio's thumbnail.
+
+    This function exists because `thumbnail` is the one sendAudio field that
+    will NOT take a URL — Telegram reads it as a file_id and accepts only a
+    freshly uploaded file, so v0.29.0's URL was silently discarded.
+
+    It is also the ONLY thing on the preview path that the bot fetches
+    itself, which is why the never-raises contract matters as much here as in
+    search_songs: a thumbnail that cannot be had must cost the thumbnail and
+    nothing else.
+    """
+
+    JPEG = b"\xff\xd8\xff" + b"\x00" * 64
+    URL = "https://is1-ssl.mzstatic.com/image/a/300x300bb.jpg"
+
+    def _client(self, payload, status=200, raises=None, record=None):
+        class _Resp:
+            def __init__(self):
+                self.status_code = status
+                self.content = payload
+
+            def raise_for_status(self):
+                if self.status_code >= 400:
+                    raise RuntimeError(f"HTTP {self.status_code}")
+
+        class _Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            async def get(self, url, params=None):
+                if record is not None:
+                    record.append(url)
+                if raises is not None:
+                    raise raises
+                return _Resp()
+
+        return patch.object(am.httpx, "AsyncClient", lambda *a, **k: _Client())
+
+    async def test_a_jpeg_comes_back_as_bytes(self):
+        with self._client(self.JPEG):
+            assert await am.fetch_artwork(self.URL) == self.JPEG
+
+    async def test_an_empty_url_does_not_reach_the_network(self):
+        """Guarded before the request, so a song with no artwork is free.
+
+        Detected by COUNTING the call, not by raising inside the fake client.
+        A first version did the latter and the mutant survived: `except
+        Exception` is the never-raises contract, so it swallowed the test's
+        own AssertionError and returned None — which is what the test
+        asserted. **A never-raises function cannot be probed by raising at
+        it.** The same trap applies to search_songs.
+        """
+        calls = []
+        with self._client(self.JPEG, record=calls):
+            assert await am.fetch_artwork("") is None
+        assert calls == [], calls
+
+    async def test_a_real_url_does_reach_the_network(self):
+        """Pairs with the above: proves the counter can register a call at
+        all, so the empty-url assertion is not passing vacuously."""
+        calls = []
+        with self._client(self.JPEG, record=calls):
+            await am.fetch_artwork(self.URL)
+        assert calls == [self.URL], calls
+
+    async def test_an_http_error_yields_none(self):
+        with self._client(self.JPEG, status=503):
+            assert await am.fetch_artwork(self.URL) is None
+
+    async def test_a_network_failure_yields_none(self):
+        with self._client(None, raises=OSError("no route")):
+            assert await am.fetch_artwork(self.URL) is None
+
+    async def test_a_non_jpeg_is_refused(self):
+        """Telegram requires JPEG and rejects anything else.
+
+        Caught here, it costs a thumbnail; sent on, it could cost the clip.
+        A PNG header and an HTML error page are both realistic — a CDN that
+        serves an error body with a 200 is the case that matters.
+        """
+        for body in (b"\x89PNG\r\n\x1a\n", b"<!DOCTYPE html><html>Error",
+                     b"GIF89a", b""):
+            with self._client(body):
+                assert await am.fetch_artwork(self.URL) is None, body[:8]
+
+    async def test_something_enormous_is_refused(self):
+        """A sanity bound on a third-party response, not an expectation.
+
+        Artwork at ARTWORK_SIZE is about 22 kB. Without this, a URL that
+        unexpectedly served something huge would be read into memory on a
+        412 MB box before Telegram threw it away for exceeding 200 kB.
+        """
+        huge = b"\xff\xd8\xff" + b"\x00" * am.MAX_ARTWORK_BYTES
+        with self._client(huge):
+            assert await am.fetch_artwork(self.URL) is None
+
+    async def test_a_body_at_exactly_the_limit_is_accepted(self):
+        """The bound is inclusive; an off-by-one here silently drops art."""
+        exact = b"\xff\xd8\xff" + b"\x00" * (am.MAX_ARTWORK_BYTES - 3)
+        assert len(exact) == am.MAX_ARTWORK_BYTES
+        with self._client(exact):
+            assert await am.fetch_artwork(self.URL) == exact
+
+    async def test_the_limit_is_telegrams_thumbnail_limit(self):
+        assert am.MAX_ARTWORK_BYTES == 200 * 1024
