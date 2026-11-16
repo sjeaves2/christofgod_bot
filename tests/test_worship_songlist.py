@@ -1018,11 +1018,34 @@ PREVIEWABLE = [
 ]
 
 
+FAKE_ARTWORK = b"\xff\xd8\xff" + b"fake jpeg body"
+
+
 def _preview_context(**state):
     ctx = _context(songs=[], **state)
     ctx.bot.send_audio = AsyncMock()
     ctx.bot.edit_message_reply_markup = AsyncMock()
+    ctx.bot.delete_messages = AsyncMock()
+    ctx.bot.delete_message = AsyncMock()
     return ctx
+
+
+def _no_network(artwork=FAKE_ARTWORK):
+    """Substitute the artwork fetch. THIS FILE MUST NOT TOUCH THE NETWORK.
+
+    The thumbnail fix made _send_previews call apple_music.fetch_artwork, and
+    the first version of these tests left it unpatched — so the suite really
+    did issue HTTP requests to `https://is1-ssl.mzstatic.com/a/300x300bb.jpg`
+    and got 403s, which the never-raises contract swallowed into a None
+    thumbnail. Everything still passed except the one assertion that looked at
+    the thumbnail, and the module docstring's "No test touches the network"
+    had quietly become false.
+
+    Caught on 2026-11-16 by reading a 403 in the captured log of an unrelated
+    failure. Patch this in every test that reaches _send_previews.
+    """
+    return patch.object(w.apple_music, "fetch_artwork",
+                        AsyncMock(return_value=artwork))
 
 
 def _preview_update():
@@ -1096,32 +1119,83 @@ class TestSendingPreviews:
 
     async def test_one_clip_per_candidate(self):
         ctx = _preview_context(results=PREVIEWABLE, query="amazing grace")
-        await w.sl_preview(_preview_update(), ctx)
+        with _no_network():
+            await w.sl_preview(_preview_update(), ctx)
         assert ctx.bot.send_audio.await_count == 2
 
     async def test_each_clip_carries_its_own_audio_url(self):
         ctx = _preview_context(results=PREVIEWABLE, query="amazing grace")
-        await w.sl_preview(_preview_update(), ctx)
+        with _no_network():
+            await w.sl_preview(_preview_update(), ctx)
         urls = [c.kwargs["audio"] for c in ctx.bot.send_audio.await_args_list]
         assert urls == [s.preview_url for s in PREVIEWABLE]
 
     async def test_the_clip_is_numbered_to_match_its_button(self):
         ctx = _preview_context(results=PREVIEWABLE, query="amazing grace")
-        await w.sl_preview(_preview_update(), ctx)
+        with _no_network():
+            await w.sl_preview(_preview_update(), ctx)
         titles = [c.kwargs["title"] for c in ctx.bot.send_audio.await_args_list]
         assert titles == ["1. Amazing Grace", "2. Amazing Grace"]
 
-    async def test_the_artwork_is_sent_as_the_thumbnail(self):
+    async def test_the_thumbnail_is_bytes_and_never_a_url(self):
+        """The v0.29.0 bug, pinned.
+
+        `thumbnail` is the one sendAudio field that will not take a URL:
+        Telegram reads it as a file_id and accepts only a freshly uploaded
+        file. PTB passes a str straight through, so v0.29.0 shipped a URL
+        there and Telegram silently dropped every thumbnail — nothing raised,
+        and the clips played normally, so only a human looking at the chat
+        could see it. The user found it on the first live run.
+
+        Asserting `isinstance(..., bytes)` rather than just equality is the
+        part that matters: equality against a fetched value would still pass
+        if someone reverted to handing over the URL and a future fetch helper
+        happened to return it.
+        """
         ctx = _preview_context(results=PREVIEWABLE, query="amazing grace")
-        await w.sl_preview(_preview_update(), ctx)
+        with _no_network():
+            await w.sl_preview(_preview_update(), ctx)
         first = ctx.bot.send_audio.await_args_list[0].kwargs
-        assert first["thumbnail"] == PREVIEWABLE[0].artwork_url
+        assert isinstance(first["thumbnail"], bytes), type(first["thumbnail"])
+        assert first["thumbnail"] == FAKE_ARTWORK
+        assert not isinstance(first["thumbnail"], str)
         assert first["performer"] == "CeCe Winans"
+
+    async def test_the_artwork_url_is_what_gets_fetched(self):
+        ctx = _preview_context(results=PREVIEWABLE, query="q")
+        with patch.object(w.apple_music, "fetch_artwork",
+                          AsyncMock(return_value=FAKE_ARTWORK)) as fetch:
+            await w.sl_preview(_preview_update(), ctx)
+        assert [c.args[0] for c in fetch.await_args_list] == [
+            s.artwork_url for s in PREVIEWABLE]
+
+    async def test_a_clip_is_still_sent_when_the_artwork_cannot_be_had(self):
+        """A missing thumbnail must cost the thumbnail, not the clip."""
+        ctx = _preview_context(results=PREVIEWABLE, query="q")
+        with _no_network(artwork=None):
+            await w.sl_preview(_preview_update(), ctx)
+        assert ctx.bot.send_audio.await_count == 2
+        assert all(c.kwargs["thumbnail"] is None
+                   for c in ctx.bot.send_audio.await_args_list)
+
+    async def test_the_audio_itself_is_still_a_url_not_bytes(self):
+        """Only `thumbnail` is restricted; `audio` takes a URL.
+
+        Which is why the clips worked in v0.29.0 while the thumbnails did
+        not. Downloading the ~1 MB audio too would be a pointless cost.
+        """
+        ctx = _preview_context(results=PREVIEWABLE, query="q")
+        with _no_network():
+            await w.sl_preview(_preview_update(), ctx)
+        for call in ctx.bot.send_audio.await_args_list:
+            assert isinstance(call.kwargs["audio"], str)
+            assert call.kwargs["audio"].startswith("https://")
 
     async def test_the_duration_is_the_clips_not_the_tracks(self):
         """253338 ms would draw a four-minute scrubber over a 30s file."""
         ctx = _preview_context(results=PREVIEWABLE, query="amazing grace")
-        await w.sl_preview(_preview_update(), ctx)
+        with _no_network():
+            await w.sl_preview(_preview_update(), ctx)
         durations = {c.kwargs["duration"]
                      for c in ctx.bot.send_audio.await_args_list}
         assert durations == {w.PREVIEW_SECONDS}
@@ -1130,7 +1204,8 @@ class TestSendingPreviews:
     async def test_a_candidate_without_a_clip_is_skipped_not_sent_blank(self):
         songs = [PREVIEWABLE[0], Song("No Clip", "Nobody", "", "https://x/1")]
         ctx = _preview_context(results=songs, query="q")
-        await w.sl_preview(_preview_update(), ctx)
+        with _no_network():
+            await w.sl_preview(_preview_update(), ctx)
         assert ctx.bot.send_audio.await_count == 1
 
     async def test_one_failed_clip_does_not_cost_the_others(self):
@@ -1139,7 +1214,8 @@ class TestSendingPreviews:
         ctx.bot.send_audio = AsyncMock(
             side_effect=[TelegramError("boom"), None])
         update = _preview_update()
-        await w.sl_preview(update, ctx)
+        with _no_network():
+            await w.sl_preview(update, ctx)
         assert ctx.bot.send_audio.await_count == 2
         # One clip did arrive, so the admin is not told previews failed.
         assert "could not fetch any previews" not in _said(
@@ -1149,7 +1225,8 @@ class TestSendingPreviews:
         ctx = _preview_context(results=PREVIEWABLE, query="q")
         ctx.bot.send_audio = AsyncMock(side_effect=TelegramError("boom"))
         update = _preview_update()
-        state = await w.sl_preview(update, ctx)
+        with _no_network():
+            state = await w.sl_preview(update, ctx)
         said = _said(update.callback_query.message.reply_text)
         assert "could not fetch any previews" in said
         assert "The Hymns · 4:13 · 2026" in said
@@ -1159,7 +1236,8 @@ class TestSendingPreviews:
         """Tapping the preview button twice would send ten clips."""
         ctx = _preview_context(results=PREVIEWABLE, query="q")
         update = _preview_update()
-        await w.sl_preview(update, ctx)
+        with _no_network():
+            await w.sl_preview(update, ctx)
         update.callback_query.edit_message_reply_markup.assert_awaited_once_with(
             reply_markup=None)
 
@@ -1168,33 +1246,38 @@ class TestSendingPreviews:
         update = _preview_update()
         update.callback_query.edit_message_reply_markup = AsyncMock(
             side_effect=TelegramError("too old"))
-        await w.sl_preview(update, ctx)
+        with _no_network():
+            await w.sl_preview(update, ctx)
         assert ctx.bot.send_audio.await_count == 2
 
     async def test_the_picker_is_reposted_below_the_clips(self):
         """The clips push the original picker out of view."""
         ctx = _preview_context(results=PREVIEWABLE, query="amazing grace")
         update = _preview_update()
-        await w.sl_preview(update, ctx)
+        with _no_network():
+            await w.sl_preview(update, ctx)
         said = _said(update.callback_query.message.reply_text)
         assert "amazing grace" in said and "The Hymns" in said
 
     async def test_the_reposted_buttons_still_mean_what_they_meant(self):
         """`results` is untouched, so index 1 is still the second candidate."""
         ctx = _preview_context(results=PREVIEWABLE, query="q")
-        await w.sl_preview(_preview_update(), ctx)
+        with _no_network():
+            await w.sl_preview(_preview_update(), ctx)
         assert ctx.user_data[w.STATE_KEY]["results"] == PREVIEWABLE
         await w.sl_pick(_callback_update("sl:pick:1"), ctx)
         assert ctx.user_data[w.STATE_KEY]["songs"] == [PREVIEWABLE[1]]
 
     async def test_the_state_stays_on_the_picker(self):
         ctx = _preview_context(results=PREVIEWABLE, query="q")
-        assert await w.sl_preview(_preview_update(), ctx) == w.SL_PICK
+        with _no_network():
+            assert await w.sl_preview(_preview_update(), ctx) == w.SL_PICK
 
     async def test_a_preview_tap_that_outlived_its_search_sends_nothing(self):
         ctx = _preview_context()
         update = _preview_update()
-        state = await w.sl_preview(update, ctx)
+        with _no_network():
+            state = await w.sl_preview(update, ctx)
         assert ctx.bot.send_audio.await_count == 0
         assert state == w.SL_QUERY
         assert "no longer on offer" in _said(
@@ -1204,7 +1287,8 @@ class TestSendingPreviews:
         """Without answer() the button spins on the admin's phone."""
         ctx = _preview_context(results=PREVIEWABLE, query="q")
         update = _preview_update()
-        await w.sl_preview(update, ctx)
+        with _no_network():
+            await w.sl_preview(update, ctx)
         update.callback_query.answer.assert_awaited()
 
 
@@ -1236,3 +1320,349 @@ class TestThePreviewLengthIsDeliberate:
     def test_it_is_a_whole_number_of_seconds(self):
         """Telegram's duration field is an integer; 30.02 would be rejected."""
         assert isinstance(w.PREVIEW_SECONDS, int)
+
+
+class TestThePreviewClipsAreCleanedUp:
+    """The clips are scaffolding and must not outlive the conversation.
+
+    Asked for by the user on 2026-11-16: once the list is sent or abandoned,
+    a wall of audio with nothing left to decide is just clutter.
+    """
+
+    async def _previewed(self, **state):
+        ctx = _preview_context(results=PREVIEWABLE, query="q", **state)
+        ctx.bot.send_audio = AsyncMock(side_effect=[
+            MagicMock(message_id=501), MagicMock(message_id=502)])
+        with _no_network():
+            await w.sl_preview(_preview_update(), ctx)
+        return ctx
+
+    async def test_the_clip_ids_are_recorded_when_sent(self):
+        ctx = await self._previewed()
+        assert ctx.user_data[w.STATE_KEY][w.PREVIEW_IDS_KEY] == [501, 502]
+
+    async def test_ids_accumulate_across_searches(self):
+        """The user chose sent-or-abandoned over per-pick, so a list that
+        previews several songs holds several searches' worth of ids."""
+        ctx = await self._previewed()
+        ctx.bot.send_audio = AsyncMock(side_effect=[
+            MagicMock(message_id=601), MagicMock(message_id=602)])
+        with _no_network():
+            await w.sl_preview(_preview_update(), ctx)
+        assert ctx.user_data[w.STATE_KEY][w.PREVIEW_IDS_KEY] == [
+            501, 502, 601, 602]
+
+    async def test_a_send_failure_records_no_id(self):
+        ctx = _preview_context(results=PREVIEWABLE, query="q")
+        ctx.bot.send_audio = AsyncMock(side_effect=[
+            TelegramError("boom"), MagicMock(message_id=777)])
+        with _no_network():
+            await w.sl_preview(_preview_update(), ctx)
+        assert ctx.user_data[w.STATE_KEY][w.PREVIEW_IDS_KEY] == [777]
+
+    async def test_cancelling_deletes_them(self):
+        ctx = await self._previewed()
+        await w.sl_cancel(_callback_update("sl:cancel"), ctx)
+        ctx.bot.delete_messages.assert_awaited_once()
+        assert ctx.bot.delete_messages.await_args.kwargs["message_ids"] == [
+            501, 502]
+
+    async def test_slash_cancel_deletes_them_and_still_delegates(self):
+        """/cancel goes through the shared handler for its wording and log."""
+        ctx = await self._previewed()
+        update = _message_update("/cancel")
+        with patch.object(w, "cancel_conversation",
+                          AsyncMock(return_value=ConversationHandler.END)) as shared:
+            result = await w.sl_cancel_command(update, ctx)
+        ctx.bot.delete_messages.assert_awaited_once()
+        shared.assert_awaited_once()
+        assert result == ConversationHandler.END
+
+    async def test_the_ids_are_forgotten_after_a_delete(self):
+        """A second teardown must not retry a delete that already happened."""
+        ctx = await self._previewed()
+        await w.sl_cancel(_callback_update("sl:cancel"), ctx)
+        ctx.bot.delete_messages.reset_mock()
+        await w._clear_previews(4242, ctx, w._state(ctx))
+        ctx.bot.delete_messages.assert_not_awaited()
+
+    async def test_the_ids_are_forgotten_even_when_the_delete_fails(self):
+        """A bot may only delete its own message within 48 HOURS.
+
+        So a failure here is permanent, not transient — a conversation left
+        open past that window, or a clip the admin deleted by hand, fails the
+        same way on every retry. Keeping the ids would mean trying forever.
+        """
+        ctx = await self._previewed()
+        ctx.bot.delete_messages = AsyncMock(side_effect=TelegramError("too old"))
+        ctx.bot.delete_message = AsyncMock(side_effect=TelegramError("too old"))
+        await w._clear_previews(4242, ctx, w._state(ctx))
+        assert w.PREVIEW_IDS_KEY not in ctx.user_data[w.STATE_KEY]
+
+    async def test_a_failed_bulk_delete_falls_back_to_one_at_a_time(self):
+        """delete_messages is all-or-nothing, so one undeletable clip would
+        otherwise strand every other clip in the chat."""
+        ctx = await self._previewed()
+        ctx.bot.delete_messages = AsyncMock(side_effect=TelegramError("nope"))
+        deleted = await w._clear_previews(4242, ctx, w._state(ctx))
+        assert ctx.bot.delete_message.await_count == 2
+        assert deleted == 2
+
+    async def test_the_bulk_path_is_one_call_not_one_per_clip(self):
+        ctx = await self._previewed()
+        await w._clear_previews(4242, ctx, w._state(ctx))
+        assert ctx.bot.delete_messages.await_count == 1
+        ctx.bot.delete_message.assert_not_awaited()
+
+    async def test_nothing_is_deleted_when_nothing_was_previewed(self):
+        ctx = _preview_context(results=PREVIEWABLE, query="q")
+        assert await w._clear_previews(4242, ctx, w._state(ctx)) == 0
+        ctx.bot.delete_messages.assert_not_awaited()
+
+    async def test_sending_the_list_deletes_them(self):
+        ctx = await self._previewed()
+        ctx.user_data[w.STATE_KEY]["songs"] = list(PREVIEWABLE)
+        ctx.bot.send_message = AsyncMock()
+        with patch.object(w.storage, "get_all_users", AsyncMock(return_value=[])):
+            await w.sl_send(_callback_update("sl:to:9001"), ctx)
+        ctx.bot.delete_messages.assert_awaited_once()
+
+    def test_only_the_teardown_may_end_the_conversation(self):
+        """DERIVED, not listed — the lesson of v0.28.16 and v0.28.17.
+
+        Eight code paths in this module used to return ConversationHandler.END
+        and three of them did not even clear the state. A hand-maintained list
+        of them would need the same update _finish needs and would be
+        forgotten in the same breath, so this walks the module's AST.
+
+        The invariant is stated in the strongest form available: NOTHING may
+        return ConversationHandler.END except _finish itself and the two
+        exemptions below. Every other exit says `return await _finish(...)`,
+        which both deletes the clips and drops the state. A ninth exit added
+        later cannot skip the teardown without failing here — and the failure
+        names the function.
+
+        A first draft of this test asked the opposite question — "which
+        functions return END without calling _finish" — and passed while
+        finding almost nothing, because after the refactor barely any function
+        returns END at all. Its vacuity guard caught that. Asserting the exact
+        SET is what makes the test say something.
+        """
+        import ast
+        import inspect as _inspect
+
+        # _finish is the teardown itself.
+        # sl_stale_button is registered OUTSIDE the conversation and fires for
+        # taps the conversation declined — including an admin tapping an old
+        # keyboard while a list is still being built. Tearing down there would
+        # delete the clips and the list of someone mid-task.
+        ALLOWED = {"_finish", "sl_stale_button"}
+
+        tree = ast.parse(_inspect.getsource(w))
+        returning_end = {
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and any(isinstance(n, ast.Return)
+                    and isinstance(n.value, ast.Attribute)
+                    and n.value.attr == "END"
+                    for n in ast.walk(node))
+        }
+        assert returning_end == ALLOWED, (
+            f"these return ConversationHandler.END directly instead of going "
+            f"through _finish, so they leave preview clips in the chat: "
+            f"{sorted(returning_end - ALLOWED)}. Use "
+            f"`return await _finish(context, chat_id)`."
+        )
+
+    def test_the_teardown_really_is_reached_by_the_other_exits(self):
+        """Guards the test above, which would also pass if NOTHING ended the
+        conversation at all — an empty set equals an empty set.
+
+        So: the module must really contain exits, and they must really route
+        through _finish. Counting calls rather than naming them keeps this
+        from becoming the hand-maintained list it exists to avoid.
+        """
+        import ast
+        import inspect as _inspect
+        tree = ast.parse(_inspect.getsource(w))
+        callers = {
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and any(isinstance(n, ast.Call)
+                    and getattr(n.func, "id",
+                                getattr(n.func, "attr", None)) == "_finish"
+                    for n in ast.walk(node))
+        }
+        assert len(callers) >= 6, sorted(callers)
+        assert {"sl_cancel", "sl_send", "sl_end"} <= callers, sorted(callers)
+
+    async def test_the_teardown_deletes_and_drops_state_together(self):
+        """Either one alone is a bug.
+
+        Dropping the state without deleting orphans the clips forever, since
+        nothing else remembers their ids. Deleting without dropping the state
+        would leave a finished conversation's songs behind to leak into the
+        next one. _finish does both, in that order.
+        """
+        ctx = _preview_context(results=PREVIEWABLE, query="q")
+        ctx.user_data[w.STATE_KEY][w.PREVIEW_IDS_KEY] = [11, 22]
+        ctx.user_data[w.STATE_KEY]["songs"] = list(PREVIEWABLE)
+
+        result = await w._finish(ctx, 4242)
+
+        assert ctx.bot.delete_messages.await_args.kwargs["message_ids"] == [11, 22]
+        assert w.STATE_KEY not in ctx.user_data
+        assert result == ConversationHandler.END
+
+    async def test_the_teardown_deletes_before_it_drops_the_state(self):
+        """Order is load-bearing: the ids live IN the state being dropped."""
+        ctx = _preview_context(results=PREVIEWABLE, query="q")
+        ctx.user_data[w.STATE_KEY][w.PREVIEW_IDS_KEY] = [11, 22]
+        seen = {}
+
+        async def record(*a, **kw):
+            seen["ids"] = kw.get("message_ids")
+            seen["state_present"] = w.STATE_KEY in ctx.user_data
+
+        ctx.bot.delete_messages = AsyncMock(side_effect=record)
+        await w._finish(ctx, 4242)
+        assert seen["ids"] == [11, 22]
+        assert seen["state_present"] is True
+
+
+class TestTheArtworkIsNeverPersisted:
+    """Downloaded artwork must leave nothing behind to clean up.
+
+    The user asked on 2026-11-16 that downloaded thumbnails be deleted when
+    the list is sent or abandoned. There is nothing to delete, and these
+    tests exist to keep that true rather than to assert it once:
+
+      * `fetch_artwork` returns bytes from `response.content`, in memory;
+      * PTB's InputFile holds `bytes` as `input_file_content` and streams it
+        through multipart — no tempfile, no mkstemp, no write;
+      * the conversation state records message ids (ints) and nothing else.
+
+    Verified empirically the same day: a full `_send_previews` run created
+    NO new file anywhere under the temp directory or the working tree.
+
+    The realistic way that stops being true is somebody caching artwork to
+    disk to save a re-fetch — which would be a reasonable-looking change that
+    silently creates exactly the litter the user was asking about. Hence a
+    guard rather than a comment.
+    """
+
+    async def test_no_artwork_bytes_survive_in_the_conversation_state(self):
+        ctx = _preview_context(results=PREVIEWABLE, query="q")
+        ctx.bot.send_audio = AsyncMock(side_effect=[
+            MagicMock(message_id=1), MagicMock(message_id=2)])
+        with _no_network():
+            await w.sl_preview(_preview_update(), ctx)
+
+        def _walk(value, path="state"):
+            """Every bytes-like object reachable from the state, with its path."""
+            found = []
+            if isinstance(value, (bytes, bytearray)):
+                found.append(path)
+            elif isinstance(value, dict):
+                for k, v in value.items():
+                    found += _walk(v, f"{path}[{k!r}]")
+            elif isinstance(value, (list, tuple, set)):
+                for n, v in enumerate(value):
+                    found += _walk(v, f"{path}[{n}]")
+            elif hasattr(value, "__dict__"):
+                for k, v in vars(value).items():
+                    found += _walk(v, f"{path}.{k}")
+            return found
+
+        leaked = _walk(ctx.user_data)
+        assert not leaked, f"artwork bytes retained in state at: {leaked}"
+
+    async def test_only_message_ids_are_recorded(self):
+        """Positively, so the test above cannot pass by finding nothing."""
+        ctx = _preview_context(results=PREVIEWABLE, query="q")
+        ctx.bot.send_audio = AsyncMock(side_effect=[
+            MagicMock(message_id=1), MagicMock(message_id=2)])
+        with _no_network():
+            await w.sl_preview(_preview_update(), ctx)
+        ids = ctx.user_data[w.STATE_KEY][w.PREVIEW_IDS_KEY]
+        assert ids == [1, 2]
+        assert all(isinstance(i, int) for i in ids)
+
+    def test_nothing_on_the_preview_path_writes_to_disk(self):
+        """Walks the AST of both modules for a file write.
+
+        Checked structurally rather than by watching the filesystem during a
+        send: a filesystem watch would have to tolerate the logging handler
+        touching logs/bot.log, and tolerating that is exactly the hole a
+        future artwork cache would slip through. The AST has no such
+        ambiguity.
+
+        Reading the Song/clip path only — `w` and `apple_music` — because
+        storage.py legitimately writes YAML all day.
+        """
+        import ast
+        import inspect as _inspect
+        import apple_music as am
+
+        WRITERS = {"mkstemp", "mkdtemp", "NamedTemporaryFile", "TemporaryFile",
+                   "write_bytes", "write_text", "copyfileobj"}
+        offenders = []
+        for module in (am, w):
+            tree = ast.parse(_inspect.getsource(module))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                name = (node.func.attr if isinstance(node.func, ast.Attribute)
+                        else getattr(node.func, "id", None))
+                if name in WRITERS:
+                    offenders.append(f"{module.__name__}: {name}")
+                elif name == "open":
+                    # open() is only a write when a mode says so.
+                    modes = [a.value for a in node.args[1:]
+                             if isinstance(a, ast.Constant)]
+                    modes += [k.value.value for k in node.keywords
+                              if k.arg == "mode" and isinstance(k.value, ast.Constant)]
+                    if any(m for m in modes if isinstance(m, str)
+                           and any(c in m for c in "wxa+")):
+                        offenders.append(f"{module.__name__}: open({modes})")
+        assert not offenders, (
+            f"the preview path now writes to disk: {offenders}. Downloaded "
+            f"artwork is held in memory for one send precisely so there is "
+            f"nothing to clean up; if a cache is genuinely wanted, it has to "
+            f"be cleared in _finish alongside the clips."
+        )
+
+    def test_the_disk_write_scan_can_actually_see_a_write(self):
+        """Guards the scan above, which passes happily if it looks at nothing.
+
+        A positive control needs a module that really does write, and the
+        first choice for it was WRONG: storage.py turned out to contain zero
+        file calls, because every read and write goes through cache.FileCache.
+        The control failed, which is the only reason that was noticed — had
+        the main scan been shipped without it, "no writes on the preview
+        path" would have been a claim with no demonstrated ability to detect
+        one.
+
+        cache.py and activity_logger.py are the modules that actually touch
+        files, so the control uses those.
+        """
+        import ast
+        import inspect as _inspect
+        import activity_logger
+        import cache
+
+        for module in (cache, activity_logger):
+            tree = ast.parse(_inspect.getsource(module))
+            writes = [
+                node for node in ast.walk(tree)
+                if isinstance(node, ast.Call)
+                and (node.func.attr if isinstance(node.func, ast.Attribute)
+                     else getattr(node.func, "id", None)) in {
+                         "open", "write_text", "write_bytes", "mkstemp"}
+            ]
+            assert writes, (
+                f"the scan found no file calls in {module.__name__} — the "
+                f"scan is broken, not the module"
+            )

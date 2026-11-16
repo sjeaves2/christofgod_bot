@@ -88,6 +88,15 @@ CB_SONG_PREFIX = "sl:"
 #: Namespace inside user_data, so this conversation cannot tread on another's.
 STATE_KEY = "songlist"
 
+#: Message ids of the preview clips sent so far, inside the conversation state.
+#:
+#: They accumulate across searches and are cleared when the list is sent or
+#: abandoned, not when a song is picked — the admin asked for it that way, so
+#: a clip stays available for comparison while the list is still being built.
+#: A list that previews several songs can therefore hold a few dozen ids,
+#: which is why the delete is bulk.
+PREVIEW_IDS_KEY = "preview_message_ids"
+
 # Eleven links would otherwise draw eleven link previews, burying the list.
 #
 # This is the CURRENT way to do it. The old boolean keyword was REMOVED in
@@ -402,7 +411,8 @@ async def sl_preview(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         # the previews for; the worst case is a second set of clips.
         logger.warning("Could not clear the picker keyboard: %s", exc)
 
-    sent = await _send_previews(query.message.chat_id, context, results)
+    sent = await _send_previews(query.message.chat_id, context, results,
+                                state)
     if not sent:
         await query.message.reply_text(
             "⚠️ I could not fetch any previews just now. "
@@ -414,44 +424,61 @@ async def sl_preview(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def _send_previews(chat_id: int, context: ContextTypes.DEFAULT_TYPE,
-                         results: list[Song]) -> int:
+                         results: list[Song],
+                         state: dict[str, Any]) -> int:
     """Clips for every candidate that has one. Returns how many were sent.
 
     Sequential, not gathered: five concurrent sends to one chat invite
     Telegram's flood limits, and the admin is going to listen to them one at
-    a time anyway. Five fetches of about a megabyte take a few seconds.
+    a time anyway.
 
     One failure must not cost the others, so each send is caught on its own —
     the same reasoning as the per-recipient handling in sl_send. The caller
     reports nothing being sent; a single clip missing from five is visible in
     the numbering without being announced.
 
-    THE TITLE AND THUMBNAIL ARE OURS TO SET
-    ---------------------------------------
+    Every clip's message id is recorded in *state* so the conversation can
+    delete them when it finishes. See _clear_previews.
+
+    THE TITLE IS OURS TO SET; THE THUMBNAIL HAD TO BE FETCHED
+    ---------------------------------------------------------
     Telegram prefers an audio file's OWN tags over the title and performer a
-    caller passes, which would have made these arguments decorative. They are
+    caller passes, which would have made those arguments decorative. They are
     not: a preview clip was downloaded and inspected on 2026-11-16 and its
     MPEG-4 metadata box contains no ©nam, ©ART, ©alb or covr atom at all, so
     there is nothing for Telegram to prefer. Should Apple start tagging the
     clips, the symptom is the numbering disappearing from the player — the
     clips would still play, and would no longer be matched to their buttons.
 
-    NO AWS-IP EXPOSURE ON THIS PATH
-    -------------------------------
-    Unlike search_songs, nothing here fetches anything: the URL is handed to
-    Telegram and TELEGRAM fetches it. So the failure that hid in
-    deep-translator for months — an endpoint refusing AWS addresses, silently,
-    from production only — cannot arise on this path, and there is nothing to
-    verify from the Lightsail box. The flip side is that a broken preview URL
-    surfaces only as a TelegramError from the send, which is why one is caught
-    and logged per clip rather than assumed impossible.
+    The thumbnail is the exception, and v0.29.0 shipped it broken. `thumbnail`
+    is the one sendAudio field that will NOT take a URL: Telegram treats it as
+    a file_id and accepts only a freshly uploaded file, so PTB passed our URL
+    through as a plain string and the artwork was silently dropped. Nothing
+    raised; the user found it on the first live run. The bytes are fetched by
+    apple_music.fetch_artwork and handed over as bytes, which PTB wraps in an
+    InputFile. `audio` is unaffected — URLs are fine there, which is why the
+    clips themselves always worked.
+
+    ONE CONSEQUENCE: THIS PATH NOW FETCHES
+    --------------------------------------
+    Until the thumbnail fix, every fetch on this path was Telegram's, which
+    made it immune to the deep-translator failure — an endpoint that refused
+    AWS addresses, silently, in production only, for months. It is not immune
+    any more, so mzstatic was checked from 44.214.123.92 itself (200, 22442
+    bytes, 50ms, 2026-11-16). Keep that check in mind for any change here. The
+    artwork is about 22 kB per clip, so five candidates cost ~110 kB, against
+    the ~5 MB of audio Telegram still fetches for itself.
     """
     sent = 0
     for index, song in enumerate(results, 1):
         if not song.preview_url:
             continue
+        # Fetched before the send rather than inside it: fetch_artwork never
+        # raises and returns None on any failure, so a thumbnail that cannot
+        # be had costs the thumbnail, never the clip.
+        artwork = await apple_music.fetch_artwork(song.artwork_url)
         try:
-            await context.bot.send_audio(
+            message = await context.bot.send_audio(
                 chat_id=chat_id,
                 audio=song.preview_url,
                 # Telegram shows title and performer in the player. The
@@ -461,7 +488,7 @@ async def _send_previews(chat_id: int, context: ContextTypes.DEFAULT_TYPE,
                 performer=song.artist,
                 caption=song.detail(index),
                 parse_mode=ParseMode.HTML,
-                thumbnail=song.artwork_url or None,
+                thumbnail=artwork,
                 # The clip, NOT the track. Apple's previews run about thirty
                 # seconds; song.duration_ms is the full recording and would
                 # tell the player to draw a four-minute scrubber over a
@@ -469,11 +496,98 @@ async def _send_previews(chat_id: int, context: ContextTypes.DEFAULT_TYPE,
                 duration=PREVIEW_SECONDS,
             )
             sent += 1
+            message_id = getattr(message, "message_id", None)
+            if message_id is not None:
+                state.setdefault(PREVIEW_IDS_KEY, []).append(message_id)
         except TelegramError as exc:
             logger.warning("Preview %d (%r) failed: %s: %s",
                            index, song.title, type(exc).__name__, exc)
     logger.info("Sent %d of %d preview clip(s).", sent, len(results))
     return sent
+
+
+async def _clear_previews(chat_id: int, context: ContextTypes.DEFAULT_TYPE,
+                          state: dict[str, Any]) -> int:
+    """Delete every preview clip this conversation sent. Returns the count.
+
+    The clips are scaffolding. Once the list has been sent or abandoned they
+    are a wall of audio in the admin's chat with nothing left to decide, so
+    the conversation cleans up after itself.
+
+    The ids are forgotten whether or not the delete succeeded, which is
+    deliberate: a failure here is permanent, not transient. A bot may only
+    delete its own message within 48 HOURS of sending it, and a conversation
+    left open past that — or a clip the admin deleted by hand — will fail the
+    same way on every retry. Keeping the id would mean trying forever.
+
+    Bulk, not one call per clip: delete_messages takes up to 100 ids and
+    costs one request. It is all-or-nothing, though, so a single undeletable
+    clip would strand the rest — hence the per-id fallback.
+    """
+    ids = state.pop(PREVIEW_IDS_KEY, None) or []
+    if not ids:
+        return 0
+    try:
+        await context.bot.delete_messages(chat_id=chat_id, message_ids=ids)
+        logger.info("Deleted %d preview clip(s) in one call.", len(ids))
+        return len(ids)
+    except TelegramError as exc:
+        logger.warning("Bulk delete of %d preview clip(s) failed: %s; "
+                       "falling back to one at a time.", len(ids), exc)
+
+    deleted = 0
+    for message_id in ids:
+        try:
+            await context.bot.delete_message(chat_id=chat_id,
+                                             message_id=message_id)
+            deleted += 1
+        except TelegramError as exc:
+            logger.warning("Could not delete preview clip %s: %s",
+                           message_id, exc)
+    logger.info("Deleted %d of %d preview clip(s) individually.",
+                deleted, len(ids))
+    return deleted
+
+
+async def _finish(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> int:
+    """End the conversation: delete the preview clips, then drop the state.
+
+    THE ONLY WAY THIS CONVERSATION SHOULD END. Eight code paths reach
+    ConversationHandler.END and three of them did not even clear the state
+    before this existed, so patching them one at a time was never going to
+    hold — that is precisely the mistake that cost v0.28.16 and v0.28.17,
+    where a guard covered the cases someone remembered. TestEveryExitCleansUp
+    walks this module's AST and fails if any function that returns END does
+    not come through here, so a ninth exit added later cannot quietly skip it.
+
+    sl_stale_button is the one deliberate exemption and must stay exempt: it
+    is registered OUTSIDE the conversation and fires for taps the conversation
+    declined, which includes an admin tapping an old keyboard while a list is
+    still being built. Tearing down there would delete the clips and the list
+    of someone who is mid-task.
+
+    Returns END so callers can `return await _finish(...)` and not restate it.
+    """
+    await _clear_previews(chat_id, context, _state(context))
+    context.user_data.pop(STATE_KEY, None)
+    return ConversationHandler.END
+
+
+async def sl_cancel_command(update: Update,
+                            context: ContextTypes.DEFAULT_TYPE) -> int:
+    """/cancel for this conversation only.
+
+    handlers.shared.cancel_conversation is the shared fallback and clears all
+    of user_data, which is right for every other conversation and not enough
+    for this one: the clips live in the CHAT, not in user_data, so dropping
+    the state would orphan them permanently — nothing would remember the ids.
+
+    So the clips go first and the shared handler still does the rest, keeping
+    the cancellation message and the activity log identical to every other
+    conversation's /cancel rather than forking that behaviour here.
+    """
+    await _clear_previews(update.effective_chat.id, context, _state(context))
+    return await cancel_conversation(update, context)
 
 
 async def sl_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -535,8 +649,7 @@ async def sl_end(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             "The list is empty, so there is nothing to send. "
             "Start again with /songlist when you are ready."
         )
-        context.user_data.pop(STATE_KEY, None)
-        return ConversationHandler.END
+        return await _finish(context, update.effective_chat.id)
     await _show_confirmation(update.message.reply_text, songs)
     return SL_CONFIRM
 
@@ -577,7 +690,7 @@ async def sl_remove_menu(update: Update,
     songs = _songs(context)
     if not songs:
         await query.edit_message_text("The list is empty. /songlist to start again.")
-        return ConversationHandler.END
+        return await _finish(context, query.message.chat_id)
     await query.edit_message_text("Which song should come off the list?",
                                   reply_markup=remove_keyboard(songs))
     return SL_REMOVE
@@ -590,27 +703,28 @@ async def sl_remove(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     index = int(query.data.rsplit(":", 1)[1])
     if index >= len(songs):
         await query.edit_message_text("That song is no longer on the list.")
-        return await _back_to_confirm(query, songs)
+        return await _back_to_confirm(query, context, songs)
     dropped = songs.pop(index)
     await query.edit_message_text(
         f"🗑 Removed “{dropped.title}” by {dropped.artist}.")
-    return await _back_to_confirm(query, songs)
+    return await _back_to_confirm(query, context, songs)
 
 
 async def sl_back_to_confirm(update: Update,
                              context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
-    return await _back_to_confirm(query, _songs(context))
+    return await _back_to_confirm(query, context, _songs(context))
 
 
-async def _back_to_confirm(query, songs: list[Song]) -> int:
+async def _back_to_confirm(query, context: ContextTypes.DEFAULT_TYPE,
+                           songs: list[Song]) -> int:
     if not songs:
         await query.message.reply_text(
             "Every song has been removed, so there is nothing to send. "
             "/songlist to start again."
         )
-        return ConversationHandler.END
+        return await _finish(context, query.message.chat_id)
     await _show_confirmation(query.message.reply_text, songs)
     return SL_CONFIRM
 
@@ -621,7 +735,7 @@ async def sl_choose_recipient(update: Update,
     await query.answer()
     if not _songs(context):
         await query.edit_message_text("The list is empty. /songlist to start again.")
-        return ConversationHandler.END
+        return await _finish(context, query.message.chat_id)
     keyboard = await recipient_keyboard()
     if keyboard is None:
         await query.edit_message_text(
@@ -629,7 +743,7 @@ async def sl_choose_recipient(update: Update,
             "users with a chat it can open. A recipient has to have used the "
             "bot at least once."
         )
-        return ConversationHandler.END
+        return await _finish(context, query.message.chat_id)
     await query.edit_message_text("Who should receive the list?",
                                   reply_markup=keyboard)
     return SL_RECIPIENT
@@ -668,8 +782,7 @@ async def sl_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             )
             activity.log_error(
                 f"Song list to {chat_id} failed after {sent} message(s): {exc}")
-            context.user_data.pop(STATE_KEY, None)
-            return ConversationHandler.END
+            return await _finish(context, query.message.chat_id)
 
     activity.log_command("songlist", uid, uname, dname,
                          details=f"{len(songs)} song(s) sent to {chat_id}")
@@ -677,16 +790,14 @@ async def sl_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         f"✅ Sent {len(songs)} song(s)."
         + ("" if len(chunks) == 1 else f" ({len(chunks)} messages.)")
     )
-    context.user_data.pop(STATE_KEY, None)
-    return ConversationHandler.END
+    return await _finish(context, query.message.chat_id)
 
 
 async def sl_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
-    context.user_data.pop(STATE_KEY, None)
     await query.edit_message_text("Abandoned. Nothing was sent.")
-    return ConversationHandler.END
+    return await _finish(context, query.message.chat_id)
 
 
 async def sl_stale_button(update: Update,
@@ -810,6 +921,6 @@ def song_list_conversation() -> ConversationHandler:
                 _cb(sl_cancel, "cancel"),
             ],
         },
-        fallbacks=[CommandHandler("cancel", cancel_conversation)],
+        fallbacks=[CommandHandler("cancel", sl_cancel_command)],
         allow_reentry=True,
     )
