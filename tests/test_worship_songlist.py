@@ -269,10 +269,50 @@ class TestKeyboards:
         assert [b.callback_data for b in picks] == [
             "sl:pick:0", "sl:pick:1", "sl:pick:2"]
 
-    def test_the_album_is_in_the_label(self):
-        """Sometimes the only difference between two results."""
+    def test_the_album_is_shown_in_the_body_not_the_button(self):
+        """Sometimes the only difference between two results.
+
+        It used to be in the button label and is now in the message body.
+        The INVARIANT is unchanged — the album must reach the admin's eyes —
+        but a 60-character label cannot hold it alongside a duration and a
+        year, so the buttons became numbers. Asserted in both directions:
+        present in the body, and genuinely gone from the label, because a
+        move that quietly left it in both places would make the trim at
+        _result_label load-bearing again without anyone noticing.
+        """
+        assert "The Hymns" in w.render_candidates(SONGS[:1])
         kb = w.results_keyboard(SONGS[:1])
-        assert "The Hymns" in kb.inline_keyboard[0][0].text
+        labels = [b.text for row in kb.inline_keyboard for b in row]
+        assert not any("The Hymns" in label for label in labels), labels
+
+    def test_the_pick_buttons_are_their_numbers(self):
+        kb = w.results_keyboard(SONGS)
+        picks = [b for row in kb.inline_keyboard for b in row
+                 if b.callback_data.startswith(f"{w.CB_SONG_PREFIX}pick:")]
+        assert [b.text for b in picks] == ["1", "2", "3"]
+
+    def test_the_pick_buttons_share_one_row(self):
+        """Five numbers side by side, not five full-width rows."""
+        kb = w.results_keyboard(SONGS)
+        assert [b.callback_data for b in kb.inline_keyboard[0]] == [
+            "sl:pick:0", "sl:pick:1", "sl:pick:2"]
+
+    def test_preview_is_offered_when_a_candidate_has_a_clip(self):
+        with_clip = [Song("A", "B", "", "https://music.apple.com/1",
+                          preview_url="https://audio-ssl.itunes.apple.com/a.m4a")]
+        data = {b.callback_data for row in w.results_keyboard(with_clip).inline_keyboard
+                for b in row}
+        assert "sl:preview" in data
+
+    def test_preview_is_not_offered_when_no_candidate_has_a_clip(self):
+        """A button that cannot do anything is worse than no button.
+
+        SONGS carry no preview_url, which is the point: the fixture predates
+        previews and stands in for a result the API answered without one.
+        """
+        data = {b.callback_data for row in w.results_keyboard(SONGS).inline_keyboard
+                for b in row}
+        assert "sl:preview" not in data
 
     def test_there_is_a_way_out_when_no_result_fits(self):
         data = {b.callback_data for row in w.results_keyboard(SONGS).inline_keyboard
@@ -961,3 +1001,208 @@ class TestPtbPicksTheRightHandler:
         assert callback_entries == [], (
             "a CallbackQueryHandler entry point hijacks live taps while "
             "allow_reentry is True")
+
+
+PREVIEWABLE = [
+    Song("Amazing Grace", "CeCe Winans", "The Hymns",
+         "https://music.apple.com/us/album/amazing-grace/1?i=11",
+         preview_url="https://audio-ssl.itunes.apple.com/a/mzaf_1.m4a",
+         artwork_url="https://is1-ssl.mzstatic.com/a/300x300bb.jpg",
+         duration_ms=253338, release_year=2026),
+    Song("Amazing Grace", "Smile Melody Coffee Music",
+         "Christmas Jazz in a Coffee Cup",
+         "https://music.apple.com/us/album/amazing-grace/2?i=22",
+         preview_url="https://audio-ssl.itunes.apple.com/a/mzaf_2.m4a",
+         artwork_url="https://is1-ssl.mzstatic.com/b/300x300bb.jpg",
+         duration_ms=156500, release_year=2026),
+]
+
+
+def _preview_context(**state):
+    ctx = _context(songs=[], **state)
+    ctx.bot.send_audio = AsyncMock()
+    ctx.bot.edit_message_reply_markup = AsyncMock()
+    return ctx
+
+
+def _preview_update():
+    update = _callback_update("sl:preview")
+    update.callback_query.edit_message_reply_markup = AsyncMock()
+    update.callback_query.message.chat_id = 4242
+    return update
+
+
+class TestTheCandidateBlock:
+    """What the admin reads while choosing.
+
+    The problem this solves, reported 2026-11-16: a title and an artist do
+    not always identify a recording.
+    """
+
+    def test_every_candidate_appears_numbered(self):
+        body = w.render_candidates(PREVIEWABLE)
+        assert body.startswith("1. ")
+        assert "\n\n2. " in body
+
+    def test_the_distinguishing_facts_are_present(self):
+        """The whole point. Two "Amazing Grace" hits, told apart."""
+        body = w.render_candidates(PREVIEWABLE)
+        assert "The Hymns · 4:13 · 2026" in body
+        assert "Christmas Jazz in a Coffee Cup · 2:36 · 2026" in body
+
+    def test_it_is_html_and_bolds_the_titles(self):
+        assert w.render_candidates(PREVIEWABLE).count("<b>") == 2
+
+    def test_an_empty_list_renders_empty(self):
+        assert w.render_candidates([]) == ""
+
+
+class TestShowingTheCandidates:
+    async def test_the_picker_is_sent_as_html(self):
+        """Song.detail emits <b>; plain text would show the raw markup."""
+        send = AsyncMock()
+        await w._show_candidates(send, "amazing grace", PREVIEWABLE)
+        assert send.call_args.kwargs["parse_mode"] == ParseMode.HTML
+
+    async def test_link_previews_are_suppressed(self):
+        send = AsyncMock()
+        await w._show_candidates(send, "amazing grace", PREVIEWABLE)
+        assert send.call_args.kwargs["link_preview_options"] is w.NO_PREVIEW
+
+    async def test_the_query_and_the_detail_both_appear(self):
+        send = AsyncMock()
+        await w._show_candidates(send, "amazing grace", PREVIEWABLE)
+        text = send.call_args[0][0]
+        assert "amazing grace" in text and "The Hymns · 4:13 · 2026" in text
+
+    async def test_searching_stores_the_query_for_the_repost(self):
+        update = _message_update("amazing grace")
+        ctx = _preview_context()
+        with patch.object(w.apple_music, "search_songs",
+                          AsyncMock(return_value=PREVIEWABLE)):
+            await w.sl_query(update, ctx)
+        assert ctx.user_data[w.STATE_KEY]["query"] == "amazing grace"
+
+    async def test_picking_clears_the_stored_query_with_the_results(self):
+        """A stale query would head the next picker with the wrong words."""
+        ctx = _context(songs=[], results=PREVIEWABLE, query="amazing grace")
+        await w.sl_pick(_callback_update("sl:pick:0"), ctx)
+        state = ctx.user_data[w.STATE_KEY]
+        assert "query" not in state and "results" not in state
+
+
+class TestSendingPreviews:
+    """Thirty-second clips, so the admin can hear which recording it is."""
+
+    async def test_one_clip_per_candidate(self):
+        ctx = _preview_context(results=PREVIEWABLE, query="amazing grace")
+        await w.sl_preview(_preview_update(), ctx)
+        assert ctx.bot.send_audio.await_count == 2
+
+    async def test_each_clip_carries_its_own_audio_url(self):
+        ctx = _preview_context(results=PREVIEWABLE, query="amazing grace")
+        await w.sl_preview(_preview_update(), ctx)
+        urls = [c.kwargs["audio"] for c in ctx.bot.send_audio.await_args_list]
+        assert urls == [s.preview_url for s in PREVIEWABLE]
+
+    async def test_the_clip_is_numbered_to_match_its_button(self):
+        ctx = _preview_context(results=PREVIEWABLE, query="amazing grace")
+        await w.sl_preview(_preview_update(), ctx)
+        titles = [c.kwargs["title"] for c in ctx.bot.send_audio.await_args_list]
+        assert titles == ["1. Amazing Grace", "2. Amazing Grace"]
+
+    async def test_the_artwork_is_sent_as_the_thumbnail(self):
+        ctx = _preview_context(results=PREVIEWABLE, query="amazing grace")
+        await w.sl_preview(_preview_update(), ctx)
+        first = ctx.bot.send_audio.await_args_list[0].kwargs
+        assert first["thumbnail"] == PREVIEWABLE[0].artwork_url
+        assert first["performer"] == "CeCe Winans"
+
+    async def test_the_duration_is_the_clips_not_the_tracks(self):
+        """253338 ms would draw a four-minute scrubber over a 30s file."""
+        ctx = _preview_context(results=PREVIEWABLE, query="amazing grace")
+        await w.sl_preview(_preview_update(), ctx)
+        durations = {c.kwargs["duration"]
+                     for c in ctx.bot.send_audio.await_args_list}
+        assert durations == {w.PREVIEW_SECONDS}
+        assert w.PREVIEW_SECONDS != PREVIEWABLE[0].duration_ms
+
+    async def test_a_candidate_without_a_clip_is_skipped_not_sent_blank(self):
+        songs = [PREVIEWABLE[0], Song("No Clip", "Nobody", "", "https://x/1")]
+        ctx = _preview_context(results=songs, query="q")
+        await w.sl_preview(_preview_update(), ctx)
+        assert ctx.bot.send_audio.await_count == 1
+
+    async def test_one_failed_clip_does_not_cost_the_others(self):
+        """The same per-item isolation the recipient send has."""
+        ctx = _preview_context(results=PREVIEWABLE, query="q")
+        ctx.bot.send_audio = AsyncMock(
+            side_effect=[TelegramError("boom"), None])
+        update = _preview_update()
+        await w.sl_preview(update, ctx)
+        assert ctx.bot.send_audio.await_count == 2
+        # One clip did arrive, so the admin is not told previews failed.
+        assert "could not fetch any previews" not in _said(
+            update.callback_query.message.reply_text)
+
+    async def test_every_clip_failing_says_so_and_still_shows_the_picker(self):
+        ctx = _preview_context(results=PREVIEWABLE, query="q")
+        ctx.bot.send_audio = AsyncMock(side_effect=TelegramError("boom"))
+        update = _preview_update()
+        state = await w.sl_preview(update, ctx)
+        said = _said(update.callback_query.message.reply_text)
+        assert "could not fetch any previews" in said
+        assert "The Hymns · 4:13 · 2026" in said
+        assert state == w.SL_PICK
+
+    async def test_the_old_keyboard_is_stripped_so_it_cannot_double_up(self):
+        """Tapping the preview button twice would send ten clips."""
+        ctx = _preview_context(results=PREVIEWABLE, query="q")
+        update = _preview_update()
+        await w.sl_preview(update, ctx)
+        update.callback_query.edit_message_reply_markup.assert_awaited_once_with(
+            reply_markup=None)
+
+    async def test_failing_to_strip_the_keyboard_does_not_abandon_the_previews(self):
+        ctx = _preview_context(results=PREVIEWABLE, query="q")
+        update = _preview_update()
+        update.callback_query.edit_message_reply_markup = AsyncMock(
+            side_effect=TelegramError("too old"))
+        await w.sl_preview(update, ctx)
+        assert ctx.bot.send_audio.await_count == 2
+
+    async def test_the_picker_is_reposted_below_the_clips(self):
+        """The clips push the original picker out of view."""
+        ctx = _preview_context(results=PREVIEWABLE, query="amazing grace")
+        update = _preview_update()
+        await w.sl_preview(update, ctx)
+        said = _said(update.callback_query.message.reply_text)
+        assert "amazing grace" in said and "The Hymns" in said
+
+    async def test_the_reposted_buttons_still_mean_what_they_meant(self):
+        """`results` is untouched, so index 1 is still the second candidate."""
+        ctx = _preview_context(results=PREVIEWABLE, query="q")
+        await w.sl_preview(_preview_update(), ctx)
+        assert ctx.user_data[w.STATE_KEY]["results"] == PREVIEWABLE
+        await w.sl_pick(_callback_update("sl:pick:1"), ctx)
+        assert ctx.user_data[w.STATE_KEY]["songs"] == [PREVIEWABLE[1]]
+
+    async def test_the_state_stays_on_the_picker(self):
+        ctx = _preview_context(results=PREVIEWABLE, query="q")
+        assert await w.sl_preview(_preview_update(), ctx) == w.SL_PICK
+
+    async def test_a_preview_tap_that_outlived_its_search_sends_nothing(self):
+        ctx = _preview_context()
+        update = _preview_update()
+        state = await w.sl_preview(update, ctx)
+        assert ctx.bot.send_audio.await_count == 0
+        assert state == w.SL_QUERY
+        assert "no longer on offer" in _said(
+            update.callback_query.edit_message_text)
+
+    async def test_the_tap_is_acknowledged(self):
+        """Without answer() the button spins on the admin's phone."""
+        ctx = _preview_context(results=PREVIEWABLE, query="q")
+        update = _preview_update()
+        await w.sl_preview(update, ctx)
+        update.callback_query.answer.assert_awaited()

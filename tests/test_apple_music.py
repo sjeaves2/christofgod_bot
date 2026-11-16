@@ -407,3 +407,247 @@ class TestStrippingTrackingParameters:
         kept than lost, so junk comes back unchanged rather than crashing."""
         for junk in ("", "not a url", "://", "https://"):
             assert isinstance(am.clean_url(junk), str)
+
+
+class TestMediaUrlHostPinning:
+    """`preview_url` and `artwork_url` are DEREFERENCED by Telegram.
+
+    That is the whole reason this guard exists and `clean_url` has nothing
+    like it: a trackViewUrl is only ever shown to a human as text, while these
+    two are handed to sendAudio, which makes Telegram fetch them. A wrong or
+    hostile value turns the bot into a fetch-this-for-me service aimed
+    wherever the response says.
+
+    Rejection returns "" rather than raising, so a hit with a bad preview is
+    still shown and still pickable.
+    """
+
+    def test_an_apple_audio_preview_is_allowed(self):
+        url = ("https://audio-ssl.itunes.apple.com/itunes-assets/"
+               "AudioPreview221/v4/51/mzaf_1224.plus.aac.p.m4a")
+        assert am.media_url(url) == url
+
+    def test_any_mzstatic_image_shard_is_allowed(self):
+        """Apple rotates is1- through is5-, so the full host cannot be pinned."""
+        for shard in ("is1-ssl", "is2-ssl", "is5-ssl"):
+            url = f"https://{shard}.mzstatic.com/image/thumb/a/100x100bb.jpg"
+            assert am.media_url(url) == url, shard
+
+    def test_the_bare_apex_is_allowed(self):
+        assert am.media_url("https://apple.com/a.jpg") == "https://apple.com/a.jpg"
+
+    def test_a_suffix_lookalike_is_refused(self):
+        """The attack the leading dot exists to stop."""
+        assert am.media_url("https://mzstatic.com.evil.test/a.jpg") == ""
+        assert am.media_url("https://notapple.com/a.jpg") == ""
+
+    def test_userinfo_cannot_smuggle_a_host(self):
+        """`https://trusted@evil.test/` really goes to evil.test.
+
+        A netloc check happens to refuse this one too — see the comment in
+        media_url, which used to claim otherwise and was wrong. Kept because
+        the case is the obvious attack and must stay refused however the
+        implementation is rewritten, not because it discriminates.
+        """
+        assert am.media_url("https://is1-ssl.mzstatic.com@evil.test/a.jpg") == ""
+
+    def test_the_host_decides_and_a_port_does_not(self):
+        """What .hostname is actually buying, as opposed to .netloc.
+
+        Apple does not use a port, so this URL is hypothetical — but it is
+        the case that separates the two implementations, and a netloc check
+        would refuse a genuine Apple address for carrying one. The guard is
+        a statement about the host; nothing else should be able to veto it.
+        """
+        url = "https://is1-ssl.mzstatic.com:8443/image/a/100x100bb.jpg"
+        assert am.media_url(url) == url
+
+    def test_plain_http_is_refused(self):
+        assert am.media_url("http://is1-ssl.mzstatic.com/a.jpg") == ""
+
+    def test_a_host_is_matched_case_insensitively(self):
+        url = "https://IS1-SSL.MZSTATIC.COM/a.jpg"
+        assert am.media_url(url) == url
+
+    def test_a_fragment_is_dropped(self):
+        assert am.media_url("https://apple.com/a.jpg#x") == "https://apple.com/a.jpg"
+
+    def test_junk_yields_the_empty_string_and_never_raises(self):
+        for junk in ("", "   ", "not a url", "://", None, "ftp://apple.com/a"):
+            assert am.media_url(junk) == "", junk
+
+
+class TestArtworkUpsizing:
+    """The size is in the URL path, so a bigger image costs nothing."""
+
+    BASE = "https://is1-ssl.mzstatic.com/image/thumb/Music/v4/ab/196874328200.jpg"
+
+    def test_the_size_segment_is_rewritten(self):
+        assert am.upsize_artwork(f"{self.BASE}/100x100bb.jpg") == \
+            f"{self.BASE}/{am.ARTWORK_SIZE}x{am.ARTWORK_SIZE}bb.jpg"
+
+    def test_the_requested_size_is_honoured(self):
+        assert am.upsize_artwork(f"{self.BASE}/100x100bb.jpg", 600) == \
+            f"{self.BASE}/600x600bb.jpg"
+
+    def test_the_rest_of_the_path_is_untouched(self):
+        """Including the `.jpg` that appears EARLIER in the path.
+
+        That inner `196874328200.jpg` is why the pattern is anchored with $:
+        an unanchored rewrite could land on the wrong segment.
+        """
+        out = am.upsize_artwork(f"{self.BASE}/100x100bb.jpg")
+        assert out.startswith(self.BASE + "/")
+        assert out.count("196874328200.jpg") == 1
+
+    def test_a_non_square_segment_is_left_alone(self):
+        """A shape the function does not understand is not one to rewrite."""
+        url = f"{self.BASE}/100x200bb.jpg"
+        assert am.upsize_artwork(url) == url
+
+    def test_a_url_with_no_size_segment_is_unchanged(self):
+        url = "https://is1-ssl.mzstatic.com/image/thumb/a/b.png"
+        assert am.upsize_artwork(url) == url
+
+    def test_it_is_idempotent(self):
+        once = am.upsize_artwork(f"{self.BASE}/100x100bb.jpg")
+        assert am.upsize_artwork(once) == once
+
+    def test_the_size_fits_telegrams_thumbnail_limit(self):
+        """sendAudio rejects a thumbnail over 320x320, silently losing it."""
+        assert am.ARTWORK_SIZE <= 320
+
+
+class TestTheIdentifyingFields:
+    """Album, duration and year: the fields that were being discarded.
+
+    Members reported on 2026-11-16 that title and artist alone do not always
+    identify a recording. These three are what separate CeCe Winans' 4:13
+    hymn from a 2:36 coffee-shop jazz track of the same name.
+    """
+
+    def test_duration_is_floored_minutes_and_padded_seconds(self):
+        assert am.Song("t", "a", "", "u", duration_ms=253338).duration == "4:13"
+
+    def test_a_sub_second_remainder_rounds_down_like_a_player_does(self):
+        """253338 ms is 4:13.3 — the Music app shows 4:13, not 4:14."""
+        assert am.Song("t", "a", "", "u", duration_ms=253999).duration == "4:13"
+
+    def test_seconds_under_ten_are_zero_padded(self):
+        assert am.Song("t", "a", "", "u", duration_ms=125000).duration == "2:05"
+
+    def test_a_track_over_an_hour_keeps_counting_in_minutes(self):
+        assert am.Song("t", "a", "", "u", duration_ms=3723000).duration == "62:03"
+
+    def test_an_absent_or_nonsense_duration_shows_nothing(self):
+        for ms in (None, 0, -5):
+            assert am.Song("t", "a", "", "u", duration_ms=ms).duration == "", ms
+
+    def test_the_year_comes_out_of_the_iso_release_date(self):
+        assert am._release_year("2026-06-05T12:00:00Z") == 2026
+
+    def test_an_unparseable_release_date_becomes_none(self):
+        for raw in ("", "   ", "soon", "26-06-05", None, 2026, [], "20x6-01-01"):
+            assert am._release_year(raw) is None, raw
+
+    def test_an_implausible_year_is_refused(self):
+        """A four-digit number is not automatically a year."""
+        assert am._release_year("0001-01-01") is None
+        assert am._release_year("9999-01-01") is None
+
+    def test_a_duration_sent_as_a_string_is_accepted(self):
+        assert am._duration_ms("253338") == 253338
+
+    def test_a_boolean_is_not_a_duration(self):
+        """bool is an int subclass, so True would become a 1 ms track."""
+        assert am._duration_ms(True) is None
+        assert am._duration_ms(False) is None
+
+    def test_junk_durations_become_none(self):
+        for raw in (None, "", "4:13", -1, 0, 1.5, [], "12.5"):
+            assert am._duration_ms(raw) is None, raw
+
+
+class TestTheNewFieldsReachTheSong:
+    """_as_song wiring. The parsing above is useless if nothing calls it."""
+
+    PREVIEW = "https://audio-ssl.itunes.apple.com/itunes-assets/a/mzaf_1.m4a"
+    ART100 = "https://is1-ssl.mzstatic.com/image/thumb/a/b.jpg/100x100bb.jpg"
+
+    def _song(self, **extra):
+        return am._as_song(_result(**extra))
+
+    def test_every_field_is_carried(self):
+        song = self._song(previewUrl=self.PREVIEW, artworkUrl100=self.ART100,
+                          trackTimeMillis=253338,
+                          releaseDate="2026-06-05T12:00:00Z")
+        assert song.preview_url == self.PREVIEW
+        assert song.artwork_url.endswith(
+            f"/{am.ARTWORK_SIZE}x{am.ARTWORK_SIZE}bb.jpg")
+        assert song.duration_ms == 253338
+        assert song.release_year == 2026
+        assert song.duration == "4:13"
+
+    def test_artwork_falls_back_to_the_sixty_pixel_url(self):
+        """Seen in the wild on older catalogue entries."""
+        art60 = "https://is1-ssl.mzstatic.com/image/thumb/a/b.jpg/60x60bb.jpg"
+        song = self._song(artworkUrl60=art60)
+        assert song.artwork_url.endswith(
+            f"/{am.ARTWORK_SIZE}x{am.ARTWORK_SIZE}bb.jpg")
+
+    def test_a_result_with_none_of_them_is_still_a_usable_song(self):
+        """The trio is what makes a hit usable; the rest is garnish."""
+        song = self._song()
+        assert song is not None
+        assert song.title == "Amazing Grace"
+        assert song.preview_url == "" and song.artwork_url == ""
+        assert song.duration_ms is None and song.release_year is None
+
+    def test_a_preview_from_a_foreign_host_is_dropped_not_passed_through(self):
+        song = self._song(previewUrl="https://evil.test/a.m4a")
+        assert song.preview_url == ""
+        assert song.title == "Amazing Grace"
+
+    def test_artwork_from_a_foreign_host_is_dropped(self):
+        song = self._song(artworkUrl100="https://evil.test/100x100bb.jpg")
+        assert song.artwork_url == ""
+
+
+class TestTheDetailLine:
+    """The picker's line. Separate from `enumerated`, which is the record."""
+
+    def test_it_leads_with_the_index_and_a_bold_title(self):
+        song = am.Song("Amazing Grace", "CeCe Winans", "The Hymns", "u")
+        assert song.detail(1).startswith("1. <b>Amazing Grace</b> — CeCe Winans")
+
+    def test_the_facts_are_joined_on_the_second_line(self):
+        song = am.Song("Amazing Grace", "CeCe Winans", "The Hymns", "u",
+                       duration_ms=253338, release_year=2026)
+        assert song.detail(1).split("\n")[1].strip() == \
+            "The Hymns · 4:13 · 2026"
+
+    def test_a_missing_fact_leaves_no_empty_separator(self):
+        """A trailing " · · 2026" reads like a bug to the one person helped."""
+        song = am.Song("t", "a", "", "u", release_year=2026)
+        assert song.detail(1).split("\n")[1].strip() == "2026"
+        assert " ·  · " not in song.detail(1)
+
+    def test_no_facts_at_all_yields_a_single_line(self):
+        song = am.Song("t", "a", "", "u")
+        assert "\n" not in song.detail(1)
+
+    def test_an_ampersand_in_an_album_is_escaped(self):
+        """Album names carry & far more often than track titles do."""
+        song = am.Song("t", "a", "Shout to the Lord & Other Songs", "u")
+        assert "&amp;" in song.detail(1)
+        assert "Lord & Other" not in song.detail(1)
+
+    def test_a_title_with_markdown_characters_is_not_escaped(self):
+        """Same reasoning as enumerated: HTML needs exactly three entities."""
+        song = am.Song("10,000 Reasons (Bless the Lord) [Live]", "a", "", "u")
+        out = song.detail(1)
+        assert "10,000 Reasons (Bless the Lord) [Live]" in out
+        assert "\\" not in out
+
+    def test_an_apostrophe_is_left_literal(self):
+        assert "Ain't No Grave" in am.Song("Ain't No Grave", "a", "", "u").detail(1)

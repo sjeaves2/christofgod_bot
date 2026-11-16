@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import html
 import logging
+import re
 from dataclasses import dataclass
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 
@@ -64,6 +65,42 @@ MAX_RESULTS = 5
 # driven by anything other than a human, add some.
 TIMEOUT_SECONDS = 10.0
 
+# Artwork size to request, in pixels. The API only ever returns 30, 60 and 100,
+# all far too small to recognise an album by — but the size is encoded in the
+# URL PATH, so asking for another one costs nothing. Verified 2026-11-16:
+#
+#   .../196874328200.jpg/100x100bb.jpg ->   4 KB
+#   .../196874328200.jpg/300x300bb.jpg ->  22 KB
+#   .../196874328200.jpg/600x600bb.jpg ->  83 KB
+#
+# 300 is the largest that still fits Telegram's sendAudio thumbnail limits
+# (JPEG, at most 320x320 and 200 kB) — which is why it is this and not 600.
+# A larger value here would be accepted by Apple and then silently rejected by
+# Telegram, costing the thumbnail rather than raising anything.
+ARTWORK_SIZE = 300
+
+#: Matches the size segment at the end of an artwork URL: `100x100bb.jpg`.
+#: Anchored at the end so it can only ever rewrite the final path segment, and
+#: requires the two numbers to match each other — Apple's artwork is square,
+#: and a non-square segment is something this function does not understand and
+#: must therefore leave alone.
+_ARTWORK_SIZE_RE = re.compile(r"/(\d+)x\1bb\.jpg$")
+
+#: Host suffixes whose media we are willing to hand to Telegram.
+#:
+#: NOT decoration. `preview_url` and `artwork_url` come from a third-party
+#: response and are passed to sendAudio, which makes TELEGRAM fetch them —
+#: so an attacker-controlled or merely wrong value turns the bot into a
+#: fetch-this-for-me service pointed at a host of someone else's choosing.
+#: `trackViewUrl` has always been trusted because it is only ever shown to a
+#: human as text; these two are different in kind, because something
+#: automatically dereferences them.
+#:
+#: Checked as a suffix after a leading dot, so `mzstatic.com.evil.test` cannot
+#: match, and `is1-ssl.mzstatic.com` through `is5-ssl...` all can — Apple
+#: rotates that prefix and pinning the full host would break on their whim.
+MEDIA_HOST_SUFFIXES = (".apple.com", ".mzstatic.com")
+
 
 @dataclass(frozen=True)
 class Song:
@@ -77,12 +114,68 @@ class Song:
     `album` is carried only to disambiguate the picker: a search for "Great Is
     Thy Faithfulness" returns CeCe Winans twice, from The Hymns and from Alone
     in His Presence. Two identical-looking buttons would be a coin toss.
+
+    Everything after `url` is for IDENTIFYING the song, not for recording it.
+    Members reported on 2026-11-16 that a title and an artist are often not
+    enough to tell two recordings apart — "Amazing Grace" returns CeCe Winans
+    from The Hymns and a 2:36 track off a coffee-shop jazz compilation
+    released the day before. The album, the duration and the year separate
+    those two at a glance and cost nothing: all three were already in the
+    response and were being discarded.
+
+    The four new fields carry defaults because the API omits fields.
+    `_as_song` requires only the title/artist/url trio, and a result missing
+    its preview or its artwork is still a perfectly good search hit — so
+    every consumer must treat these as optional rather than assume the API is
+    generous.
     """
 
     title: str
     artist: str
     album: str
     url: str
+    preview_url: str = ""
+    artwork_url: str = ""
+    duration_ms: int | None = None
+    release_year: int | None = None
+
+    @property
+    def duration(self) -> str:
+        """The running time as `M:SS`, or "" when the API did not say.
+
+        Seconds are FLOORED, matching what a music player shows: 253338 ms is
+        4:13 in the Music app, not 4:14.
+        """
+        if not self.duration_ms or self.duration_ms < 0:
+            return ""
+        total = self.duration_ms // 1000
+        return f"{total // 60}:{total % 60:02d}"
+
+    def detail(self, index: int) -> str:
+        """One candidate as a line for the picker: what distinguishes it.
+
+        Separate from `enumerated` on purpose. `enumerated` is the RECORD the
+        recipient keeps and must stay stable — its shape is asserted against
+        the delivered message. This is the CHOOSING aid, shown only to the
+        admin mid-search, and is free to carry whatever helps them decide.
+
+        Escaped for HTML on the same grounds as `enumerated`: album names
+        carry ampersands ("Shout to the Lord & Other Songs") far more often
+        than track titles do.
+        """
+        title = html.escape(self.title, quote=False)
+        artist = html.escape(self.artist, quote=False)
+        line = f"{index}. <b>{title}</b> — {artist}"
+        # Only the facts the API actually gave us. A trailing " · · 2026" from
+        # blindly joining placeholders reads like a bug to the one person this
+        # screen exists to help.
+        facts = [html.escape(self.album, quote=False) if self.album else "",
+                 self.duration,
+                 str(self.release_year) if self.release_year else ""]
+        kept = [fact for fact in facts if fact]
+        if kept:
+            line += "\n    " + " · ".join(kept)
+        return line
 
     def enumerated(self, index: int) -> str:
         """The exact shape asked for: index, title, "by Artist", link below.
@@ -160,6 +253,90 @@ def clean_url(url: str) -> str:
         return url
 
 
+def media_url(url: str) -> str:
+    """*url* if it is an https Apple address we may hand to Telegram, else "".
+
+    Returning "" rather than raising keeps the never-raises contract: a hit
+    whose preview fails this check is still shown and still pickable, just
+    without a clip. Silently passing it through is the one option that is not
+    available, because something downstream dereferences it.
+    """
+    try:
+        parts = urlsplit((url or "").strip())
+    except ValueError as exc:
+        logger.warning("Could not parse media URL %r: %s", url, exc)
+        return ""
+    if parts.scheme != "https":
+        return ""
+    # .hostname, not .netloc, and lowercased by urlsplit: the suffix test is
+    # a statement about the HOST, so it is given the host alone, with any
+    # user:password@ and :port already removed.
+    #
+    # NOT for the reason it looks like. A first version of this comment said a
+    # netloc check would let `https://trusted.mzstatic.com@evil.test/` through;
+    # it would not — that netloc ends in `evil.test` and is refused either way.
+    # Measured, both directions, 2026-11-16:
+    #
+    #   https://is1-ssl.mzstatic.com@evil.test/  netloc …@evil.test  host evil.test
+    #   https://evil.test@is1-ssl.mzstatic.com/  netloc …mzstatic.com host mzstatic
+    #   https://is1-ssl.mzstatic.com:8443/       netloc …com:8443     host mzstatic
+    #
+    # So netloc is STRICTER, never looser: it would refuse a genuine Apple URL
+    # carrying a port. .hostname is right because it is the host that decides,
+    # and the test below should not also be a test of the port.
+    host = (parts.hostname or "").lower()
+    if not any(host == suffix[1:] or host.endswith(suffix)
+               for suffix in MEDIA_HOST_SUFFIXES):
+        logger.warning("Refusing media URL from unexpected host %r.", host)
+        return ""
+    return urlunsplit((parts.scheme, parts.netloc, parts.path,
+                       parts.query, ""))
+
+
+def upsize_artwork(url: str, size: int = ARTWORK_SIZE) -> str:
+    """*url* asking for a *size*x*size* image instead of whatever it asked for.
+
+    A URL whose final segment is not Apple's `NNNxNNNbb.jpg` is returned
+    unchanged — a recognisable small image beats no image, and a shape this
+    does not understand is not one to start rewriting.
+    """
+    return _ARTWORK_SIZE_RE.sub(f"/{size}x{size}bb.jpg", url, count=1)
+
+
+def _release_year(raw: object) -> int | None:
+    """The year out of an API `releaseDate`, or None.
+
+    The API sends ISO-8601 with a Z suffix ("2026-06-05T12:00:00Z"). Only the
+    leading four digits are taken, deliberately: a full datetime parse would
+    be a second thing that can fail for a field used for nothing but display.
+    Anything that is not four plausible digits becomes None and the year is
+    simply not shown.
+    """
+    if not isinstance(raw, str):
+        return None
+    head = raw.strip()[:4]
+    if not head.isdigit():
+        return None
+    year = int(head)
+    return year if 1860 <= year <= 2200 else None
+
+
+def _duration_ms(raw: object) -> int | None:
+    """`trackTimeMillis` as a positive int, or None.
+
+    The API has been seen to send this as a string. bool is excluded because
+    it is an int subclass and True would become a one-millisecond track.
+    """
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return raw if raw > 0 else None
+    if isinstance(raw, str) and raw.strip().isdigit():
+        value = int(raw.strip())
+        return value or None
+    return None
+
+
 def _as_song(result: dict) -> Song | None:
     """One API result as a Song, or None when it is not a usable track."""
     if result.get("kind") != "song":
@@ -169,9 +346,15 @@ def _as_song(result: dict) -> Song | None:
     url = (result.get("trackViewUrl") or "").strip()
     if not (title and artist and url):
         return None
+    artwork = media_url(result.get("artworkUrl100")
+                        or result.get("artworkUrl60") or "")
     return Song(title=title, artist=artist,
                 album=(result.get("collectionName") or "").strip(),
-                url=clean_url(url))
+                url=clean_url(url),
+                preview_url=media_url(result.get("previewUrl") or ""),
+                artwork_url=upsize_artwork(artwork) if artwork else "",
+                duration_ms=_duration_ms(result.get("trackTimeMillis")),
+                release_year=_release_year(result.get("releaseDate")))
 
 
 async def search_songs(query: str,
