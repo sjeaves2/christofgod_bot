@@ -450,37 +450,69 @@ async def _send_previews(chat_id: int, context: ContextTypes.DEFAULT_TYPE,
     clips, the symptom is the numbering disappearing from the player — the
     clips would still play, and would no longer be matched to their buttons.
 
-    The thumbnail is the exception, and v0.29.0 shipped it broken. `thumbnail`
-    is the one sendAudio field that will NOT take a URL: Telegram treats it as
-    a file_id and accepts only a freshly uploaded file, so PTB passed our URL
-    through as a plain string and the artwork was silently dropped. Nothing
-    raised; the user found it on the first live run. The bytes are fetched by
-    apple_music.fetch_artwork and handed over as bytes, which PTB wraps in an
-    InputFile. `audio` is unaffected — URLs are fine there, which is why the
-    clips themselves always worked.
+    THE THUMBNAIL TOOK THREE RELEASES, AND HERE IS THE WHOLE RULE
+    -------------------------------------------------------------
+    `thumbnail` has two constraints and missing either one loses the artwork
+    silently — no error, no warning, nothing in errors.log:
 
-    ONE CONSEQUENCE: THIS PATH NOW FETCHES
-    --------------------------------------
-    Until the thumbnail fix, every fetch on this path was Telegram's, which
-    made it immune to the deep-translator failure — an endpoint that refused
-    AWS addresses, silently, in production only, for months. It is not immune
-    any more, so mzstatic was checked from 44.214.123.92 itself (200, 22442
-    bytes, 50ms, 2026-11-16). Keep that check in mind for any change here. The
-    artwork is about 22 kB per clip, so five candidates cost ~110 kB, against
-    the ~5 MB of audio Telegram still fetches for itself.
+      1. It will NOT take a URL. Telegram reads it as a file_id and accepts
+         only a freshly uploaded file. v0.29.0 passed a URL, which PTB
+         forwarded as a plain string, and Telegram dropped it.
+      2. "Ignored if the file is not uploaded using multipart/form-data" —
+         where *the file* is the AUDIO, not the thumbnail. v0.29.1 fixed (1)
+         and still showed nothing, because `audio` was a URL.
+
+    Both sentences are in that one field's own documentation, two apart. The
+    first explained the v0.29.0 bug, which is exactly why the second went
+    unread. **When one field of an API call turns out to have a rule, read
+    the rest of its paragraph** — a lesson stated in the v0.29.1 tag message
+    and then not applied to the sentence directly below the one it came from.
+
+    So the clip is UPLOADED. `audio` accepts a URL and that is still the
+    cheaper call, but it costs the thumbnail, so it is only the fallback for
+    a download that failed: a clip without artwork beats no clip.
+
+    THIS PATH NOW FETCHES, WHERE ONCE IT FETCHED NOTHING
+    ----------------------------------------------------
+    Every fetch here used to be Telegram's, which made the path immune to the
+    deep-translator failure — an endpoint that refused AWS addresses,
+    silently, in production only, for months. It is not immune any more, and
+    now for the audio as well as the artwork, so BOTH were verified from
+    44.214.123.92 itself on 2026-11-16:
+
+        is1-ssl.mzstatic.com         200, 22442 bytes, 0.05s
+        audio-ssl.itunes.apple.com   200, 1075543 bytes, 1.01s
+
+    Keep that check in any change here. Five candidates now cost about 5 MB
+    down and 5 MB up, one clip held in memory at a time; the box had 189 MB
+    free. The $5 plan's transfer allowance makes 10 MB irrelevant.
     """
     sent = 0
+    uploaded = 0
+    with_artwork = 0
     for index, song in enumerate(results, 1):
         if not song.preview_url:
             continue
-        # Fetched before the send rather than inside it: fetch_artwork never
-        # raises and returns None on any failure, so a thumbnail that cannot
-        # be had costs the thumbnail, never the clip.
-        artwork = await apple_music.fetch_artwork(song.artwork_url)
+        # Clip FIRST, then artwork only if the clip arrived. Telegram ignores
+        # a thumbnail sent beside a linked file, so artwork fetched for a
+        # fallback send would be downloaded and then discarded — 22 kB of
+        # pointless traffic, and a log line implying a thumbnail that cannot
+        # appear.
+        #
+        # Neither fetch raises; both return None on any failure. A clip that
+        # cannot be downloaded falls back to its URL, which still plays.
+        clip = await apple_music.fetch_preview(song.preview_url)
+        artwork = (await apple_music.fetch_artwork(song.artwork_url)
+                   if clip else None)
         try:
             message = await context.bot.send_audio(
                 chat_id=chat_id,
-                audio=song.preview_url,
+                audio=clip or song.preview_url,
+                # Only meaningful for an upload; Telegram names a linked file
+                # itself. Without it PTB would send the bytes as
+                # "application.octet-stream" and some clients show that
+                # instead of the title.
+                filename=f"{index}.m4a",
                 # Telegram shows title and performer in the player. The
                 # number leads the title so a clip is matched to its button
                 # without reading the caption.
@@ -496,13 +528,26 @@ async def _send_previews(chat_id: int, context: ContextTypes.DEFAULT_TYPE,
                 duration=PREVIEW_SECONDS,
             )
             sent += 1
+            if clip:
+                uploaded += 1
+            if artwork:
+                with_artwork += 1
             message_id = getattr(message, "message_id", None)
             if message_id is not None:
                 state.setdefault(PREVIEW_IDS_KEY, []).append(message_id)
         except TelegramError as exc:
             logger.warning("Preview %d (%r) failed: %s: %s",
                            index, song.title, type(exc).__name__, exc)
-    logger.info("Sent %d of %d preview clip(s).", sent, len(results))
+
+    # Says UPLOADED and WITH ARTWORK, not just "sent". Two releases of this
+    # feature shipped broken in a way no log could show: v0.29.0 sent an
+    # invalid thumbnail and v0.29.1 sent a valid one beside a linked file,
+    # and in both cases Telegram discarded it silently while every log line
+    # read "Sent 5 of 5 preview clip(s)." A thumbnail that never appears is
+    # now distinguishable from one that did, from the log alone.
+    logger.info("Sent %d of %d preview clip(s); %d uploaded (so eligible for "
+                "a thumbnail), %d with artwork attached.",
+                sent, len(results), uploaded, with_artwork)
     return sent
 
 

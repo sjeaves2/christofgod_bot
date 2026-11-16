@@ -350,19 +350,37 @@ MAX_ARTWORK_BYTES = 200 * 1024
 #: costs the whole clip.
 _JPEG_MAGIC = b"\xff\xd8\xff"
 
+#: Upper bound on a preview clip, for the same reason as MAX_ARTWORK_BYTES: a
+#: sanity bound on a third-party response, not an expectation. Every clip
+#: measured on 2026-11-16 was 949-1050 kB, and Telegram's own ceiling for an
+#: audio upload is 50 MB, so 8 MB sits well clear of the real sizes while
+#: still refusing to read something absurd into 412 MB of RAM.
+MAX_PREVIEW_BYTES = 8 * 1024 * 1024
+
+#: An MPEG-4 container announces itself with the box type `ftyp` at offset 4 —
+#: the first four bytes are that box's length. Verified against a real clip on
+#: 2026-11-16: `00 00 00 18 66 74 79 70 4d 34 41 20`, i.e. `ftyp` then the
+#: brand `M4A `. Checked so an HTML error page served with a 200 cannot be
+#: uploaded to Telegram as audio.
+_MP4_BOX_TYPE = b"ftyp"
+_MP4_BOX_TYPE_OFFSET = 4
+
 
 async def fetch_artwork(url: str) -> bytes | None:
     """The JPEG at *url* as bytes, or None.
 
     WHY THIS EXISTS AT ALL — THE BOT DID NOT USED TO FETCH ANYTHING
     ---------------------------------------------------------------
-    sendAudio's `thumbnail` is the one field that will NOT take a URL.
-    Telegram treats it as a file_id and accepts only a freshly uploaded file,
-    so python-telegram-bot handing our URL through as a plain string meant the
-    artwork was silently discarded — shipped that way in v0.29.0 and spotted
-    by the user on the first live run, because a dropped thumbnail raises
-    nothing. The `audio` field is unaffected: URLs are fine there, which is
-    why the clips themselves always worked.
+    sendAudio's `thumbnail` will NOT take a URL: Telegram treats it as a
+    file_id and accepts only a freshly uploaded file, so python-telegram-bot
+    handing our URL through as a plain string meant the artwork was silently
+    discarded — shipped that way in v0.29.0 and spotted by the user on the
+    first live run, because a dropped thumbnail raises nothing.
+
+    Sending bytes is NECESSARY AND NOT SUFFICIENT. The same field's docs add
+    "Ignored if the file is not uploaded using multipart/form-data", where
+    *the file* is the AUDIO — so a correct thumbnail beside a LINKED clip is
+    still discarded, which is what v0.29.1 shipped. See fetch_preview.
 
     So the bytes have to come from here. That is a real change in kind: this
     path previously had Telegram do every fetch, and therefore could not
@@ -393,6 +411,63 @@ async def fetch_artwork(url: str) -> bytes | None:
         return None
     if not data.startswith(_JPEG_MAGIC):
         logger.warning("Artwork at %r is not a JPEG (%r).", url, data[:4])
+        return None
+    return data
+
+
+async def fetch_preview(url: str) -> bytes | None:
+    """The preview clip at *url* as bytes, or None.
+
+    WHY THE BOT DOWNLOADS AUDIO IT USED TO JUST LINK
+    ------------------------------------------------
+    sendAudio's `thumbnail` says, two sentences into its own documentation,
+    "Ignored if the file is not uploaded using multipart/form-data." *The
+    file* means the AUDIO. So while `audio` is an HTTP URL — which that field
+    explicitly allows — Telegram discards the thumbnail no matter how
+    correctly it is supplied. Silently: no error, no warning, nothing in
+    errors.log.
+
+    That is why v0.29.1 did not work. v0.29.0 sent the thumbnail as a URL,
+    which is invalid for that field; v0.29.1 correctly sent bytes, and
+    Telegram ignored them anyway because the audio beside them was a link.
+    Both releases looked right and shipped broken, and both were invisible
+    to the suite and the logs — only a person looking at the chat could tell.
+
+    So the clip is uploaded rather than linked. The caller falls back to the
+    URL when this returns None: a clip with no thumbnail is worth far more
+    than no clip, and that fallback is the whole reason this never raises.
+
+    COST, MEASURED RATHER THAN GUESSED
+    ----------------------------------
+    About 1 MB and 1.0s per clip from 44.214.123.92 (200, 1075543 bytes,
+    2026-11-16), so five candidates cost roughly 5 MB down and 5 MB up where
+    they previously cost the bot nothing. The $5 plan's allowance makes that
+    irrelevant, and the box had 189 MB free with one clip held at a time.
+
+    Like fetch_artwork, this means the AWS-IP failure mode now reaches the
+    audio CDN too — audio-ssl.itunes.apple.com was therefore verified from
+    the server itself, not just a laptop.
+    """
+    if not url:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+            data = response.content
+    except Exception as exc:   # noqa: BLE001 - the contract is never to raise
+        logger.warning("Preview fetch for %r failed: %s: %s",
+                       url, type(exc).__name__, exc)
+        return None
+
+    if len(data) > MAX_PREVIEW_BYTES:
+        logger.warning("Preview at %r is %d bytes, over the %d limit.",
+                       url, len(data), MAX_PREVIEW_BYTES)
+        return None
+    end = _MP4_BOX_TYPE_OFFSET + len(_MP4_BOX_TYPE)
+    if data[_MP4_BOX_TYPE_OFFSET:end] != _MP4_BOX_TYPE:
+        logger.warning("Preview at %r is not an MPEG-4 container (%r).",
+                       url, data[:12])
         return None
     return data
 

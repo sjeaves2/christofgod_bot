@@ -43,6 +43,84 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
 @pytest.fixture(autouse=True, scope="session")
+def _no_network():
+    """Make it impossible for the suite to reach the network.
+
+    Every test file here claims to be offline, and twice on 2026-11-16 that
+    claim was false: apple_music.fetch_artwork and then fetch_preview were
+    added to the preview path and the worship tests did not substitute them,
+    so the suite really issued HTTP requests to fake URLs like
+    `is1-ssl.mzstatic.com/a/300x300bb.jpg` and took 403s. Both functions keep
+    a never-raises contract, so the failures were swallowed into None and
+    almost everything still passed — the leak showed up only as a 403 in the
+    captured log of an unrelated failure.
+
+    That is the shape of problem a per-test patch cannot fix. The first fix
+    was "remember to patch the new function", which is the hardcoded-list
+    mistake that cost v0.28.16 and v0.28.17 in a different costume: a guard
+    that covers what someone remembered. So the socket layer is closed here
+    instead, once, for the whole session.
+
+    Why sockets and not httpx: a test that forgets to patch a fetcher should
+    FAIL, not quietly succeed against a substituted transport. Blocking at
+    the bottom means the error names the socket and the traceback shows which
+    call tried to leave.
+
+    Loopback is left open deliberately. Nothing here needs it today, but
+    pytest plugins and debuggers do, and breaking the tooling to enforce a
+    rule about Apple's CDN would be a bad trade. 127.0.0.1 cannot reach
+    itunes.apple.com.
+    """
+    import socket
+
+    real_socket = socket.socket
+    real_create = socket.create_connection
+    real_getaddrinfo = socket.getaddrinfo
+
+    _LOCAL = {"127.0.0.1", "::1", "localhost", ""}
+
+    def _check(host):
+        if isinstance(host, (bytes, bytearray)):
+            host = host.decode("ascii", "replace")
+        if str(host) not in _LOCAL:
+            raise RuntimeError(
+                f"A test tried to open a network connection to {host!r}. "
+                f"The suite must be offline: substitute the fetcher (see "
+                f"tests/test_apple_music.py for the pattern) rather than "
+                f"letting a real request leave. If this is a NEW outbound "
+                f"call, every test that reaches it needs patching — not just "
+                f"the one you are looking at."
+            )
+
+    class _Socket(real_socket):
+        def connect(self, address, *a, **k):
+            _check(address[0] if isinstance(address, tuple) else address)
+            return super().connect(address, *a, **k)
+
+        def connect_ex(self, address, *a, **k):
+            _check(address[0] if isinstance(address, tuple) else address)
+            return super().connect_ex(address, *a, **k)
+
+    def _create_connection(address, *a, **k):
+        _check(address[0] if isinstance(address, tuple) else address)
+        return real_create(address, *a, **k)
+
+    def _getaddrinfo(host, *a, **k):
+        _check(host)
+        return real_getaddrinfo(host, *a, **k)
+
+    socket.socket = _Socket
+    socket.create_connection = _create_connection
+    socket.getaddrinfo = _getaddrinfo
+    try:
+        yield
+    finally:
+        socket.socket = real_socket
+        socket.create_connection = real_create
+        socket.getaddrinfo = real_getaddrinfo
+
+
+@pytest.fixture(autouse=True, scope="session")
 def _isolate_logs(tmp_path_factory):
     """Point the activity log and error log at a throwaway directory."""
     import error_reporting

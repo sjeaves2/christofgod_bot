@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -1030,22 +1031,33 @@ def _preview_context(**state):
     return ctx
 
 
-def _no_network(artwork=FAKE_ARTWORK):
-    """Substitute the artwork fetch. THIS FILE MUST NOT TOUCH THE NETWORK.
+FAKE_CLIP = b"\x00\x00\x00\x18ftypM4A " + b"fake audio body"
 
-    The thumbnail fix made _send_previews call apple_music.fetch_artwork, and
-    the first version of these tests left it unpatched — so the suite really
-    did issue HTTP requests to `https://is1-ssl.mzstatic.com/a/300x300bb.jpg`
-    and got 403s, which the never-raises contract swallowed into a None
-    thumbnail. Everything still passed except the one assertion that looked at
-    the thumbnail, and the module docstring's "No test touches the network"
-    had quietly become false.
 
-    Caught on 2026-11-16 by reading a 403 in the captured log of an unrelated
-    failure. Patch this in every test that reaches _send_previews.
+@contextmanager
+def _no_network(artwork=FAKE_ARTWORK, clip=FAKE_CLIP):
+    """Substitute BOTH fetchers on the preview path.
+
+    THIS FILE MUST NOT TOUCH THE NETWORK, and on 2026-11-16 it did, twice.
+    First fetch_artwork was added to _send_previews and left unpatched here;
+    then, after that was fixed, fetch_preview was added and left unpatched in
+    exactly the same way. Both keep a never-raises contract, so both leaks
+    were swallowed into a None and almost every test still passed — the first
+    showed up only as a 403 in the captured log of an unrelated failure.
+
+    Patching by name is why it happened twice: this helper covered what
+    someone remembered. tests/conftest.py now blocks the socket layer for the
+    whole session, so a third such function cannot leak quietly — it fails
+    and the error names the host. This helper is what makes the tests
+    DETERMINISTIC; conftest is what makes them HONEST. Both are needed.
+
+    Pass artwork=None or clip=None to exercise a failed fetch.
     """
-    return patch.object(w.apple_music, "fetch_artwork",
-                        AsyncMock(return_value=artwork))
+    with patch.object(w.apple_music, "fetch_artwork",
+                      AsyncMock(return_value=artwork)), \
+         patch.object(w.apple_music, "fetch_preview",
+                      AsyncMock(return_value=clip)):
+        yield
 
 
 def _preview_update():
@@ -1123,12 +1135,23 @@ class TestSendingPreviews:
             await w.sl_preview(_preview_update(), ctx)
         assert ctx.bot.send_audio.await_count == 2
 
-    async def test_each_clip_carries_its_own_audio_url(self):
+    async def test_each_clip_carries_its_own_downloaded_audio(self):
         ctx = _preview_context(results=PREVIEWABLE, query="amazing grace")
         with _no_network():
             await w.sl_preview(_preview_update(), ctx)
-        urls = [c.kwargs["audio"] for c in ctx.bot.send_audio.await_args_list]
-        assert urls == [s.preview_url for s in PREVIEWABLE]
+        audio = [c.kwargs["audio"] for c in ctx.bot.send_audio.await_args_list]
+        assert audio == [FAKE_CLIP, FAKE_CLIP]
+
+    async def test_the_preview_url_is_what_gets_downloaded(self):
+        """Each candidate's own clip, not the first one twice."""
+        ctx = _preview_context(results=PREVIEWABLE, query="q")
+        with patch.object(w.apple_music, "fetch_preview",
+                          AsyncMock(return_value=FAKE_CLIP)) as fetch, \
+             patch.object(w.apple_music, "fetch_artwork",
+                          AsyncMock(return_value=FAKE_ARTWORK)):
+            await w.sl_preview(_preview_update(), ctx)
+        assert [c.args[0] for c in fetch.await_args_list] == [
+            s.preview_url for s in PREVIEWABLE]
 
     async def test_the_clip_is_numbered_to_match_its_button(self):
         ctx = _preview_context(results=PREVIEWABLE, query="amazing grace")
@@ -1164,7 +1187,9 @@ class TestSendingPreviews:
     async def test_the_artwork_url_is_what_gets_fetched(self):
         ctx = _preview_context(results=PREVIEWABLE, query="q")
         with patch.object(w.apple_music, "fetch_artwork",
-                          AsyncMock(return_value=FAKE_ARTWORK)) as fetch:
+                          AsyncMock(return_value=FAKE_ARTWORK)) as fetch, \
+             patch.object(w.apple_music, "fetch_preview",
+                          AsyncMock(return_value=FAKE_CLIP)):
             await w.sl_preview(_preview_update(), ctx)
         assert [c.args[0] for c in fetch.await_args_list] == [
             s.artwork_url for s in PREVIEWABLE]
@@ -1178,18 +1203,59 @@ class TestSendingPreviews:
         assert all(c.kwargs["thumbnail"] is None
                    for c in ctx.bot.send_audio.await_args_list)
 
-    async def test_the_audio_itself_is_still_a_url_not_bytes(self):
-        """Only `thumbnail` is restricted; `audio` takes a URL.
+    async def test_the_audio_is_uploaded_not_linked(self):
+        """INVERTED from what this test asserted in v0.29.1, deliberately.
 
-        Which is why the clips worked in v0.29.0 while the thumbnails did
-        not. Downloading the ~1 MB audio too would be a pointless cost.
+        It used to assert `audio` was a URL, with the comment "downloading
+        the ~1 MB audio too would be a pointless cost". That was wrong, and
+        the cost was not pointless: sendAudio's `thumbnail` documentation
+        says "Ignored if the file is not uploaded using multipart/form-data",
+        where *the file* is the AUDIO. While audio is a link, Telegram
+        discards the thumbnail however correctly it is sent — which is why
+        v0.29.1 shipped a perfectly valid thumbnail that never appeared.
+
+        So the clip must be UPLOADED for artwork to show at all. Kept as a
+        test rather than deleted, because the old assertion was reasonable on
+        its face and someone optimising traffic will propose it again.
         """
         ctx = _preview_context(results=PREVIEWABLE, query="q")
         with _no_network():
             await w.sl_preview(_preview_update(), ctx)
         for call in ctx.bot.send_audio.await_args_list:
-            assert isinstance(call.kwargs["audio"], str)
+            assert isinstance(call.kwargs["audio"], bytes), (
+                "audio must be uploaded bytes, not a URL — a linked file "
+                "makes Telegram ignore the thumbnail")
+
+    async def test_a_filename_is_given_for_the_upload(self):
+        """Without one PTB names the part application.octet-stream, which
+        some clients display instead of the title."""
+        ctx = _preview_context(results=PREVIEWABLE, query="q")
+        with _no_network():
+            await w.sl_preview(_preview_update(), ctx)
+        names = [c.kwargs["filename"]
+                 for c in ctx.bot.send_audio.await_args_list]
+        assert names == ["1.m4a", "2.m4a"]
+
+    async def test_a_clip_that_cannot_be_downloaded_falls_back_to_its_url(self):
+        """A clip with no artwork beats no clip."""
+        ctx = _preview_context(results=PREVIEWABLE, query="q")
+        with _no_network(clip=None):
+            await w.sl_preview(_preview_update(), ctx)
+        assert ctx.bot.send_audio.await_count == 2
+        for call in ctx.bot.send_audio.await_args_list:
             assert call.kwargs["audio"].startswith("https://")
+            assert call.kwargs["thumbnail"] is None
+
+    async def test_artwork_is_not_fetched_when_the_clip_will_be_linked(self):
+        """Telegram would ignore it, so fetching it is pure waste — and a
+        log line claiming artwork that cannot possibly appear."""
+        ctx = _preview_context(results=PREVIEWABLE, query="q")
+        with patch.object(w.apple_music, "fetch_preview",
+                          AsyncMock(return_value=None)), \
+             patch.object(w.apple_music, "fetch_artwork",
+                          AsyncMock(return_value=FAKE_ARTWORK)) as art:
+            await w.sl_preview(_preview_update(), ctx)
+        art.assert_not_awaited()
 
     async def test_the_duration_is_the_clips_not_the_tracks(self):
         """253338 ms would draw a four-minute scrubber over a 30s file."""
