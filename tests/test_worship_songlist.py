@@ -1206,3 +1206,33 @@ class TestSendingPreviews:
         update = _preview_update()
         await w.sl_preview(update, ctx)
         update.callback_query.answer.assert_awaited()
+
+
+class TestThePreviewLengthIsDeliberate:
+    """PREVIEW_SECONDS is a measured constant no other test can constrain.
+
+    Every assertion in TestSendingPreviews compares what was sent against
+    PREVIEW_SECONDS itself, so the suite passes at any value — which is how
+    it went to 15 on 2026-11-16 with CI green, in the belief that it capped
+    playback. It does not: it labels a file Telegram downloads and plays
+    whole.
+
+    So this pins the number. It cannot tell whether 30 is TRUE — only Apple's
+    files can say that, and the measurement is recorded in the comment beside
+    the constant. What it makes impossible is changing the number without
+    meeting this test and the reasoning it points at, which is the same bet
+    the handler-registration snapshot and the NetworkError drift guard make.
+    """
+
+    def test_the_clip_length_is_the_measured_thirty_seconds(self):
+        assert w.PREVIEW_SECONDS == 30, (
+            "Apple's preview clips measured 30.02s from the container's mvhd "
+            "box on 2026-11-16. This value does not shorten a clip — it only "
+            "tells the player how long the file is, so lowering it makes the "
+            "scrubber lie about audio Telegram will still play in full. See "
+            "the comment beside PREVIEW_SECONDS before changing it."
+        )
+
+    def test_it_is_a_whole_number_of_seconds(self):
+        """Telegram's duration field is an integer; 30.02 would be rejected."""
+        assert isinstance(w.PREVIEW_SECONDS, int)
