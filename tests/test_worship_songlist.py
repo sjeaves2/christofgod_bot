@@ -1530,3 +1530,139 @@ class TestThePreviewClipsAreCleanedUp:
         await w._finish(ctx, 4242)
         assert seen["ids"] == [11, 22]
         assert seen["state_present"] is True
+
+
+class TestTheArtworkIsNeverPersisted:
+    """Downloaded artwork must leave nothing behind to clean up.
+
+    The user asked on 2026-11-16 that downloaded thumbnails be deleted when
+    the list is sent or abandoned. There is nothing to delete, and these
+    tests exist to keep that true rather than to assert it once:
+
+      * `fetch_artwork` returns bytes from `response.content`, in memory;
+      * PTB's InputFile holds `bytes` as `input_file_content` and streams it
+        through multipart — no tempfile, no mkstemp, no write;
+      * the conversation state records message ids (ints) and nothing else.
+
+    Verified empirically the same day: a full `_send_previews` run created
+    NO new file anywhere under the temp directory or the working tree.
+
+    The realistic way that stops being true is somebody caching artwork to
+    disk to save a re-fetch — which would be a reasonable-looking change that
+    silently creates exactly the litter the user was asking about. Hence a
+    guard rather than a comment.
+    """
+
+    async def test_no_artwork_bytes_survive_in_the_conversation_state(self):
+        ctx = _preview_context(results=PREVIEWABLE, query="q")
+        ctx.bot.send_audio = AsyncMock(side_effect=[
+            MagicMock(message_id=1), MagicMock(message_id=2)])
+        with _no_network():
+            await w.sl_preview(_preview_update(), ctx)
+
+        def _walk(value, path="state"):
+            """Every bytes-like object reachable from the state, with its path."""
+            found = []
+            if isinstance(value, (bytes, bytearray)):
+                found.append(path)
+            elif isinstance(value, dict):
+                for k, v in value.items():
+                    found += _walk(v, f"{path}[{k!r}]")
+            elif isinstance(value, (list, tuple, set)):
+                for n, v in enumerate(value):
+                    found += _walk(v, f"{path}[{n}]")
+            elif hasattr(value, "__dict__"):
+                for k, v in vars(value).items():
+                    found += _walk(v, f"{path}.{k}")
+            return found
+
+        leaked = _walk(ctx.user_data)
+        assert not leaked, f"artwork bytes retained in state at: {leaked}"
+
+    async def test_only_message_ids_are_recorded(self):
+        """Positively, so the test above cannot pass by finding nothing."""
+        ctx = _preview_context(results=PREVIEWABLE, query="q")
+        ctx.bot.send_audio = AsyncMock(side_effect=[
+            MagicMock(message_id=1), MagicMock(message_id=2)])
+        with _no_network():
+            await w.sl_preview(_preview_update(), ctx)
+        ids = ctx.user_data[w.STATE_KEY][w.PREVIEW_IDS_KEY]
+        assert ids == [1, 2]
+        assert all(isinstance(i, int) for i in ids)
+
+    def test_nothing_on_the_preview_path_writes_to_disk(self):
+        """Walks the AST of both modules for a file write.
+
+        Checked structurally rather than by watching the filesystem during a
+        send: a filesystem watch would have to tolerate the logging handler
+        touching logs/bot.log, and tolerating that is exactly the hole a
+        future artwork cache would slip through. The AST has no such
+        ambiguity.
+
+        Reading the Song/clip path only — `w` and `apple_music` — because
+        storage.py legitimately writes YAML all day.
+        """
+        import ast
+        import inspect as _inspect
+        import apple_music as am
+
+        WRITERS = {"mkstemp", "mkdtemp", "NamedTemporaryFile", "TemporaryFile",
+                   "write_bytes", "write_text", "copyfileobj"}
+        offenders = []
+        for module in (am, w):
+            tree = ast.parse(_inspect.getsource(module))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                name = (node.func.attr if isinstance(node.func, ast.Attribute)
+                        else getattr(node.func, "id", None))
+                if name in WRITERS:
+                    offenders.append(f"{module.__name__}: {name}")
+                elif name == "open":
+                    # open() is only a write when a mode says so.
+                    modes = [a.value for a in node.args[1:]
+                             if isinstance(a, ast.Constant)]
+                    modes += [k.value.value for k in node.keywords
+                              if k.arg == "mode" and isinstance(k.value, ast.Constant)]
+                    if any(m for m in modes if isinstance(m, str)
+                           and any(c in m for c in "wxa+")):
+                        offenders.append(f"{module.__name__}: open({modes})")
+        assert not offenders, (
+            f"the preview path now writes to disk: {offenders}. Downloaded "
+            f"artwork is held in memory for one send precisely so there is "
+            f"nothing to clean up; if a cache is genuinely wanted, it has to "
+            f"be cleared in _finish alongside the clips."
+        )
+
+    def test_the_disk_write_scan_can_actually_see_a_write(self):
+        """Guards the scan above, which passes happily if it looks at nothing.
+
+        A positive control needs a module that really does write, and the
+        first choice for it was WRONG: storage.py turned out to contain zero
+        file calls, because every read and write goes through cache.FileCache.
+        The control failed, which is the only reason that was noticed — had
+        the main scan been shipped without it, "no writes on the preview
+        path" would have been a claim with no demonstrated ability to detect
+        one.
+
+        cache.py and activity_logger.py are the modules that actually touch
+        files, so the control uses those.
+        """
+        import ast
+        import inspect as _inspect
+        import activity_logger
+        import cache
+
+        for module in (cache, activity_logger):
+            tree = ast.parse(_inspect.getsource(module))
+            writes = [
+                node for node in ast.walk(tree)
+                if isinstance(node, ast.Call)
+                and (node.func.attr if isinstance(node.func, ast.Attribute)
+                     else getattr(node.func, "id", None)) in {
+                         "open", "write_text", "write_bytes", "mkstemp"}
+            ]
+            assert writes, (
+                f"the scan found no file calls in {module.__name__} — the "
+                f"scan is broken, not the module"
+            )
