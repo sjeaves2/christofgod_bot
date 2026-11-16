@@ -309,6 +309,7 @@ async def cmd_songlist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         "The artist is optional, but it helps: a hymn is often recorded by "
         "several people. I will look it up on Apple Music and show you what "
         "I find.\n\n"
+        "/list to see the songs chosen so far\n"
         "/end when the list is complete\n"
         "/undo to drop the last song\n"
         "/cancel to abandon the list\n\n"
@@ -653,7 +654,8 @@ async def sl_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     count = len(state["songs"])
     await query.edit_message_text(
         f"✅ Added {count}. {song.title} by {song.artist}\n\n"
-        "Send the next song name, /undo to drop this one, or /end to finish."
+        "Send the next song name, /list to see them all, /undo to drop this "
+        "one, or /end to finish."
     )
     return SL_QUERY
 
@@ -672,6 +674,63 @@ async def sl_search_again(update: Update,
     return SL_QUERY
 
 
+async def sl_list(update: Update,
+                  context: ContextTypes.DEFAULT_TYPE) -> int | None:
+    """/list — the songs chosen so far, without disturbing anything.
+
+    WHY IT RETURNS None
+    -------------------
+    None means "leave the conversation state alone": PTB's _update_state ends
+    in `elif new_state is not None`, so a None return changes nothing. That
+    is exactly right for a read-only peek, and it is what lets ONE handler
+    serve several states without being told which one it is in. Returning a
+    literal state instead would mean either a wrapper per state or a handler
+    that silently moves the admin somewhere they were not.
+
+    So /list works mid-search and mid-pick alike, and after it the live
+    keyboard above is still the live keyboard.
+
+    WHY THIS SHOWS THE DETAIL AND NOT THE DELIVERED FORMAT
+    -----------------------------------------------------
+    Song.detail, the same renderer the picker uses — album, running time and
+    year — rather than Song.enumerated, which is what the recipient gets.
+    Two reasons. The admin asked for this because five preview clips push the
+    list off screen and they lose their place, so the useful thing is
+    confirmation that the RIGHT RECORDING is in the list, which is precisely
+    what those three fields are for. And /end already shows the delivered
+    format, under a header promising it is exactly what will be sent; making
+    /list a second, subtly different claim about the outgoing message would
+    devalue that one.
+
+    Reported by the user on 2026-11-16: "one can become lost in the list...
+    there is no sub-command to let me see all of the list thus far."
+    """
+    songs = _songs(context)
+    uid, uname, dname = user_info(update)
+    activity.log_command("songlist", uid, uname, dname,
+                         details=f"listed {len(songs)} song(s) so far")
+    if not songs:
+        await update.message.reply_text(
+            "📋 The list is empty so far.\n\n"
+            "Send a song name to add the first one, or /cancel."
+        )
+        return None
+
+    body = render_candidates(songs)
+    header = (f"📋 {len(songs)} song(s) so far — still building:\n\n")
+    # Split for the same reason sl_send does: a long list exceeds Telegram's
+    # message limit, and /list is the one view whose length the admin
+    # controls directly by adding songs.
+    chunks = split_for_telegram(body)
+    for n, chunk in enumerate(chunks):
+        await update.message.reply_text(
+            header + chunk if n == 0 else chunk,
+            parse_mode=ParseMode.HTML,
+            link_preview_options=NO_PREVIEW,
+        )
+    return None
+
+
 async def sl_undo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     songs = _songs(context)
     if not songs:
@@ -682,7 +741,8 @@ async def sl_undo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     dropped = songs.pop()
     await update.message.reply_text(
         f"↩️ Removed “{dropped.title}” by {dropped.artist}. "
-        f"{len(songs)} song(s) left.\n\nSend the next song name, or /end."
+        f"{len(songs)} song(s) left.\n\nSend the next song name, /list to see "
+        f"them all, or /end."
     )
     return SL_QUERY
 
@@ -943,9 +1003,15 @@ def song_list_conversation() -> ConversationHandler:
             SL_QUERY: [
                 CommandHandler("end", sl_end),
                 CommandHandler("undo", sl_undo),
+                CommandHandler("list", sl_list),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, sl_query),
             ],
             SL_PICK: [
+                # /list here too, because this is where the admin actually
+                # gets lost: five preview clips have just pushed the list off
+                # screen and a song still has to be chosen. It returns None,
+                # so the picker keyboard above stays live.
+                CommandHandler("list", sl_list),
                 _cb_indexed(sl_pick, "pick"),
                 _cb(sl_preview, "preview"),
                 _cb(sl_search_again, "none"),

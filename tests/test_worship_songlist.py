@@ -22,7 +22,12 @@ from apple_music import Song
 from telegram import CallbackQuery, Chat, Message, MessageEntity, Update, User
 from telegram.constants import ParseMode
 from telegram.error import TelegramError
-from telegram.ext import CallbackQueryHandler, ConversationHandler
+from telegram.ext import (
+    CallbackQueryHandler,
+    CommandHandler,
+    ConversationHandler,
+    MessageHandler,
+)
 
 SONGS = [
     Song("Amazing Grace", "CeCe Winans", "The Hymns",
@@ -748,8 +753,11 @@ class TestTheWiring:
         # Selected by what it MATCHES, not by its pattern text: re.escape
         # leaves ":" alone on Python 3.7+, so asserting on the source regex
         # tests the escaping rules rather than the wiring.
+        # isinstance first: SL_PICK also holds a CommandHandler (/list),
+        # which has no .pattern at all.
         pick = [h for h in conv.states[w.SL_PICK]
-                if h.pattern.match("sl:pick:3")]
+                if isinstance(h, CallbackQueryHandler)
+                and h.pattern.match("sl:pick:3")]
         assert len(pick) == 1, "no single handler matches sl:pick:3"
         assert pick[0].callback is w.sl_pick
         assert not pick[0].pattern.match("sl:pick:")
@@ -765,7 +773,8 @@ class TestTheWiring:
         """
         conv = self._conv()
         cancel = [h for h in conv.states[w.SL_PICK]
-                  if h.pattern.match("sl:cancel")][0]
+                  if isinstance(h, CallbackQueryHandler)
+                  and h.pattern.match("sl:cancel")][0]
         for longer in ("sl:cancelall", "sl:cancelled", "sl:cancel:1"):
             assert not cancel.pattern.match(longer), longer
 
@@ -1022,8 +1031,8 @@ PREVIEWABLE = [
 FAKE_ARTWORK = b"\xff\xd8\xff" + b"fake jpeg body"
 
 
-def _preview_context(**state):
-    ctx = _context(songs=[], **state)
+def _preview_context(songs=None, **state):
+    ctx = _context(songs=list(songs or []), **state)
     ctx.bot.send_audio = AsyncMock()
     ctx.bot.edit_message_reply_markup = AsyncMock()
     ctx.bot.delete_messages = AsyncMock()
@@ -1732,3 +1741,177 @@ class TestTheArtworkIsNeverPersisted:
                 f"the scan found no file calls in {module.__name__} — the "
                 f"scan is broken, not the module"
             )
+
+
+class TestTheListSubCommand:
+    """/list — the songs chosen so far, mid-build.
+
+    Asked for by the user on 2026-11-16: after reviewing five preview clips
+    the list has scrolled off screen, and there was no way to see it without
+    finishing or abandoning.
+    """
+
+    async def test_it_shows_every_song_chosen_so_far(self):
+        ctx = _context(songs=PREVIEWABLE)
+        update = _message_update("/list")
+        await w.sl_list(update, ctx)
+        said = _said(update.message.reply_text)
+        assert "Amazing Grace" in said
+        assert "2 song(s) so far" in said
+
+    async def test_it_shows_the_identifying_detail_not_the_delivered_format(self):
+        """Song.detail, not Song.enumerated.
+
+        The admin is checking that the right RECORDING is in the list, which
+        is what album/duration/year are for — and /end already shows the
+        delivered format under a promise that it is exactly what will be
+        sent. Two subtly different claims about the outgoing message would
+        devalue that one.
+        """
+        ctx = _context(songs=PREVIEWABLE)
+        update = _message_update("/list")
+        await w.sl_list(update, ctx)
+        said = _said(update.message.reply_text)
+        assert "The Hymns · 4:13 · 2026" in said
+        assert "music.apple.com" not in said
+
+    async def test_it_is_numbered_so_undo_and_remove_make_sense(self):
+        ctx = _context(songs=PREVIEWABLE)
+        update = _message_update("/list")
+        await w.sl_list(update, ctx)
+        said = _said(update.message.reply_text)
+        assert "1. " in said and "2. " in said
+
+    async def test_an_empty_list_says_so_without_pretending(self):
+        ctx = _context(songs=[])
+        update = _message_update("/list")
+        await w.sl_list(update, ctx)
+        said = _said(update.message.reply_text)
+        assert "empty" in said.lower()
+        assert "song(s) so far" not in said
+
+    async def test_it_is_sent_as_html(self):
+        """Song.detail emits <b>; plain text would show the raw markup."""
+        ctx = _context(songs=PREVIEWABLE)
+        update = _message_update("/list")
+        await w.sl_list(update, ctx)
+        assert update.message.reply_text.call_args.kwargs["parse_mode"] == \
+            ParseMode.HTML
+
+    async def test_it_returns_none_so_the_state_is_untouched(self):
+        """THE WHOLE REASON ONE HANDLER SERVES SEVERAL STATES.
+
+        PTB's ConversationHandler._update_state ends in
+        `elif new_state is not None`, so a None return leaves the
+        conversation exactly where it was. Returning a literal state would
+        mean either a wrapper per state or a handler that silently moves the
+        admin somewhere they never asked to go — and /list is a read-only
+        peek.
+
+        Asserted for the empty list too, because an early return is the
+        easiest place to leak a state by accident.
+        """
+        for songs in (PREVIEWABLE, []):
+            ctx = _context(songs=songs)
+            assert await w.sl_list(_message_update("/list"), ctx) is None, songs
+
+    async def test_it_does_not_disturb_the_list(self):
+        ctx = _context(songs=PREVIEWABLE)
+        await w.sl_list(_message_update("/list"), ctx)
+        assert ctx.user_data[w.STATE_KEY]["songs"] == PREVIEWABLE
+
+    async def test_it_does_not_delete_the_preview_clips(self):
+        """It is not an exit, so the clips must survive it — the admin is
+        looking at the list precisely so they can carry on choosing."""
+        ctx = _preview_context(songs=PREVIEWABLE)
+        ctx.user_data[w.STATE_KEY][w.PREVIEW_IDS_KEY] = [11, 22]
+        await w.sl_list(_message_update("/list"), ctx)
+        ctx.bot.delete_messages.assert_not_awaited()
+        assert ctx.user_data[w.STATE_KEY][w.PREVIEW_IDS_KEY] == [11, 22]
+
+    async def test_a_long_list_is_split_rather_than_truncated(self):
+        many = [Song(f"Song {i}", f"Artist {i}", f"Album {i}",
+                     f"https://music.apple.com/{i}", duration_ms=240000,
+                     release_year=2020)
+                for i in range(120)]
+        ctx = _context(songs=many)
+        update = _message_update("/list")
+        await w.sl_list(update, ctx)
+        assert update.message.reply_text.await_count > 1
+        for call in update.message.reply_text.await_args_list:
+            assert len(call[0][0]) <= w.MAX_MESSAGE_CHARS + 60
+
+    async def test_it_is_logged_as_activity(self):
+        ctx = _context(songs=PREVIEWABLE)
+        with patch.object(w.activity, "log_command") as logged:
+            await w.sl_list(_message_update("/list"), ctx)
+        assert logged.called
+        assert "listed" in logged.call_args.kwargs["details"]
+
+
+class TestTheListSubCommandIsWired:
+    def _conv(self):
+        return w.song_list_conversation()
+
+    def test_it_is_reachable_while_typing_a_song_name(self):
+        handlers = self._conv().states[w.SL_QUERY]
+        assert any(isinstance(h, CommandHandler) and "list" in h.commands
+                   and h.callback is w.sl_list for h in handlers)
+
+    def test_it_is_reachable_while_choosing_from_the_results(self):
+        """Where the admin actually gets lost: five clips have just pushed
+        the list off screen and a song still has to be picked."""
+        handlers = self._conv().states[w.SL_PICK]
+        assert any(isinstance(h, CommandHandler) and "list" in h.commands
+                   and h.callback is w.sl_list for h in handlers)
+
+    def test_a_typed_slash_list_is_not_treated_as_a_song_name(self):
+        """sl_query's MessageHandler must keep excluding commands, or /list
+        would be searched for on Apple Music instead of being handled."""
+        message = [h for h in self._conv().states[w.SL_QUERY]
+                   if isinstance(h, MessageHandler)]
+        assert len(message) == 1
+        assert "~Command" in str(message[0].filters) or \
+            "COMMAND" in str(message[0].filters).upper()
+
+    def test_the_opening_prompt_advertises_it(self):
+        """An undiscoverable sub-command is the gap this closes, not fills.
+
+        Read via the AST of the MODULE, not inspect.getsource(cmd_songlist):
+        @admin_only sets wrapper.__name__ but not __wrapped__, so getsource
+        on the decorated name returns the DECORATOR's body — which contains
+        no prompt at all and would make this test unfalsifiable. A first
+        version did exactly that and failed, which is how I found out.
+        """
+        import ast
+        import inspect as _inspect
+        tree = ast.parse(_inspect.getsource(w))
+        body = [n for n in ast.walk(tree)
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and n.name == "cmd_songlist"]
+        assert len(body) == 1, "cmd_songlist not found in the module AST"
+        strings = [n.value for n in ast.walk(body[0])
+                   if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+        assert any("/list" in text for text in strings), strings
+
+    def test_every_prompt_that_lists_commands_mentions_it(self):
+        """DERIVED: any prompt offering /end or /undo should offer /list too,
+        since those are the moments the admin is deciding what to do next.
+
+        A hand-kept list of prompts would drift from the prompts themselves —
+        the same reasoning as _finish's AST guard.
+        """
+        import ast
+        import inspect as _inspect
+        tree = ast.parse(_inspect.getsource(w))
+        offenders = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+                continue
+            text = node.value
+            # A prompt that offers BOTH other sub-commands is a "what next?"
+            # menu; one that mentions only /end in passing is not.
+            if "/end" in text and "/undo" in text and "/list" not in text:
+                offenders.append(text[:60])
+        assert not offenders, (
+            f"these prompts offer /end and /undo but not /list: {offenders}")
