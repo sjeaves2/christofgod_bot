@@ -118,7 +118,7 @@ MAX_MESSAGE_CHARS = 3900
 # on 2026-11-16 ran to. If it is ever wrong the scrubber is wrong and nothing
 # else is, which is why a value is hardcoded rather than the file downloaded to
 # measure it.
-PREVIEW_SECONDS = 30
+PREVIEW_SECONDS = 15
 
 
 def _state(context: ContextTypes.DEFAULT_TYPE) -> dict[str, Any]:
