@@ -113,12 +113,26 @@ MAX_MESSAGE_CHARS = 3900
 # the player draws a scrubber the right length; the full track time would draw
 # a four-minute bar over a thirty-second file.
 #
-# Apple does not promise this and does not report it — the length is a property
-# of the m4a, which only Telegram ever fetches. 30 is what every clip measured
-# on 2026-11-16 ran to. If it is ever wrong the scrubber is wrong and nothing
-# else is, which is why a value is hardcoded rather than the file downloaded to
-# measure it.
-PREVIEW_SECONDS = 15
+# A LABEL, NOT A LIMIT. This does not fetch, trim or truncate anything — it
+# describes a file Telegram downloads whole and plays whole. Lowering it does
+# not shorten the clip, it only makes the player misreport a file it will
+# still play to the end. It was briefly set to 15 on 2026-11-16 in the belief
+# that it capped playback; it does not, and there is no parameter that does.
+#
+# Apple serves a fixed clip and offers no way to ask for a shorter one, so
+# genuinely delivering fifteen seconds would mean the BOT downloading each
+# clip, trimming it with a tool the server does not have, and uploading the
+# bytes — which would also forfeit this path's immunity to the AWS-IP failure
+# described in _send_previews. Nobody has to listen for thirty seconds; the
+# listener stops whenever they have recognised it.
+#
+# Apple does not promise the length and does not report it in the API — it is
+# a property of the m4a. Measured from the container's mvhd box on 2026-11-16,
+# all five hits for "Amazing Grace" ran 30.02s (949-1050 KB). Rounded down to
+# 30 because the duration field is whole seconds. If it is ever wrong the
+# scrubber is wrong and nothing else is, which is why a value is hardcoded
+# rather than the file downloaded to measure it.
+PREVIEW_SECONDS = 30
 
 
 def _state(context: ContextTypes.DEFAULT_TYPE) -> dict[str, Any]:
