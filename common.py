@@ -1,7 +1,8 @@
 """Shared primitives used across every feature area.
 
-The bottom of the dependency graph: depends only on settings, storage, and
-localization — never on feature modules — so anything may import it freely.
+The bottom of the dependency graph: depends only on settings, storage,
+localization and translation — never on feature modules — so anything may
+import it freely.
 """
 
 from __future__ import annotations
@@ -11,13 +12,15 @@ from datetime import datetime
 from typing import Any
 
 import pytz
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.error import BadRequest
 from telegram.helpers import escape_markdown
 
-from localization import CATALOG, DEFAULT_LANG, localized_datetime
+from localization import CATALOG, DEFAULT_LANG, localized_datetime, t
 from settings import TZ
 import storage
+import translation
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +139,28 @@ def is_button_url(value: Any) -> str | None:
     if not url.lower().startswith(("http://", "https://")):
         return None
     return None if any(c.isspace() for c in url) else url
+
+
+def with_translate_button(markup: InlineKeyboardMarkup | None, text: str,
+                          source_lang: str | None, reader_lang: str,
+                          label: str | None = None) -> InlineKeyboardMarkup | None:
+    """*markup* plus a Translate row for a reader whose language differs.
+
+    Returns *markup* itself, untouched, when no button applies (same language,
+    unknown source, nothing to translate, link too long — translate_url decides).
+    Otherwise a NEW markup: the broadcast shares one markup across every
+    recipient, so adding a row in place would hand the button to all of them.
+
+    Only for a message ONE reader sees. In a group every member sees the same
+    buttons, so a button chosen by one reader's language is wrong for the rest.
+    """
+    url = translation.translate_url(text, source_lang or "", reader_lang)
+    if not url or not is_button_url(url):
+        return markup
+    rows = [list(row) for row in markup.inline_keyboard] if markup else []
+    rows.append([InlineKeyboardButton(label or t("translate_button", reader_lang),
+                                      url=url)])
+    return InlineKeyboardMarkup(rows)
 
 
 async def validate_markdown(message, text: str) -> bool:

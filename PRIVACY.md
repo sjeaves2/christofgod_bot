@@ -1,6 +1,6 @@
 # Privacy Policy — Christ of God bot
 
-**Last updated: 16 September 2026**
+**Last updated: 17 November 2026**
 
 This policy explains what [@christofgod_bot](https://t.me/christofgod_bot)
 stores about you, why, who can see it, and how to have it removed. The bot is
@@ -164,10 +164,12 @@ message to operations administrators.
 
 * **Telegram** — the platform itself. Your use of the bot is also governed by
   [Telegram's Privacy Policy](https://telegram.org/privacy).
-* **Google Translate** — announcement text may be machine-translated for
-  members who have chosen another language. Only the announcement text written
-  by an administrator is sent; **nothing personal is ever sent to a translation
-  service.**
+* **Google Translate** — if you have chosen a language other than the one an
+  announcement was written in, you are offered a **Translate** button. The bot
+  itself never contacts Google: only if you tap the button does your own
+  device open Google Translate, with the announcement's title and text, under
+  [Google's Privacy Policy](https://policies.google.com/privacy). Nothing
+  about you is put in that link.
 * **Zoom** — service join links point to Zoom. The bot only stores and shares
   the link; it sends no information about you to Zoom.
 * **PayPal** — `/donate` links to an external giving page. The bot neither sees

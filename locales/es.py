@@ -147,6 +147,8 @@ STRINGS: dict[str, str] = {
     "notif_service_begins": "El servicio comienza: {when}",
     "notif_join": "🔗 Unirse: {url}",
     "ann_link_button": "🔗 Abrir enlace",
+    "translate_button": "🌐 Traducir",
+    "translate_button_titled": "🌐 Traducir: {title}",
     "notif_join_button": "🔗 Unirse al servicio",
     "notif_announcements_header": "⚠️ *Anuncios:*",
 

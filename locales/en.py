@@ -148,6 +148,8 @@ STRINGS: dict[str, str] = {
     "notif_service_begins": "Service begins: {when}",
     "notif_join": "🔗 Join: {url}",
     "ann_link_button": "🔗 Open link",
+    "translate_button": "🌐 Translate",
+    "translate_button_titled": "🌐 Translate: {title}",
     "notif_join_button": "🔗 Join the service",
     "notif_announcements_header": "⚠️ *Announcements:*",
 

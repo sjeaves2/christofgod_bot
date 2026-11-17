@@ -12,7 +12,7 @@ from typing import Any
 
 from permissions import user_info
 import storage
-from common import _answer_cb, send_markdown
+from common import _answer_cb, send_markdown, user_lang_of, with_translate_button
 from handlers.notifications import _send_media
 from localization import DEFAULT_LANG, t
 from settings import activity
@@ -172,8 +172,11 @@ async def _bc_expand_recipients(options: list[dict], selected: set[str]) -> list
                 if cid in seen:
                     continue
                 seen.add(cid)
+                # lang rides along so the send can offer this member a
+                # Translate button; a group recipient has no language.
                 recipients.append({"kind": "user", "chat_id": cid,
-                                   "label": u.get("display_name") or str(cid)})
+                                   "label": u.get("display_name") or str(cid),
+                                   "lang": user_lang_of(u)})
         else:
             cid = opt["chat_id"]
             if cid in seen:
@@ -188,7 +191,11 @@ async def _bc_send_pending(bot, context) -> list[dict]:
     media: dict | None = context.user_data.get("bc_media")
     # An announcement may carry a link, shown as a button. None for a plain
     # /broadcast, and for a media send whose caption went elsewhere.
-    markup = context.user_data.get("bc_markup")
+    shared_markup = context.user_data.get("bc_markup")
+    # {"lang": source language, "text": what to translate} for an announcement;
+    # absent for anything else. Set (or popped) on every announcement push, so
+    # a previous push's text can never ride on this one.
+    translatable: dict | None = context.user_data.get("bc_translate")
     message: str = context.user_data.get("bc_message", "")
     recipients: list[dict] = context.user_data["bc_recipients"]
     done: set = context.user_data["bc_done"]
@@ -196,6 +203,12 @@ async def _bc_send_pending(bot, context) -> list[dict]:
     for r in recipients:
         if r["chat_id"] in done:
             continue
+        markup = shared_markup
+        # A Translate button only on a DM: in a group, one member's language
+        # would choose the button every member sees.
+        if translatable and r.get("kind") == "user" and r.get("lang"):
+            markup = with_translate_button(shared_markup, translatable["text"],
+                                           translatable["lang"], r["lang"])
         try:
             if media:
                 await _send_media(bot, r["chat_id"], media["kind"], media["file_id"],
