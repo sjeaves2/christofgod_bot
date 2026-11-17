@@ -1,8 +1,14 @@
 """/announcements — congregation announcements.
 
-Users see the active ones (machine-translated into their language on first
-view and cached); admins create them (with an optional broadcast on creation),
-list them, and expire them early. Expired announcements linger for
+Users see the active ones; admins create them (with an optional broadcast on
+creation), list them, and expire them early.
+
+A reader whose language differs from an announcement's gets a Translate button
+— on their DM of the push, and in /announcements in a private chat — whose
+link opens Google Translate on THEIR device. The bot makes no request. The
+older translate-and-cache path (_announcement_for_lang) is kept as the hook
+for a backend, and today always shows the original, since translate() has
+none. Expired announcements linger for
 ANNOUNCEMENT_PURGE_AFTER_DAYS so admins can still see them, then are deleted.
 """
 
@@ -24,6 +30,7 @@ from common import (
     now_tz,
     reply_markdown,
     validate_markdown,
+    with_translate_button,
 )
 from handlers.notifications import CAPTION_LIMIT
 from handlers.broadcast import (
@@ -40,7 +47,7 @@ from localization import t
 from permissions import admin_only, user_info
 from settings import TZ, activity
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.constants import ParseMode
+from telegram.constants import ChatType, ParseMode
 from telegram.error import BadRequest
 from telegram.ext import (
     CallbackQueryHandler,
@@ -127,6 +134,28 @@ def announcement_markup(ann: dict[str, Any], lang: str) -> InlineKeyboardMarkup 
         return None
     return InlineKeyboardMarkup(
         [[InlineKeyboardButton(t("ann_link_button", lang), url=url)]])
+
+
+def translatable_text(ann: dict[str, Any]) -> str:
+    """What a reader's Translate button hands the translator: title and body.
+
+    Not the rendered message: the 📢, the sender line and the link would only
+    be noise to a translator, and the link is better left untranslated. The
+    admin's * and _ go through as typed; a translator shows them literally,
+    which is legible, where escaping them would add backslashes.
+    """
+    title = str(ann.get("title", "")).strip()
+    body = str(ann.get("body", "")).strip()
+    return "\n\n".join(part for part in (title, body) if part)
+
+
+# A Translate button in /announcements names its announcement, since one
+# message holds several. Long titles are clipped to keep the button readable.
+TRANSLATE_LABEL_TITLE_MAX = 40
+
+
+def _clip(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
 
 
 def _render_announcement(ann: dict[str, Any], escape: bool = True,
@@ -227,18 +256,46 @@ async def cmd_announcements(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return "\n\n".join(parts)
 
     rendered = [(a, await _announcement_for_lang(a, lang)) for a in live]
+    markup = _translate_markup(rendered, lang, update)
     # NB: raw on purpose. This has a BETTER fallback than plain text — it
     # re-renders with everything escaped, so the list keeps its structure. A
     # generic plain-text retry would swallow the BadRequest and lose that.
     try:
-        await update.message.reply_text(_build(False), parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(_build(False), parse_mode=ParseMode.MARKDOWN,
+                                        reply_markup=markup)
     except BadRequest:
         # One announcement's markup is unparseable — most likely a record created
         # before formatting was supported, whose literal asterisks were stored
         # escaped-on-render and are now taken as markup. Escaping everything
         # loses emphasis but is far better than showing nobody anything.
         logger.warning("Announcement Markdown failed to render; retrying escaped.")
-        await reply_markdown(update.message, _build(True))
+        await reply_markdown(update.message, _build(True), reply_markup=markup)
+
+
+def _translate_markup(rendered: list[tuple[dict[str, Any], dict[str, Any]]],
+                      lang: str, update: Update) -> InlineKeyboardMarkup | None:
+    """One Translate button per announcement still in another language.
+
+    Private chats only: in a group the reply is read by everyone, and the
+    caller's language would decide the buttons for the rest.
+
+    "Still": _announcement_for_lang returns the record ITSELF when it did not
+    translate. If a backend is ever added and it does translate, the reader
+    already has their language and needs no button — so identity, not the
+    source language, is what decides.
+    """
+    chat = update.effective_chat
+    if chat is None or chat.type != ChatType.PRIVATE:
+        return None
+    markup = None
+    for ann, localized in rendered:
+        if localized is not ann:
+            continue
+        label = t("translate_button_titled", lang,
+                  title=_clip(str(ann.get("title", "")), TRANSLATE_LABEL_TITLE_MAX))
+        markup = with_translate_button(markup, translatable_text(ann),
+                                       ann.get("lang"), lang, label=label)
+    return markup
 
 
 @admin_only
@@ -426,6 +483,10 @@ async def an_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     # configured group targets, rendered in the church default language, so one
     # markup serves them all.
     context.user_data["bc_markup"] = announcement_markup(ann, lang)
+    # Members whose language differs get a Translate button on their DM
+    # (groups never do — see _bc_send_pending). Always SET here, never left
+    # over from a previous push.
+    context.user_data["bc_translate"] = {"lang": lang, "text": translatable_text(ann)}
     options = await _broadcast_target_options(context.bot, lang)
     context.user_data["bc_options"] = options
     context.user_data["bc_selected"] = set()
