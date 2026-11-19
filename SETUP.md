@@ -2,7 +2,7 @@
 
 ## 1. Prerequisites
 
-- Python 3.10+
+- Python 3.12+ (CI tests 3.12 and 3.13)
 - A Telegram bot token from [@BotFather](https://t.me/BotFather)
 
 ## 2. Install dependencies

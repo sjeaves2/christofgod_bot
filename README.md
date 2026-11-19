@@ -144,7 +144,7 @@ christofgod_bot/
 ## Setup
 
 ### Prerequisites
-- Python 3.10 or later
+- Python 3.12 or later (CI tests 3.12 and 3.13)
 - A Telegram bot token from [@BotFather](https://t.me/BotFather)
 
 ### Installation
