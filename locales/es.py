@@ -217,21 +217,24 @@ STRINGS: dict[str, str] = {
     ),
     "help_appointment": (
         "*/appointment* — Solicita una reunión con un oficial de la iglesia.\n\n"
-        "Elige al oficial y luego ingresa una fecha y hora. Él (o su representante) "
-        "confirmará, rechazará o sugerirá otra hora. Una vez confirmada recibes un "
-        "archivo de calendario."
+        "Elige al oficial y luego toca un día en el calendario y una hora. Las horas se "
+        "muestran en tu zona horaria, y solo aparecen horarios de oficina libres; los días "
+        "de fiesta y los feriados federales de EE. UU. están cerrados. Él (o su "
+        "representante) confirmará, rechazará o sugerirá otra hora. Una vez confirmada "
+        "recibes un archivo de calendario."
     ),
     "help_myappointments": (
-        "*/myappointments* — Muestra tus citas próximas y pasadas y su estado."
+        "*/myappointments* — Muestra tus citas próximas y pasadas y su estado. Cada cita "
+        "próxima tiene botones para reprogramarla o cancelarla."
     ),
     "help_cancelappointment": (
         "*/cancelappointment* — Cancela una cita próxima. Elígela de la lista y confirma. "
         "Se notifica a la otra parte. Las citas pasadas no se pueden cancelar."
     ),
     "help_reschedule": (
-        "*/reschedule* — Propone una nueva hora para una cita próxima. Elígela, ingresa "
-        "la nueva fecha/hora, y la otra parte acepta o rechaza. Si se rechaza, se mantiene "
-        "la hora original. Las nuevas horas no pueden estar en el pasado."
+        "*/reschedule* — Propone una nueva hora para una cita próxima. Elígela, toca un "
+        "nuevo día y una hora, y la otra parte acepta o rechaza. Si se rechaza, se "
+        "mantiene la hora original. (El botón Reprogramar de /myappointments hace lo mismo.)"
     ),
     "help_events": (
         "*/events* — Muestra las convocaciones, servicios y eventos de los próximos 30 días, "

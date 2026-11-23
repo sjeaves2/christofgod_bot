@@ -893,3 +893,25 @@ class TestTheExistingAppointmentPicker:
             actor=111, uname="req", appts=[ex])
         assert store[0]["reschedule_proposed_datetime"] == at(2027, 2, 3, 10, 30).isoformat()
         assert store[0]["confirmed_datetime"] == at(2027, 2, 3, 10).isoformat()
+
+
+class TestTheHelpTextMatchesThePicker:
+    """/help described typing a date and time for a release after the picker
+    shipped (fixed in v1.1.1). Pinned in English, where it can be read."""
+
+    @pytest.mark.parametrize("key", ["help_appointment", "help_reschedule"])
+    def test_it_says_tap_not_enter(self, key):
+        from localization import CATALOG
+        text = CATALOG["en"][key].lower()
+        assert "tap" in text
+        assert "enter" not in text and "date/time" not in text
+
+    def test_myappointments_help_mentions_its_buttons(self):
+        from localization import CATALOG
+        text = CATALOG["en"]["help_myappointments"].lower()
+        assert "reschedule" in text and "cancel" in text
+
+    @pytest.mark.parametrize("lang", ["en", "es", "fr", "zu"])
+    def test_every_language_points_reschedule_at_myappointments(self, lang):
+        from localization import CATALOG
+        assert "/myappointments" in CATALOG[lang]["help_reschedule"]

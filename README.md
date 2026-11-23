@@ -24,12 +24,23 @@ and member management.
 
 ### Appointment Requests
 - Congregants can request a meeting with a church official through the bot
+- They pick a day from a **month calendar** and a time from buttons, shown in
+  their own time zone — nothing is typed
+- Only free office hours are offered: by default Monday–Thursday 9:00–5:00 and
+  Friday 9:00–1:00 (before the Sabbath), church time, in 30-minute slots.
+  Weekday feast days and US federal holidays are closed, and so is any time the
+  official or the member is already booked. `appointments.hours` in
+  `config/config.yaml` can change the hours
 - The request includes the user's display name and profile photo (if available)
-- Officials receive the request with **Confirm / Suggest different time / Decline** options
-- If an official suggests a different time, the user is notified and can accept,
-  propose yet another time, or cancel
+- Officials receive the request with **Confirm / Suggest time / Decline** options;
+  suggesting a time uses the same calendar
+- If an official suggests a different time, the user is notified and can accept
+  or suggest another
+- An official can't be booked into two confirmed appointments at once
 - Once both parties agree, each receives a confirmation and an **ICS calendar file**
   to import into their personal calendar app
+- `/myappointments` lists every appointment, with **Reschedule** and **Cancel**
+  buttons on each upcoming one (`/reschedule` and `/cancelappointment` still work)
 - Every request is assigned a unique ID for tracking
 
 ### Calendar Export

@@ -217,21 +217,23 @@ STRINGS: dict[str, str] = {
     ),
     "help_appointment": (
         "*/appointment* — Request a meeting with a church official.\n\n"
-        "Pick the official, then enter a date and time. They (or their proxy) "
-        "will confirm, decline, or suggest a different time. Once confirmed you "
-        "get a calendar file."
+        "Pick the official, then tap a day on the calendar and a time. Times are "
+        "shown in your own time zone, and only free office hours are offered; feast "
+        "days and US federal holidays are closed. They (or their proxy) will confirm, "
+        "decline, or suggest a different time. Once confirmed you get a calendar file."
     ),
     "help_myappointments": (
-        "*/myappointments* — List your upcoming and past appointments and their status."
+        "*/myappointments* — List your upcoming and past appointments and their status. "
+        "Each upcoming one has buttons to reschedule or cancel it."
     ),
     "help_cancelappointment": (
         "*/cancelappointment* — Cancel an upcoming appointment. Pick it from the "
         "list and confirm. The other party is notified. Past appointments can't be cancelled."
     ),
     "help_reschedule": (
-        "*/reschedule* — Propose a new time for an upcoming appointment. Pick it, "
-        "enter the new date/time, and the other party accepts or declines. If declined, "
-        "the original time is kept. New times can't be in the past."
+        "*/reschedule* — Propose a new time for an upcoming appointment. Pick it, tap a "
+        "new day and time, and the other party accepts or declines. If declined, the "
+        "original time is kept. (The Reschedule button in /myappointments does the same.)"
     ),
     "help_events": (
         "*/events* — Show upcoming convocations, services and events for the next 30 days, "

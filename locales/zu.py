@@ -224,12 +224,15 @@ STRINGS: dict[str, str] = {
     ),
     "help_appointment": (
         "*/appointment* — Cela umhlangano nesikhulu sebandla.\n\n"
-        "Khetha isikhulu, bese ufaka usuku nesikhathi. Sona (noma ummeleli waso) "
-        "sizoqinisekisa, senqabe, noma siphakamise esinye isikhathi. Uma sekuqinisekisiwe "
-        "uthola ifayela lekhalenda."
+        "Khetha isikhulu, bese uthinta usuku ekhalendeni nesikhathi. Izikhathi ziboniswa "
+        "ngesikhathi sendawo yakho, futhi kuboniswa kuphela izikhathi zehhovisi "
+        "ezivulekile; izinsuku zemikhosi namaholide kahulumeni wase-US avaliwe. Sona "
+        "(noma ummeleli waso) sizoqinisekisa, senqabe, noma siphakamise esinye isikhathi. "
+        "Uma sekuqinisekisiwe uthola ifayela lekhalenda."
     ),
     "help_myappointments": (
-        "*/myappointments* — Bonisa ama-aphoyintimenti akho azayo nadlule kanye nesimo sawo."
+        "*/myappointments* — Bonisa ama-aphoyintimenti akho azayo nadlule kanye nesimo "
+        "sawo. Ngayinye ezayo inezinkinobho zokuyihlela kabusha noma ukuyikhansela."
     ),
     "help_cancelappointment": (
         "*/cancelappointment* — Khansela i-aphoyintimenti ezayo. Yikhethe ohlwini "
@@ -237,9 +240,10 @@ STRINGS: dict[str, str] = {
         "Elinye iqembu liyaziswa. Ama-aphoyintimenti adlule ngeke akhanselwe."
     ),
     "help_reschedule": (
-        "*/reschedule* — Phakamisa isikhathi esisha se-aphoyintimenti ezayo. Yikhethe, faka "
-        "usuku/isikhathi esisha, bese elinye iqembu liyamukela noma linqabe. Uma kunqatshelwe, "
-        "kugcinwa isikhathi sokuqala. Izikhathi ezintsha ngeke zibe sesikhathini esidlule."
+        "*/reschedule* — Phakamisa isikhathi esisha se-aphoyintimenti ezayo. Yikhethe, "
+        "uthinte usuku olusha nesikhathi, bese elinye iqembu liyamukela noma linqabe. Uma "
+        "kunqatshelwe, kugcinwa isikhathi sokuqala. (Inkinobho ethi Hlela kabusha "
+        "ku-/myappointments yenza okufanayo.)"
     ),
     "help_events": (
         "*/events* — Bonisa imihlangano, izinkonzo nemicimbi yezinsuku ezingu-30 ezizayo, "
