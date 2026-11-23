@@ -7,8 +7,9 @@ into CATALOG, and listing it in AVAILABLE_LANGUAGES — no code changes
 elsewhere. Any missing key falls back to English. Conventions kept consistent
 across languages:
   - Slash-command names (e.g. "/events") are left untranslated.
-  - The literal date/time format tokens "YYYY-MM-DD" and "HH:MM" are kept as-is
-    so they match what the parser expects.
+  - No string asks for a typed date or time. Appointment dates and times are
+    picked from buttons (2026-11-23), whose day and month names come from
+    Babel/CLDR rather than from these files.
   - {placeholders} must be preserved exactly.
 
 Note: values substituted at runtime — event names, appointment statuses, and

@@ -228,14 +228,10 @@ class TestTheCatchAllsAreStillLast:
             f"fires on valid commands. Last is: {group0[-1]}"
         )
 
-    def test_the_free_text_catch_all_is_second_to_last(self):
-        live = _snapshot()
-        group0 = [line for line in live if line.startswith("0: ")]
-        assert len(group0) >= 2
-        assert "handle_counter_propose_message" in group0[-2], (
-            "the free-text catch-all must sit just before the unknown-command "
-            f"handler. Second-to-last is: {group0[-2]}"
-        )
+    # test_the_free_text_catch_all_is_second_to_last lived here until
+    # 2026-11-23, when the free-text handler for typed counter-proposals was
+    # removed with the typed prompts themselves. That there is NO such
+    # handler now is pinned in tests/test_cancel_conversation.py.
 
 
 HEADER = """\

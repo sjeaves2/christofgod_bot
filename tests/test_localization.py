@@ -91,9 +91,14 @@ class TestTranslationParity:
                     "/settimezone", "/language", "/stop"):
             assert cmd in CATALOG[lang]["user_commands"]
 
-    @pytest.mark.parametrize("lang", ["en", "es", "fr"])
-    def test_date_token_preserved(self, lang):
-        assert "YYYY-MM-DD" in CATALOG[lang]["appt_ask_date"]
+    @pytest.mark.parametrize("lang", ["en", "es", "fr", "zu"])
+    def test_no_string_asks_for_a_typed_date_any_more(self, lang):
+        """Every date and time is now picked from buttons (2026-11-23). This
+        replaced a test that each language kept the YYYY-MM-DD token the
+        parser expected; there is no parser now, so a prompt asking for that
+        format would be asking for something nothing reads."""
+        for key, text in CATALOG[lang].items():
+            assert "YYYY-MM-DD" not in text, f"{lang}:{key} still asks for YYYY-MM-DD"
 
     def test_spanish_lookup_distinct_from_english(self):
         assert t("events_none", "es") != t("events_none", "en")

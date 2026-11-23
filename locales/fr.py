@@ -43,6 +43,12 @@ STRINGS: dict[str, str] = {
     "myappts_none": "Vous n'avez aucun rendez-vous enregistré.",
     "section_upcoming": "\n*À venir :*",
     "section_past": "\n*Passés :*",
+    "myappts_btn_reschedule": "📅 Reprogrammer {n}",
+    "myappts_btn_cancel": "❌ Annuler {n}",
+    "myappts_actions_hint": "Utilisez les boutons ci-dessous pour reprogrammer ou annuler.",
+    "myappts_no_longer": "Ce rendez-vous ne peut plus être modifié.",
+    "myappts_yes_cancel": "Oui, l'annuler",
+    "myappts_no_keep": "Non, le garder",
     "appt_line": "• Avec : {counterparty}\n   {when} — *{status}*\n   _ID : {id}_",
 
     "action_cancelled": "✖️ Annulé. Rien n'a été enregistré ni envoyé.",
@@ -59,15 +65,6 @@ STRINGS: dict[str, str] = {
     # -- reschedule appointment --
     "resched_none": "Vous n'avez aucun rendez-vous à venir à reprogrammer.",
     "resched_list_header": "*Reprogrammer un rendez-vous*\nChoisissez-en un à reprogrammer :",
-    "resched_ask_time": "Saisissez la nouvelle date et heure (YYYY-MM-DD HH:MM) :",
-    "resched_bad_format": "Veuillez utiliser le format YYYY-MM-DD HH:MM :",
-    "resched_past": (
-        "Cette date/heure est déjà passée. Veuillez saisir une heure future (YYYY-MM-DD HH:MM) :"
-    ),
-    "resched_overlap": (
-        "Cette heure chevauche un autre de vos rendez-vous. Veuillez choisir une autre heure "
-        "(YYYY-MM-DD HH:MM) :"
-    ),
     "resched_no_longer": "Ce rendez-vous ne peut plus être reprogrammé.",
     "resched_sent": (
         "✅ Votre demande de reprogrammation a été envoyée. Vous serez informé de son acceptation "
@@ -96,22 +93,31 @@ STRINGS: dict[str, str] = {
         "Veuillez choisir une date en dehors de cette période, ou annuler "
         "un rendez-vous existant avec /cancelappointment."
     ),
-    "appt_ask_date": "Date souhaitée (YYYY-MM-DD) :",
-    "appt_bad_date": "Veuillez utiliser le format YYYY-MM-DD :",
-    "appt_ask_time": "Heure souhaitée (HH:MM, format 24 h) :",
-    "appt_bad_time": "Veuillez utiliser le format HH:MM :",
-    "appt_bad_datetime": (
-        "Cette date/heure n'est pas valide. Veuillez ressaisir la date (YYYY-MM-DD) :"
+    "appt_pick_day": (
+        "Choisissez un jour pour votre rendez-vous avec *{official}*.\n"
+        "Les heures sont affichées dans votre fuseau horaire ({tz})."
     ),
-    "appt_past": "Cette date/heure est déjà passée. Veuillez saisir une date future (YYYY-MM-DD) :",
-    "appt_too_far": (
-        "Les rendez-vous peuvent être pris au maximum {months} mois à l'avance "
-        "(jusqu'au {until}). Veuillez saisir une date plus proche (YYYY-MM-DD) :"
+    "appt_pick_time": "*{official}* — {day}\n\nChoisissez une heure ({tz}) :",
+    "appt_no_days": (
+        "Il n'y a aucun créneau libre avec *{official}* dans les {months} prochains "
+        "mois. Veuillez vous adresser au secrétariat de l'église."
     ),
-    "appt_overlap": (
-        "Cette heure chevauche votre rendez-vous existant avec {official} "
-        "le {when} (ID : `{id}`).\n\nVeuillez choisir une autre date/heure (YYYY-MM-DD) :"
+    "appt_slot_gone": "⚠️ Ce créneau n'est plus disponible. Veuillez en choisir un autre.",
+    "appt_tap_hint": (
+        "Utilisez les boutons ci-dessus pour choisir un jour et une heure, "
+        "ou envoyez /cancel pour arrêter."
     ),
+    "appt_stale_buttons": (
+        "⚠️ Ces boutons ne sont plus à jour. "
+        "Envoyez /appointment pour faire une nouvelle demande."
+    ),
+    "appt_picker_closed": (
+        "Aucune nouvelle heure n'a été choisie : rien n'a changé. "
+        "(/cancelappointment annule complètement un rendez-vous.)"
+    ),
+    "appt_chosen": "*{official}* — {when}",
+    "appt_btn_calendar": "◀️ Calendrier",
+    "appt_btn_cancel": "✖️ Annuler",
     "appt_ask_desc": "Brève description de l'objet de la réunion (128 caractères maximum) :",
     "appt_summary": (
         "*Récapitulatif de la demande de rendez-vous :*\n"

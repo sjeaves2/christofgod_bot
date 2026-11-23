@@ -42,6 +42,12 @@ STRINGS: dict[str, str] = {
     "myappts_none": "You have no appointments on record.",
     "section_upcoming": "\n*Upcoming:*",
     "section_past": "\n*Past:*",
+    "myappts_btn_reschedule": "📅 Reschedule {n}",
+    "myappts_btn_cancel": "❌ Cancel {n}",
+    "myappts_actions_hint": "Use the buttons below to reschedule or cancel.",
+    "myappts_no_longer": "That appointment can no longer be changed.",
+    "myappts_yes_cancel": "Yes, cancel it",
+    "myappts_no_keep": "No, keep it",
     "appt_line": "• With: {counterparty}\n   {when} — *{status}*\n   _ID: {id}_",
 
     "action_cancelled": "✖️ Cancelled. Nothing was saved or sent.",
@@ -58,13 +64,6 @@ STRINGS: dict[str, str] = {
     # -- reschedule appointment --
     "resched_none": "You have no upcoming appointments to reschedule.",
     "resched_list_header": "*Reschedule an Appointment*\nChoose one to reschedule:",
-    "resched_ask_time": "Enter the new date and time (YYYY-MM-DD HH:MM):",
-    "resched_bad_format": "Please use the format YYYY-MM-DD HH:MM:",
-    "resched_past": "That date/time is in the past. Please enter a future time (YYYY-MM-DD HH:MM):",
-    "resched_overlap": (
-        "That time overlaps another of your appointments. Please choose a different time "
-        "(YYYY-MM-DD HH:MM):"
-    ),
     "resched_no_longer": "That appointment can no longer be rescheduled.",
     "resched_sent": (
         "✅ Your reschedule request has been sent. You'll be notified when it's accepted or "
@@ -91,20 +90,31 @@ STRINGS: dict[str, str] = {
         "Please choose a date outside that window, or cancel an existing "
         "appointment with /cancelappointment."
     ),
-    "appt_ask_date": "Desired date (YYYY-MM-DD):",
-    "appt_bad_date": "Please use YYYY-MM-DD format:",
-    "appt_ask_time": "Desired time (HH:MM, 24-hour):",
-    "appt_bad_time": "Please use HH:MM format:",
-    "appt_bad_datetime": "That date/time isn't valid. Please re-enter the date (YYYY-MM-DD):",
-    "appt_past": "That date/time is in the past. Please enter a future date (YYYY-MM-DD):",
-    "appt_too_far": (
-        "Appointments can be booked at most {months} months ahead "
-        "(through {until}). Please enter an earlier date (YYYY-MM-DD):"
+    "appt_pick_day": (
+        "Choose a day for your meeting with *{official}*.\n"
+        "Times are shown in your time zone ({tz})."
     ),
-    "appt_overlap": (
-        "That time overlaps your existing appointment with {official} "
-        "on {when} (ID: `{id}`).\n\nPlease choose a different date/time (YYYY-MM-DD):"
+    "appt_pick_time": "*{official}* — {day}\n\nChoose a time ({tz}):",
+    "appt_no_days": (
+        "There are no free times with *{official}* in the next {months} months. "
+        "Please speak to the church office."
     ),
+    "appt_slot_gone": "⚠️ That time is no longer available. Please choose another.",
+    "appt_tap_hint": (
+        "Please use the buttons above to choose a day and time, "
+        "or send /cancel to stop."
+    ),
+    "appt_stale_buttons": (
+        "⚠️ Those buttons are out of date. "
+        "Send /appointment to start a new request."
+    ),
+    "appt_picker_closed": (
+        "No new time was chosen, so nothing has changed. "
+        "(/cancelappointment cancels an appointment altogether.)"
+    ),
+    "appt_chosen": "*{official}* — {when}",
+    "appt_btn_calendar": "◀️ Calendar",
+    "appt_btn_cancel": "✖️ Cancel",
     "appt_ask_desc": "Brief description of the meeting purpose (128 characters max):",
     "appt_summary": (
         "*Appointment Request Summary:*\n"

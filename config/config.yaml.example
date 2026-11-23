@@ -27,6 +27,18 @@ privacy:
   # set this if the policy is published somewhere else.
   url: ""
 
+appointments:
+  # Office hours offered by /appointment, in the church timezone. Leave this
+  # section out to use the defaults: Monday–Thursday 09:00-17:00 and Friday
+  # 09:00-13:00 (before the Sabbath). If you set it, it REPLACES the defaults,
+  # so any day not listed is closed. Weekday feast days are always closed.
+  # hours:
+  #   monday: "09:00-17:00"
+  #   tuesday: "09:00-17:00"
+  #   wednesday: "09:00-17:00"
+  #   thursday: "09:00-17:00"
+  #   friday: "09:00-13:00"
+
 donations:
   # Optional link surfaced by /donate (e.g. a PayPal.me or giving-page URL).
   # Leave blank to have /donate reply that online giving isn't set up yet.

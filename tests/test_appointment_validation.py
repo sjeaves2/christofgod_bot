@@ -1,6 +1,7 @@
 """Tests for appointment request validation:
 
-  1. No appointments in the past or more than 6 months ahead.
+  1. No appointments in the past or more than 6 months ahead (now enforced by
+     the picker; see tests/test_appointment_picker.py).
   2. Only one active appointment per official at a time.
 """
 
@@ -222,102 +223,10 @@ class TestOverlapHelper:
         assert _overlapping_appt([self._appt_at(existing, duration=60)], 111, new, 30) is not None
 
 
-# ---------------------------------------------------------------------------
-# Rule 1: date window (validated in ap_time)
-# ---------------------------------------------------------------------------
-
-async def _run_ap_time(date_str, time_str, existing_appts=None):
-    from handlers.appointments import ap_time
-    ctx = _make_context()
-    ctx.user_data["ap_date"] = date_str
-    ctx.user_data["ap_official"] = {"id": "off1", "name": "Pastor Test"}
-    upd = _make_update(text=time_str)
-
-    async def _fake_get():
-        return list(existing_appts or [])
-
-    with patch("storage.get_appointments", side_effect=_fake_get), \
-         patch("permissions.OFFICIALS", _officials()):
-        result = await ap_time(upd, ctx)
-    return result, upd, ctx
-
-
-class TestDateWindow:
-    async def _run_ap_time(self, date_str: str, time_str: str, existing_appts=None):
-        return await _run_ap_time(date_str, time_str, existing_appts)
-
-    async def test_future_date_accepted(self):
-        from handlers.appointments import AP_DESC
-        future = _ahead(30).strftime("%Y-%m-%d")
-        result, _, ctx = await self._run_ap_time(future, "10:00")
-        assert result == AP_DESC
-        assert ctx.user_data.get("ap_time") == "10:00"
-
-    async def test_past_date_rejected(self):
-        from handlers.appointments import AP_DATE
-        past = _ahead(-1).strftime("%Y-%m-%d")
-        result, upd, ctx = await self._run_ap_time(past, "10:00")
-        assert result == AP_DATE
-        assert "ap_time" not in ctx.user_data
-        assert "past" in upd.message.reply_text.call_args[0][0].lower()
-
-    async def test_too_far_future_rejected(self):
-        from handlers.appointments import AP_DATE
-        far = _ahead(400).strftime("%Y-%m-%d")
-        result, upd, ctx = await self._run_ap_time(far, "10:00")
-        assert result == AP_DATE
-        assert "ap_time" not in ctx.user_data
-        msg = upd.message.reply_text.call_args[0][0].lower()
-        assert "6 months" in msg or "months ahead" in msg
-
-    async def test_just_inside_window_accepted(self):
-        from handlers.appointments import AP_DESC
-        near = _ahead(150).strftime("%Y-%m-%d")
-        result, _, _ = await self._run_ap_time(near, "10:00")
-        assert result == AP_DESC
-
-    async def test_invalid_calendar_date_rejected(self):
-        from handlers.appointments import AP_DATE
-        result, upd, ctx = await self._run_ap_time("2027-13-40", "10:00")
-        assert result == AP_DATE
-        assert "ap_time" not in ctx.user_data
-        assert "valid" in upd.message.reply_text.call_args[0][0].lower()
-
-    async def test_bad_time_format_stays_in_time(self):
-        from handlers.appointments import AP_TIME
-        future = _ahead(30).strftime("%Y-%m-%d")
-        result, _, _ = await self._run_ap_time(future, "9am")
-        assert result == AP_TIME
-
-    async def test_overlapping_time_rejected(self):
-        from handlers.appointments import AP_DATE
-        day = _ahead(30, hour=10, minute=0, second=0, microsecond=0)
-        existing = {
-            "id": "CLASH1", "user_chat_id": 111, "official_id": "off2",
-            "official_name": "Bishop X",
-            "requested_datetime": day.isoformat(),
-            "confirmed_datetime": day.isoformat(),
-            "status": "confirmed", "duration_minutes": 30,
-        }
-        result, upd, ctx = await self._run_ap_time(
-            day.strftime("%Y-%m-%d"), "10:15", existing_appts=[existing])
-        assert result == AP_DATE
-        assert "ap_time" not in ctx.user_data
-        assert "overlap" in upd.message.reply_text.call_args[0][0].lower()
-
-    async def test_non_overlapping_time_accepted(self):
-        from handlers.appointments import AP_DESC
-        day = _ahead(30, hour=10, minute=0, second=0, microsecond=0)
-        existing = {
-            "id": "OK1", "user_chat_id": 111, "official_id": "off2",
-            "official_name": "Bishop X",
-            "requested_datetime": day.isoformat(),
-            "confirmed_datetime": day.isoformat(),
-            "status": "confirmed", "duration_minutes": 30,
-        }
-        result, _, ctx = await self._run_ap_time(
-            day.strftime("%Y-%m-%d"), "14:00", existing_appts=[existing])
-        assert result == AP_DESC
+# Rule 1, the date window, and the overlap rule used to be tested here through
+# the typed date and time steps. Those steps are now the day/time picker, and
+# its tests — past, too far ahead, overlapping, office hours, feast days — are
+# in tests/test_appointment_picker.py.
 
 
 # ---------------------------------------------------------------------------
@@ -886,38 +795,55 @@ class TestReschedulePastGuards:
             "duration_minutes": 30,
         }
 
-    async def _run_counter_msg(self, appt, text, role="official"):
-        ha._counter_propose_state[appt["id"]] = {"chat_id": 999, "role": role}
+    async def _pick_slot(self, appt, ts: int, mode="o", actor=999):
+        """Tap one time on the stateless picker for *appt*, as *actor*."""
+        q = MagicMock()
+        q.answer = AsyncMock()
+        q.edit_message_text = AsyncMock()
+        q.message.reply_text = AsyncMock()
+        q.data = f"{ha.CB_APPICK_PREFIX}{mode}:{appt['id']}:t:{ts}"
+        q.from_user.id = actor
+        q.from_user.username = "off"
+        upd = MagicMock()
+        upd.callback_query = q
         ctx = _make_context()
-        upd = _make_update(text=text, chat_id=999, username="off")
-        saved = []
+        ctx.bot.send_message = AsyncMock()
 
         async def _get():
             return [appt]
 
-        async def _save(a):
-            saved.extend(a)
+        with patch("storage.get_appointments", side_effect=_get), \
+             patch("storage.save_appointments", new=AsyncMock()), \
+             patch("permissions.OFFICIALS", _officials()):
+            await ha.appt_picker_callback(upd, ctx)
+        return q
 
-        try:
-            with patch("storage.get_appointments", side_effect=_get), \
-                 patch("storage.save_appointments", side_effect=_save):
-                await ha.handle_counter_propose_message(upd, ctx)
-        finally:
-            ha._counter_propose_state.pop(appt["id"], None)
-        return upd, saved
+    @staticmethod
+    def _first_free_slot() -> int:
+        """A slot the picker really offers today — relative, so it never rots."""
+        import appointment_slots as slots
+        rules = ha._slot_rules([], "off1", 111)
+        day = datetime.now(TZ).date()
+        for _ in range(60):
+            free = slots.free_slots_for_viewer_day(day, TZ, **rules)
+            if free:
+                return int(free[0].timestamp())
+            day += timedelta(days=1)
+        raise AssertionError("no free slot in 60 days")
 
     async def test_proposing_past_time_rejected(self):
+        """The picker never offers a past slot, and re-checks a tapped one."""
         appt = self._appt(_ahead(3))
-        upd, saved = await self._run_counter_msg(appt, "2000-01-01 10:00")
-        # Not applied: status stays pending, nothing saved as counter_proposed.
+        past = int(TZ.localize(datetime(2000, 1, 3, 10, 0)).timestamp())
+        await self._pick_slot(appt, past)
         assert appt["status"] == "pending"
-        assert "past" in upd.message.reply_text.call_args[0][0].lower()
+        assert "counter_datetime" not in appt
 
     async def test_proposing_future_time_accepted(self):
         appt = self._appt(_ahead(3))
-        future = _ahead(10).strftime("%Y-%m-%d 10:00")
-        upd, saved = await self._run_counter_msg(appt, future)
+        await self._pick_slot(appt, self._first_free_slot())
         assert appt["status"] == "counter_proposed"
+        assert appt["counter_datetime"]
 
     async def _run_tap(self, appt, verb, chat_id=999):
         """Drive appt_callback for one verb, returning the query mock."""
@@ -928,6 +854,7 @@ class TestReschedulePastGuards:
         q.edit_message_text = AsyncMock()
         q.data = f"{CB_APPT_PREFIX}{verb}:{appt['id']}"
         q.message.chat_id = chat_id
+        q.message.reply_text = AsyncMock()
         q.from_user.id = 999
         q.from_user.username = "off"
         upd = MagicMock()
@@ -962,19 +889,20 @@ class TestReschedulePastGuards:
         """
         past = self._appt(_ahead(-1), appt_id="PASTR")
         q = await self._run_tap(past, "counter")
-        assert "PASTR" in ha._counter_propose_state, (
-            "counter must open the re-propose prompt for a past appointment"
-        )
-        ha._counter_propose_state.pop("PASTR", None)
-        assert "passed" not in q.edit_message_text.call_args[0][0].lower()
+        q.message.reply_text.assert_awaited_once()
+        markup = q.message.reply_text.call_args.kwargs["reply_markup"]
+        data = [k.callback_data for row in markup.inline_keyboard for k in row]
+        assert any(d.startswith("appick:o:PASTR:d:") for d in data), (
+            "counter must open the picker for a past appointment")
+        q.edit_message_text.assert_not_called()
 
     async def test_decline_counter_on_past_appointment_is_now_allowed(self):
         """Not a terminal decline — it opens the same prompt for the requester."""
         past = self._appt(_ahead(-1), appt_id="PASTD", status="counter_proposed")
         q = await self._run_tap(past, "decline_counter", chat_id=111)
-        assert "PASTD" in ha._counter_propose_state
-        ha._counter_propose_state.pop("PASTD", None)
-        assert "passed" not in q.edit_message_text.call_args[0][0].lower()
+        markup = q.message.reply_text.call_args.kwargs["reply_markup"]
+        data = [k.callback_data for row in markup.inline_keyboard for k in row]
+        assert any(d.startswith("appick:u:PASTD:d:") for d in data)
 
     async def test_the_reopened_path_still_refuses_a_past_time(self):
         """Why unblocking is safe: the DOWNSTREAM check does the work.
@@ -982,9 +910,10 @@ class TestReschedulePastGuards:
         Without this, the two tests above would be an argument for a hole.
         """
         past = self._appt(_ahead(-1), appt_id="PASTR")
-        upd, _ = await self._run_counter_msg(past, "2000-01-01 10:00")
+        stale = int(TZ.localize(datetime(2000, 1, 3, 10, 0)).timestamp())
+        await self._pick_slot(past, stale)
         assert past["status"] == "pending"
-        assert "past" in upd.message.reply_text.call_args[0][0].lower()
+        assert "counter_datetime" not in past
 
     async def test_confirm_on_a_finished_appointment_is_blocked(self):
         past = self._appt(_ahead(-1), appt_id="PASTC")

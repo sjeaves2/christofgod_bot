@@ -155,58 +155,116 @@ def _g(appts):
 
 
 # ---------------------------------------------------------------------------
-# Proposing a new time (rs_newtime)
+# Proposing a new time — the picker (typed YYYY-MM-DD HH:MM until 2026-11-23)
 # ---------------------------------------------------------------------------
 
-class TestRsNewtime:
-    async def _run(self, appt, text, role="user", chat_id=111, username="req",
-             officials=None, extra_appts=None):
-        officials = officials or _officials()
-        appts = [appt] + (extra_appts or [])
+def _free_slot(appts, appt) -> datetime:
+    """The first slot the picker really offers for *appt*, relative to now."""
+    import appointment_slots as slots
+    rules = ha._slot_rules(appts, appt["official_id"], appt["user_chat_id"],
+                           exclude_id=appt["id"])
+    day = datetime.now(TZ).date()
+    for _ in range(60):
+        free = slots.free_slots_for_viewer_day(day, TZ, **rules)
+        if free:
+            return free[0]
+        day += timedelta(days=1)
+    raise AssertionError("no free slot in 60 days")
+
+
+class TestRescheduleOpensThePicker:
+    async def test_choosing_an_appointment_shows_the_calendar_and_ends(self):
+        appt = _appt()
         ctx = _ctx()
-        ctx.user_data["rs_appt_id"] = appt["id"]
-        ctx.user_data["rs_role"] = role
-        upd = _msg_update(text, chat_id=chat_id, username=username)
-        saved = []
-        result = await _run_with(_patches(appts, officials, saved),
-                           lambda: ha.rs_newtime(upd, ctx))
-        return result, upd, ctx, saved
-
-    async def test_bad_format_stays(self):
-        result, upd, _, _ = await self._run(_appt(), "not a date")
-        assert result == ha.RS_NEWTIME
-
-    async def test_past_time_stays(self):
-        result, upd, _, _ = await self._run(_appt(), "2000-01-01 10:00")
-        assert result == ha.RS_NEWTIME
-        assert "past" in upd.message.reply_text.call_args[0][0].lower()
-
-    async def test_valid_proposal_by_user_notifies_official(self):
-        future = (datetime.now(TZ) + timedelta(days=10)).strftime("%Y-%m-%d 10:00")
-        result, upd, ctx, saved = await self._run(_appt(), future, role="user")
+        ctx.user_data["rs_appts"] = [appt]
+        upd, q = _cb_update("rs:sel:0")
+        result = await _run_with(_patches([appt], _officials(), []),
+                                 lambda: ha.rs_select(upd, ctx))
         assert result == ext.ConversationHandler.END
-        # Proposal recorded, status unchanged (still confirmed).
+        markup = q.edit_message_text.call_args.kwargs["reply_markup"]
+        data = [k.callback_data for row in markup.inline_keyboard for k in row]
+        assert any(d.startswith("appick:r:APPT1:d:") for d in data)
+
+    async def test_an_appointment_cancelled_meanwhile_is_refused(self):
+        listed = _appt()
+        ctx = _ctx()
+        ctx.user_data["rs_appts"] = [listed]
+        upd, q = _cb_update("rs:sel:0")
+        result = await _run_with(_patches([_appt(status="cancelled")], _officials(), []),
+                                 lambda: ha.rs_select(upd, ctx))
+        assert result == ext.ConversationHandler.END
+        assert "no longer" in q.edit_message_text.call_args[0][0].lower()
+        assert "reply_markup" not in q.edit_message_text.call_args.kwargs
+
+
+class TestReschedulePickingATime:
+    async def _tap(self, appt, slot, chat_id=111, username="req", officials=None,
+                   extra=None):
+        appts = [appt] + (extra or [])
+        ctx = _ctx()
+        upd, q = _cb_update(f"appick:r:{appt['id']}:t:{int(slot.timestamp())}",
+                            chat_id=chat_id, username=username)
+        q.message.reply_text = AsyncMock()
+        saved = []
+        await _run_with(_patches(appts, officials or _officials(), saved),
+                        lambda: ha.appt_picker_callback(upd, ctx))
+        return q, ctx, saved
+
+    async def test_a_past_slot_is_refused(self):
+        q, ctx, saved = await self._tap(_appt(), TZ.localize(datetime(2000, 1, 3, 10)))
+        assert saved == []
+        ctx.bot.send_message.assert_not_called()
+
+    async def test_by_the_requester_notifies_the_official(self):
+        appt = _appt()
+        q, ctx, saved = await self._tap(appt, _free_slot([appt], appt))
         a = saved[0]
         assert a["reschedule_proposed_datetime"]
-        assert a["status"] == "confirmed"
-        # Official (chat 999) was notified with Accept/Decline.
+        assert a["reschedule_proposed_by"] == "user"
+        assert a["status"] == "confirmed"              # original stands
         assert ctx.bot.send_message.await_args[0][0] == 999
 
-    async def test_valid_proposal_by_official_notifies_requester(self):
-        future = (datetime.now(TZ) + timedelta(days=10)).strftime("%Y-%m-%d 10:00")
-        result, upd, ctx, saved = await self._run(
-            _appt(), future, role="official", chat_id=999, username="pastor")
-        assert result == ext.ConversationHandler.END
-        assert ctx.bot.send_message.await_args[0][0] == 111  # requester notified
+    async def test_by_the_official_notifies_the_requester(self):
+        appt = _appt()
+        q, ctx, saved = await self._tap(appt, _free_slot([appt], appt),
+                                        chat_id=999, username="pastor")
+        assert saved[0]["reschedule_proposed_by"] == "official"
+        assert ctx.bot.send_message.await_args[0][0] == 111
 
-    async def test_proxy_proposal_sets_negotiator(self):
-        future = (datetime.now(TZ) + timedelta(days=10)).strftime("%Y-%m-%d 10:00")
-        result, upd, ctx, saved = await self._run(
-            _appt(), future, role="official", chat_id=888, username="janesec",
-            officials=_officials(proxies_enabled=True))
-        a = saved[0]
-        assert a.get("negotiator_is_proxy") is True
-        assert a.get("negotiator_chat_id") == 888
+    async def test_by_a_proxy_sets_the_negotiator(self):
+        appt = _appt()
+        q, ctx, saved = await self._tap(appt, _free_slot([appt], appt),
+                                        chat_id=888, username="janesec",
+                                        officials=_officials(proxies_enabled=True))
+        assert saved[0]["negotiator_is_proxy"] is True
+        assert saved[0]["negotiator_chat_id"] == 888
+
+    async def test_a_stranger_is_refused(self):
+        appt = _appt()
+        q, ctx, saved = await self._tap(appt, _free_slot([appt], appt),
+                                        chat_id=555, username="nobody")
+        assert saved == []
+        assert "not authorized" in q.edit_message_text.call_args[0][0]
+
+    async def test_the_appointments_own_slot_stays_on_offer(self):
+        """Excluded from the busy times, so moving it by half an hour works."""
+        import appointment_slots as slots
+        probe = _appt()
+        own = _free_slot([], probe)              # a real slot, on the half hour
+        appt = _appt(when=own)
+        excluded = ha._slot_rules([appt], "off1", 111, exclude_id=appt["id"])
+        included = ha._slot_rules([appt], "off1", 111)
+        day = own.astimezone(TZ).date()
+        assert own in slots.free_slots_for_viewer_day(day, TZ, **excluded)
+        assert own not in slots.free_slots_for_viewer_day(day, TZ, **included)
+
+    async def test_the_officials_other_booking_is_not_offered(self):
+        appt = _appt()
+        slot = _free_slot([appt], appt)
+        other = _appt(appt_id="OTHER", when=slot)
+        other["user_chat_id"] = 222
+        q, ctx, saved = await self._tap(appt, slot, extra=[other])
+        assert saved == []
 
 
 # ---------------------------------------------------------------------------

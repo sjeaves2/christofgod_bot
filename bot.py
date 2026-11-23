@@ -77,6 +77,7 @@ from handlers.events_admin import (
 )
 from handlers.appointments import (
     appointment_conversation,
+    picker_stale_button_handler,
     cancel_appointment_conversation,
     reschedule_conversation,
     CB_APPT_PREFIX,
@@ -85,7 +86,10 @@ from handlers.appointments import (
     archive_old_appointments,
     cmd_enable_appt_proxies,
     cmd_myappointments,
-    handle_counter_propose_message,
+    CB_APPICK_PREFIX,
+    CB_MYAPPT_PREFIX,
+    appt_picker_callback,
+    myappt_callback,
     purge_archived_appointments,
 )
 from handlers.user_basics import (
@@ -694,6 +698,8 @@ def main() -> None:
     app.add_handler(CommandHandler("myappointments", cmd_myappointments))
     app.add_handler(CommandHandler("enable_appt_proxies", cmd_enable_appt_proxies))
     app.add_handler(appointment_conversation())
+    # After the conversation, never before: see ap_stale_button.
+    app.add_handler(picker_stale_button_handler())
     app.add_handler(cancel_appointment_conversation())
     app.add_handler(reschedule_conversation())
     app.add_handler(set_timezone_conversation())
@@ -710,6 +716,13 @@ def main() -> None:
         notif_prefs_callback, pattern=f"^{re.escape(CB_NOTIFPREF_PREFIX)}"))
 
     app.add_handler(CallbackQueryHandler(appt_callback, pattern=f"^{re.escape(CB_APPT_PREFIX)}"))
+    # The stateless picker for suggesting a time and rescheduling. Its own
+    # prefix, so it cannot collide with appt: or the /appointment picker.
+    app.add_handler(CallbackQueryHandler(
+        appt_picker_callback, pattern=f"^{re.escape(CB_APPICK_PREFIX)}"))
+    # The Cancel buttons on /myappointments (Reschedule opens the picker above).
+    app.add_handler(CallbackQueryHandler(
+        myappt_callback, pattern=f"^{re.escape(CB_MYAPPT_PREFIX)}"))
 
     app.add_handler(prayer_conversation())
     app.add_handler(respond_prayer_conversation())
@@ -729,22 +742,6 @@ def main() -> None:
     # step already moved past. Registered before it, it would shadow every
     # live tap, which is exactly the bug it was once part of.
     app.add_handler(stale_button_handler())
-
-    # Catch-all free-text handler. MUST come after every ConversationHandler:
-    # PTB runs only the first matching handler per group, and this one matches
-    # ANY text, so a conversation registered below it would never receive its
-    # own replies. (/prayer was briefly broken exactly this way — the member's
-    # request was swallowed here and silently discarded, with no error to show
-    # for it, because this handler returns quietly when no counter-propose is
-    # pending.)
-    # Free-text handler for counter-propose date/time responses
-    app.add_handler(
-        MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
-            handle_counter_propose_message,
-        )
-    )
-
 
     # LAST in group 0, deliberately: PTB runs only the first matching handler
     # per group, so this catches commands nothing above recognised. In a later

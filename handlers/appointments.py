@@ -12,12 +12,15 @@ import io
 import logging
 import re
 import uuid
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
+import appointment_slots as slots
 import permissions
 import pytz
 import storage
+from babel import Locale
+from babel.dates import format_date, format_time, get_day_names
 from common import (
     edit_markdown,
     format_dt,
@@ -30,9 +33,9 @@ from common import (
     _is_affirmative,
 )
 from ics_generator import appointment_cancellation_to_ics, appointment_to_ics
-from localization import status_label, t
+from localization import AVAILABLE_LANGUAGES, DEFAULT_LANG, status_label, t
 from permissions import user_info
-from settings import TZ, activity
+from settings import APPOINTMENT_HOURS_RAW, TZ, activity
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -239,8 +242,8 @@ def _appt_window_has_ended(appt: dict[str, Any]) -> bool:
 
     `_appt_is_past` is NOT changed. Its other call sites are the "can the
     user still act on this?" filters in the cancel and reschedule flows
-    (cmd_cancelappointment, ca_confirm, cmd_reschedule, rs_newtime), where no
-    grace is what you want.
+    (cmd_cancelappointment, ca_confirm, cmd_reschedule, _picker_refusal,
+    _can_change_appt), where no grace is what you want.
 
     No COUNT of them here on purpose. This comment said "eleven other
     callers", which was wrong — a grep that also matched `_appt_datetime` —
@@ -364,6 +367,39 @@ def _confirmed_overlap(
         int(appt.get("duration_minutes", DEFAULT_APPT_DURATION_MIN)),
         exclude_id=appt["id"],
     )
+
+
+def _official_overlap(
+    appts: list[dict[str, Any]], appt: dict[str, Any], start_iso: str
+) -> dict | None:
+    """The official's OTHER confirmed appointment overlapping *appt* at *start_iso*.
+
+    The official-side twin of _confirmed_overlap, which only looks at the
+    requester's calendar. Without this, two members' requests for the same
+    hour could both be confirmed (asked for by the user 2026-11-23). Only
+    CONFIRMED appointments count: a pending request is not yet a commitment,
+    and treating it as one would let an unanswered request block a real one.
+    """
+    start = datetime.fromisoformat(start_iso)
+    if start.tzinfo is None:
+        start = TZ.localize(start)
+    end = start + timedelta(minutes=int(appt.get("duration_minutes",
+                                                  DEFAULT_APPT_DURATION_MIN)))
+    for a in appts:
+        if a.get("id") == appt.get("id"):
+            continue
+        if a.get("official_id") != appt.get("official_id"):
+            continue
+        if a.get("status") != "confirmed":
+            continue
+        a_start = _appt_datetime(a)
+        if a_start is None:
+            continue
+        a_end = a_start + timedelta(
+            minutes=int(a.get("duration_minutes", DEFAULT_APPT_DURATION_MIN)))
+        if start < a_end and a_start < end:
+            return a
+    return None
 
 
 def _max_request_datetime() -> datetime:
@@ -513,64 +549,337 @@ async def ap_official(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         return ConversationHandler.END
 
     context.user_data["ap_official"] = off
-    await edit_markdown(query, f"*{md(off['name'])}*\n\n" + t("appt_ask_date", lang))
+    tz, _ = await get_user_prefs(uid)
+    rules = _slot_rules(appts, off["id"], uid)
+    month = _first_bookable_month(tz, rules)
+    if month is None:
+        await edit_markdown(query, t("appt_no_days", lang, official=md(off["name"]),
+                                     months=APPOINTMENT_HORIZON_MONTHS))
+        return ConversationHandler.END
+    await _show_calendar(_edit_render(query), off["name"], month, tz, lang, rules)
     return AP_DATE
 
 
-async def ap_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+# ---------------------------------------------------------------------------
+# The day and time picker (agreed with the user 2026-11-20)
+# ---------------------------------------------------------------------------
+#
+# Replaces typing YYYY-MM-DD and then a 24-hour HH:MM. Which times are offered
+# is appointment_slots' job; this part only draws the buttons and checks a tap
+# against the same rules again, since a keyboard can sit on screen while the
+# slot passes or someone else's appointment is confirmed into it.
+#
+# The tapped slot is stored as ap_date / ap_time in the CHURCH timezone, the
+# shape the typed steps produced, so ap_desc and ap_confirm are unchanged.
+# Note what that fixes: the typed time was read in the church timezone even
+# though the member was shown times in their own, so a member abroad who typed
+# 10:00 got 10:00 New York. The picker shows their time and stores the
+# church's.
+
+OFFICE_HOURS = slots.configured_hours(APPOINTMENT_HOURS_RAW)
+
+CB_APCAL_PREFIX = "apcal:"
+
+
+def _busy_intervals(appts: list[dict], official_id: str, user_id: int,
+                    exclude_id: str | None = None
+                    ) -> list[tuple[datetime, datetime]]:
+    """Times that must not be offered to *user_id* booking *official_id*.
+
+    The official's CONFIRMED appointments, and every active appointment of the
+    requester's own (the overlap rule ap_confirm enforces anyway). Another
+    member's PENDING request does not block a slot: it is only a request, and
+    hiding it would let one unanswered request close a slot to everyone.
+
+    *exclude_id* leaves out the appointment being re-timed, so its current
+    slot — and the ones beside it — stay on offer.
+    """
+    busy = []
+    for a in appts:
+        if exclude_id and a.get("id") == exclude_id:
+            continue
+        status = a.get("status")
+        own = a.get("user_chat_id") == user_id and status in ACTIVE_APPT_STATUSES
+        officials = a.get("official_id") == official_id and status == "confirmed"
+        if not (own or officials):
+            continue
+        start = _appt_datetime(a)
+        if start is None:
+            continue
+        minutes = int(a.get("duration_minutes", DEFAULT_APPT_DURATION_MIN))
+        busy.append((start, start + timedelta(minutes=minutes)))
+    return busy
+
+
+def _slot_rules(appts: list[dict], official_id: str, user_id: int,
+                exclude_id: str | None = None) -> dict:
+    """Keyword arguments for appointment_slots' functions, as of now."""
+    now = now_tz()
+    return {
+        "church_tz": TZ,
+        "hours": OFFICE_HOURS,
+        "closed": slots.closed_dates(TZ, now.date()),
+        "busy": _busy_intervals(appts, official_id, user_id, exclude_id),
+        "now": now,
+        "latest": _max_request_datetime(),
+    }
+
+
+def _locale(lang: str) -> str:
+    return lang if lang in AVAILABLE_LANGUAGES else DEFAULT_LANG
+
+
+def _plain_spaces(text: str) -> str:
+    """CLDR's narrow/no-break spaces as plain ones, as localized_datetime does."""
+    return text.translate({0x202F: " ", 0x00A0: " "})
+
+
+def _month_bounds(viewer_tz, latest: datetime) -> tuple[tuple[int, int], tuple[int, int]]:
+    """(year, month) of today and of the booking horizon, in the viewer's dates."""
+    today = now_tz().astimezone(viewer_tz)
+    last = latest.astimezone(viewer_tz)
+    return (today.year, today.month), (last.year, last.month)
+
+
+def _months(first: tuple[int, int], last: tuple[int, int]):
+    year, month = first
+    while (year, month) <= last:
+        yield year, month
+        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+
+
+def _shift_month(year: int, month: int, delta: int) -> tuple[int, int]:
+    index = year * 12 + (month - 1) + delta
+    return index // 12, index % 12 + 1
+
+
+def _calendar_keyboard(year: int, month: int, bookable: set[date], lang: str,
+                       first: tuple[int, int], last: tuple[int, int],
+                       prefix: str = CB_APCAL_PREFIX) -> InlineKeyboardMarkup:
+    """A month grid: bookable days are buttons, the rest are inert dots.
+
+    Every key needs callback data, so the inert ones carry `<prefix>n`. The
+    prefix is the conversation's for /appointment and carries the appointment
+    for the stateless picker (see appt_picker_callback). The week
+    starts on the locale's own first day — Sunday in (American) English,
+    Monday in Spanish and French — because that is how each reader's
+    calendar looks.
+    """
+    loc = _locale(lang)
+    names = get_day_names("short", locale=loc)  # keyed 0 = Monday
+    # Plain "en" in CLDR is the world default and starts on Monday; the
+    # congregation's English readers are American, so use en_US's Sunday.
+    week_start = Locale.parse("en_US" if loc == "en" else loc).first_week_day
+    title = format_date(date(year, month, 1), "LLLL y", locale=loc)
+    title = title[:1].upper() + title[1:]
+
+    def key(text: str, data: str = f"{prefix}n") -> InlineKeyboardButton:
+        return InlineKeyboardButton(text, callback_data=data)
+
+    rows = [[key(title)],
+            [key(names[(week_start + i) % 7]) for i in range(7)]]
+    for week in calendar.Calendar(firstweekday=week_start).monthdatescalendar(year, month):
+        rows.append([
+            key(" ") if d.month != month
+            else key(str(d.day), f"{prefix}d:{d.isoformat()}") if d in bookable
+            else key("·")
+            for d in week
+        ])
+    def month_key(label: str, delta: int) -> InlineKeyboardButton:
+        y, m = _shift_month(year, month, delta)
+        return key(label, f"{prefix}m:{y}-{m:02d}")
+
+    nav = []
+    if (year, month) > first:
+        nav.append(month_key("◀️", -1))
+    if (year, month) < last:
+        nav.append(month_key("▶️", 1))
+    if nav:
+        rows.append(nav)
+    rows.append([key(t("appt_btn_cancel", lang), f"{prefix}x")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _time_keyboard(free: list[datetime], viewer_tz, lang: str,
+                   prefix: str = CB_APCAL_PREFIX) -> InlineKeyboardMarkup:
+    """The free slots of one day, three to a row, in the viewer's time."""
+    loc = _locale(lang)
+    keys = [InlineKeyboardButton(
+                _plain_spaces(format_time(s.astimezone(viewer_tz), "short", locale=loc)),
+                callback_data=f"{prefix}t:{int(s.timestamp())}")
+            for s in free]
+    rows = [keys[i:i + 3] for i in range(0, len(keys), 3)]
+    day = free[0].astimezone(viewer_tz)
+    rows.append([
+        InlineKeyboardButton(t("appt_btn_calendar", lang),
+                             callback_data=f"{prefix}m:{day.year}-{day.month:02d}"),
+        InlineKeyboardButton(t("appt_btn_cancel", lang),
+                             callback_data=f"{prefix}x"),
+    ])
+    return InlineKeyboardMarkup(rows)
+
+
+def _edit_render(query):
+    """Draw the picker by editing the message that was tapped."""
+    async def render(text: str, markup) -> None:
+        await edit_markdown(query, text, reply_markup=markup)
+    return render
+
+
+def _reply_render(message):
+    """Draw the picker as a NEW message under *message*.
+
+    Used where the tapped message must keep its own buttons — and where it
+    cannot be edited as text at all: an appointment request is sent as a
+    PHOTO when the requester has a profile picture, and a photo has a caption,
+    not text.
+    """
+    async def render(text: str, markup) -> None:
+        await reply_markdown(message, text, reply_markup=markup)
+    return render
+
+
+async def _show_calendar(render, name: str, month: tuple[int, int], viewer_tz,
+                         lang: str, rules: dict, notice: str = "",
+                         prefix: str = CB_APCAL_PREFIX) -> None:
+    first, last = _month_bounds(viewer_tz, rules["latest"])
+    month = min(max(month, first), last)
+    bookable = slots.bookable_viewer_days(*month, viewer_tz, **rules)
+    tz_abbr = now_tz().astimezone(viewer_tz).strftime("%Z")
+    text = (notice + "\n\n" if notice else "") + t(
+        "appt_pick_day", lang, official=md(name), tz=tz_abbr)
+    await render(text, _calendar_keyboard(*month, bookable, lang, first, last, prefix))
+
+
+async def _show_times(render, name: str, day: date, free: list[datetime],
+                      viewer_tz, lang: str, prefix: str = CB_APCAL_PREFIX) -> None:
+    loc = _locale(lang)
+    tz_abbr = free[0].astimezone(viewer_tz).strftime("%Z")
+    await render(t("appt_pick_time", lang, official=md(name),
+                   day=_plain_spaces(format_date(day, "full", locale=loc)), tz=tz_abbr),
+                 _time_keyboard(free, viewer_tz, lang, prefix))
+
+
+def _first_bookable_month(viewer_tz, rules: dict) -> tuple[int, int] | None:
+    first, last = _month_bounds(viewer_tz, rules["latest"])
+    return next((m for m in _months(first, last)
+                 if slots.bookable_viewer_days(*m, viewer_tz, **rules)), None)
+
+
+async def _picker_step(query, verb: str, arg: str, name: str, viewer_tz,
+                       lang: str, rules: dict, prefix: str):
+    """The navigation every picker shares: m(onth), d(ay), t(ime).
+
+    Returns ("calendar" | "times", None) after drawing that screen, or
+    ("chosen", slot) for a tapped slot that is STILL free — re-checked here,
+    since the keyboard may have sat on screen while it passed or was taken.
+    """
+    render = _edit_render(query)
+    today = now_tz().astimezone(viewer_tz)
+
+    async def month_view(year, month, notice=""):
+        await _show_calendar(render, name, (year, month), viewer_tz, lang, rules,
+                             notice=notice, prefix=prefix)
+        return "calendar", None
+
+    if verb == "m":
+        try:
+            year, month = (int(x) for x in arg.split("-"))
+        except ValueError:
+            year, month = today.year, today.month
+        return await month_view(year, month)
+
+    if verb == "d":
+        try:
+            day = date.fromisoformat(arg)
+        except ValueError:
+            day = today.date()
+        free = slots.free_slots_for_viewer_day(day, viewer_tz, **rules)
+        if not free:
+            return await month_view(day.year, day.month, t("appt_slot_gone", lang))
+        await _show_times(render, name, day, free, viewer_tz, lang, prefix)
+        return "times", None
+
+    if verb == "t" and arg.isdigit():
+        slot = datetime.fromtimestamp(int(arg), TZ)
+        day = slot.astimezone(viewer_tz).date()
+        free = slots.free_slots_for_viewer_day(day, viewer_tz, **rules)
+        if slot in free:
+            return "chosen", slot
+        # Passed, or taken, since the keyboard was drawn. Offer what is left
+        # on that day, or the month if nothing is.
+        if free:
+            await _show_times(render, name, day, free, viewer_tz, lang, prefix)
+            await query.message.reply_text(t("appt_slot_gone", lang))
+            return "times", None
+        return await month_view(day.year, day.month, t("appt_slot_gone", lang))
+
+    logger.warning("Unrecognised appointment picker callback %r", query.data)
+    return await month_view(today.year, today.month)
+
+
+async def ap_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int | None:
+    """Every tap on the day/time picker, in both of its states.
+
+    One function for both because the verbs cross over — "◀️ Calendar" on the
+    time screen goes back to the month — so the state each tap leads to is
+    returned rather than implied by which handler caught it. None keeps the
+    current state (an inert key).
+    """
+    query = update.callback_query
+    await _answer_cb(query)
+    uid = query.from_user.id
+    tz, lang = await get_user_prefs(uid)
+    off = context.user_data.get("ap_official")
+    verb, _, arg = query.data[len(CB_APCAL_PREFIX):].partition(":")
+
+    if verb == "n":
+        return None
+    if verb == "x" or not off:
+        await query.edit_message_text(t("appt_request_cancelled", lang))
+        return ConversationHandler.END
+
+    appts = await storage.get_appointments()
+    rules = _slot_rules(appts, off["id"], uid)
+    outcome, slot = await _picker_step(query, verb, arg, off["name"], tz, lang,
+                                       rules, CB_APCAL_PREFIX)
+    if outcome != "chosen":
+        return AP_TIME if outcome == "times" else AP_DATE
+    context.user_data["ap_date"] = slot.strftime("%Y-%m-%d")
+    context.user_data["ap_time"] = slot.strftime("%H:%M")
+    await edit_markdown(query, t("appt_chosen", lang, official=md(off["name"]),
+                                 when=format_dt(slot, tz, lang))
+                        + "\n\n" + t("appt_ask_desc", lang))
+    return AP_DESC
+
+
+async def ap_typed_instead(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Text sent while the picker is waiting for a tap. Points at the buttons."""
     uid, _, _ = user_info(update)
     _, lang = await get_user_prefs(uid)
-    text = update.message.text.strip()
-    if not re.match(r"^\d{4}-\d{2}-\d{2}$", text):
-        await update.message.reply_text(t("appt_bad_date", lang))
-        return AP_DATE
-    context.user_data["ap_date"] = text
-    await update.message.reply_text(t("appt_ask_time", lang))
-    return AP_TIME
+    await update.message.reply_text(t("appt_tap_hint", lang))
 
 
-async def ap_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    uid, _, _ = user_info(update)
-    tz, lang = await get_user_prefs(uid)
-    text = update.message.text.strip()
-    if not re.match(r"^\d{1,2}:\d{2}$", text):
-        await update.message.reply_text(t("appt_bad_time", lang))
-        return AP_TIME
+async def ap_stale_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """A picker tap the conversation did not take.
 
-    # Build the full datetime now that we have both date and time, and validate it.
-    parts_d = [int(x) for x in context.user_data["ap_date"].split("-")]
-    parts_t = [int(x) for x in text.split(":")]
-    try:
-        req_dt = TZ.localize(datetime(parts_d[0], parts_d[1], parts_d[2], parts_t[0], parts_t[1]))
-    except ValueError:
-        await update.message.reply_text(t("appt_bad_datetime", lang))
-        return AP_DATE
+    Registered OUTSIDE appointment_conversation(), in bot.py, AFTER it — the
+    same arrangement, for the same reason, as worship.stale_button_handler():
+    with allow_reentry=True an entry point would be checked before the state
+    handlers and swallow every live tap. Reached after a restart (user_data is
+    gone) or from an older keyboard once the request has moved on.
+    """
+    query = update.callback_query
+    await _answer_cb(query)
+    _, lang = await get_user_prefs(query.from_user.id)
+    await query.edit_message_text(t("appt_stale_buttons", lang))
+    return ConversationHandler.END
 
-    now = now_tz()
-    if req_dt <= now:
-        await update.message.reply_text(t("appt_past", lang))
-        return AP_DATE
 
-    max_dt = _max_request_datetime()
-    if req_dt > max_dt:
-        await update.message.reply_text(
-            t("appt_too_far", lang, months=APPOINTMENT_HORIZON_MONTHS,
-              until=max_dt.strftime("%B %d, %Y"))
-        )
-        return AP_DATE
-
-    # No overlap with the user's other active appointments.
-    appts = await storage.get_appointments()
-    clash = _overlapping_appt(appts, uid, req_dt, DEFAULT_APPT_DURATION_MIN)
-    if clash:
-        await reply_markdown(update.message, t("appt_overlap", lang,
-            official=md(clash["official_name"]),
-              when=_appt_dt_label(clash, tz, lang), id=clash["id"]))
-        return AP_DATE
-
-    context.user_data["ap_time"] = text
-    await update.message.reply_text(t("appt_ask_desc", lang))
-    return AP_DESC
+def picker_stale_button_handler() -> CallbackQueryHandler:
+    """MUST be registered after appointment_conversation(); see ap_stale_button."""
+    return CallbackQueryHandler(ap_stale_button,
+                                pattern=f"^{re.escape(CB_APCAL_PREFIX)}")
 
 
 async def ap_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -721,10 +1030,6 @@ async def _notify_official_of_request(
 # Appointment callback handler (official responses)
 # ---------------------------------------------------------------------------
 
-# Store pending counter-propose state outside conversation
-# appt_id -> {"chat_id": ..., "role": "official"|"user"}
-_counter_propose_state: dict[str, Any] = {}
-
 # Actions taken by the official side (official or an enabled proxy). The rest
 # (accept_counter / decline_counter) are taken by the requester.
 OFFICIAL_SIDE_ACTIONS = {"confirm", "decline", "counter",
@@ -783,6 +1088,10 @@ def _replace_appt(appts: list[dict], appt: dict) -> None:
     _handle_reschedule_response now call this instead. That was a pure move —
     every one of them was a no-op for the same aliasing reason, verified by
     deleting all six and seeing 2303/2303 still pass.
+    (On 2026-11-23 the typed prompts became the picker, and those call sites
+    moved with them: handle_counter_propose_message's into
+    _submit_official_counter and _submit_user_counter, and rs_newtime's into
+    _submit_reschedule. Its third branch, a typed 'cancel', went with it.)
 
     They were consolidated rather than deleted deliberately. **The suite
     cannot tell this loop live from dead**, so if some future caller does hold
@@ -790,9 +1099,11 @@ def _replace_appt(appts: list[dict], appt: dict) -> None:
     failing. One tested place to answer that question is worth more than six
     silent assumptions that `next()` returned a live reference.
 
-    ca_confirm keeps its own loop and is deliberately NOT this function: it
-    sets `appts[i]["status"]` and stamps the action by index rather than
-    replacing the record, and it breaks on the first match.
+    _cancel_and_notify (ca_confirm's body until 2026-11-23, when the
+    /myappointments Cancel button came to share it) keeps its own loop and is
+    deliberately NOT this function: it sets `appts[i]["status"]` and stamps
+    the action by index rather than replacing the record, and it breaks on
+    the first match.
     """
     for index, existing in enumerate(appts):
         if existing["id"] == appt["id"]:
@@ -812,14 +1123,14 @@ async def _decline_appt(context: ContextTypes.DEFAULT_TYPE, query,
     appt["status"] = "declined"
     _replace_appt(appts, appt)
     await storage.save_appointments(appts)
-    await query.edit_message_text(official_text)
+    await _edit_tapped(query, official_text)
     await send_markdown(context.bot, appt["user_chat_id"], requester_text)
 
 
 async def _confirm_proposed_time(context: ContextTypes.DEFAULT_TYPE, query,
                                  appt: dict, appts: list[dict],
                                  proposed: str, *, check_past: bool,
-                                 clash_text, ok_text: str) -> None:
+                                 clash_text, busy_text, ok_text: str) -> None:
     """Confirm *appt* at *proposed*, unless it is past or clashes.
 
     Shared by the three branches that settle on a time: `confirm` (the
@@ -839,22 +1150,50 @@ async def _confirm_proposed_time(context: ContextTypes.DEFAULT_TYPE, query,
 
     clash_text is a callable rather than a template because the three
     messages differ in more than the values — one says "your appointment" and
-    the others "the requester's appointment".
+    the others "the requester's appointment". busy_text is the same for the
+    OFFICIAL's calendar (_official_overlap); it says less to a requester, who
+    is not told another member's appointment id.
     """
     if check_past and _datetime_is_past(proposed):
-        await query.edit_message_text(
+        await _edit_tapped(query,
             "⚠️ That suggested time has already passed. "
             "Please suggest a new time."
         )
         return
     clash = _confirmed_overlap(appts, appt, proposed)
     if clash:
-        await query.edit_message_text(clash_text(clash))
+        await _edit_tapped(query, clash_text(clash))
+        return
+    busy = _official_overlap(appts, appt, proposed)
+    if busy:
+        await _edit_tapped(query, busy_text(busy))
         return
     appt["status"] = "confirmed"
     appt["confirmed_datetime"] = proposed
     await _finalize_appointment(context, appt, appts)
-    await query.edit_message_text(ok_text)
+    await _edit_tapped(query, ok_text)
+
+
+async def _edit_tapped(query, text: str) -> None:
+    """Replace the tapped message's words with *text* — its caption if it is
+    a photo, its text otherwise.
+
+    An appointment request reaches the official side as a PHOTO when the
+    requester has a profile picture (_notify_official_of_request), and
+    Telegram refuses edit_message_text on a photo: "There is no text in the
+    message to edit". Every reply to a tap on that request went through
+    edit_message_text, so on a photo the action was saved and then the bot
+    raised, leaving the buttons on screen and sending an error alert. Found
+    2026-11-23 while building the time picker; fixed at the user's request.
+
+    Plain text either way, as before: the callers' messages are not Markdown.
+    """
+    message = query.message
+    photo = getattr(message, "photo", None)
+    if isinstance(photo, (list, tuple)) and photo:
+        await query.edit_message_caption(caption=text)
+    else:
+        await query.edit_message_text(text)
 
 
 async def _unknown_appt_callback(query, data: str) -> None:
@@ -875,7 +1214,7 @@ async def _unknown_appt_callback(query, data: str) -> None:
     does NOT say "try again": the button will never work.
     """
     logger.warning("Unrecognised appointment callback %r", data)
-    await query.edit_message_text(
+    await _edit_tapped(query,
         "⚠️ That button no longer works.\n\n"
         "It is probably from an older message. Send /myappointments to see "
         "your appointments and their current status."
@@ -900,7 +1239,7 @@ async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     appts = await storage.get_appointments()
     appt = next((a for a in appts if a["id"] == appt_id), None)
     if not appt:
-        await query.edit_message_text("⚠️ Appointment not found.")
+        await _edit_tapped(query, "⚠️ Appointment not found.")
         return
 
     # Reschedule responses act on an already-confirmed (i.e. "terminal") appointment,
@@ -913,7 +1252,7 @@ async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # a repeated/replayed tap (e.g. multiple taps while the bot was offline)
     # must not re-run confirmation/decline side effects.
     if appt.get("status") in TERMINAL_APPT_STATUSES:
-        await query.edit_message_text(
+        await _edit_tapped(query,
             f"ℹ️ Appointment {appt_id} has already been {appt['status']}. "
             "No further action taken."
         )
@@ -933,14 +1272,13 @@ async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # had just blocked.
     #
     # Unblocking both re-propose verbs is safe because neither writes a time:
-    # they open a prompt, and `handle_counter_propose_message` rejects a past
-    # proposal for either role ("That date/time is in the past"). So the
-    # official is forced onto a future time regardless, and the old block
-    # bought no safety while removing the only useful action.
-    # `decline_counter` comes along because it is not a terminal decline —
-    # it opens the SAME re-propose prompt for the requester.
+    # they open the picker, which offers only future slots and re-checks the
+    # one tapped (_picker_step). So the official is forced onto a future time
+    # regardless, and the old block bought no safety while removing the only
+    # useful action. `decline_counter` comes along because it is not a
+    # terminal decline — it opens the SAME picker for the requester.
     if action == "confirm" and _appt_window_has_ended(appt):
-        await query.edit_message_text(
+        await _edit_tapped(query,
             "⚠️ This appointment's time has already passed, so it can no "
             "longer be confirmed. Suggest a new time instead, or decline it."
         )
@@ -954,7 +1292,7 @@ async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         actor_id = query.from_user.id
         actor_uname = query.from_user.username
         if not permissions._user_can_act_for_official(off, actor_id, actor_uname):
-            await query.edit_message_text("⚠️ You're not authorized to act on this appointment.")
+            await _edit_tapped(query, "⚠️ You're not authorized to act on this appointment.")
             return
         negotiator = appt.get("negotiator_chat_id")
         if negotiator is None:
@@ -966,7 +1304,7 @@ async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             await storage.save_appointments(appts)
             await _notify_negotiation_started(context, off, appt, actor_id)
         elif negotiator != actor_id:
-            await query.edit_message_text(
+            await _edit_tapped(query,
                 f"ℹ️ This appointment is already being handled by "
                 f"{md(appt.get('negotiator_name', 'someone'))}."
             )
@@ -980,6 +1318,10 @@ async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 f"⚠️ That time overlaps the requester's appointment with "
                 f"{md(clash['official_name'])} (ID: {clash['id']}). "
                 "Not confirmed — suggest a different time instead."),
+            busy_text=lambda busy: (
+                f"⚠️ {appt['official_name']} already has a confirmed "
+                f"appointment at that time (ID: {busy['id']}). Not confirmed "
+                "— suggest a different time instead."),
             ok_text=f"✅ You confirmed the appointment (ID: {appt_id}).")
 
     elif action == "decline":
@@ -991,17 +1333,10 @@ async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 "declined." + _requester_proxy_note(appt)))
 
     elif action == "counter":
-        # Official wants to suggest a different time
-        _counter_propose_state[appt_id] = {
-            "chat_id": query.message.chat_id,
-            "role": "official",
-        }
-        context.user_data[f"cp_appt_{appt_id}"] = True
-        await query.edit_message_text(
-            f"Suggest a new date/time for appointment {appt_id}.\n"
-            "Reply with: YYYY-MM-DD HH:MM"
-        )
-        # We handle the next message in a fallback handler
+        # The official side suggests a different time: a picker, sent as a new
+        # message so the request keeps its buttons (see _reply_render).
+        await _open_appt_picker(_reply_render(query.message), PICK_OFFICIAL,
+                                appt, appts, query.from_user.id)
 
     elif action == "accept_counter":
         # The requester accepts the time the official suggested.
@@ -1013,18 +1348,15 @@ async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 f"⚠️ That time overlaps your appointment with "
                 f"{md(clash['official_name'])} (ID: {clash['id']}). It was "
                 "not confirmed — please suggest a different time."),
+            busy_text=lambda busy: (
+                f"⚠️ {appt['official_name']} is no longer free at that time, "
+                "so it was not confirmed — please suggest a different time."),
             ok_text=f"✅ You accepted the suggested time (ID: {appt_id}).")
 
     elif action == "decline_counter":
-        # User declines the counter-proposal → let them suggest a new time
-        _counter_propose_state[appt_id] = {
-            "chat_id": query.message.chat_id,
-            "role": "user",
-        }
-        await query.edit_message_text(
-            "Suggest a different date/time (or type 'cancel' to cancel the request):\n"
-            "YYYY-MM-DD HH:MM"
-        )
+        # The requester turns down the suggested time and offers their own.
+        await _open_appt_picker(_reply_render(query.message), PICK_REQUESTER,
+                                appt, appts, query.from_user.id)
 
     elif action == "accept_user_counter":
         # The official accepts the time the requester suggested.
@@ -1036,6 +1368,10 @@ async def appt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 f"⚠️ That time overlaps the requester's appointment with "
                 f"{md(clash['official_name'])} (ID: {clash['id']}). "
                 "Not confirmed."),
+            busy_text=lambda busy: (
+                f"⚠️ {appt['official_name']} already has a confirmed "
+                f"appointment at that time (ID: {busy['id']}). Not confirmed "
+                "— suggest a different time instead."),
             ok_text=("✅ You confirmed the appointment with the user's "
                      "suggested time."))
 
@@ -1110,110 +1446,205 @@ async def _finalize_appointment(
             f"{user_display} on {format_dt(confirmed_dt)} (ID: `{appt['id']}`).")
 
 
-async def handle_counter_propose_message(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
-    """Handle free-text messages from officials/users suggesting a new date/time."""
-    chat_id = update.effective_chat.id
-    text = update.message.text.strip()
+async def _submit_official_counter(context: ContextTypes.DEFAULT_TYPE,
+                                   appt: dict, appts: list, new_dt: datetime) -> None:
+    """The official side suggests *new_dt*: record it and ask the requester."""
+    appt_id = appt["id"]
+    appt["counter_datetime"] = new_dt.isoformat()
+    appt["status"] = "counter_proposed"
+    _replace_appt(appts, appt)
+    await storage.save_appointments(appts)
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "✅ Accept", callback_data=f"{CB_APPT_PREFIX}accept_counter:{appt_id}"),
+            InlineKeyboardButton(
+                "📅 Suggest different",
+                callback_data=f"{CB_APPT_PREFIX}decline_counter:{appt_id}"),
+        ]
+    ])
+    await send_markdown(context.bot, appt["user_chat_id"],
+        f"📅 *New time suggested for appointment `{appt_id}`*\n"
+        f"With: {md(appt['official_name'])}\n"
+        f"Suggested: {format_dt(new_dt)}\n"
+        f"Purpose: {md(appt['description'])}"
+        + _requester_proxy_note(appt),
+        reply_markup=kb)
 
-    # Find if this chat_id has a pending counter-propose
-    appt_id = next(
-        (aid for aid, st in _counter_propose_state.items() if st["chat_id"] == chat_id),
-        None,
-    )
-    if not appt_id:
-        return  # Not a counter-propose message
+
+async def _submit_user_counter(context: ContextTypes.DEFAULT_TYPE,
+                               appt: dict, appts: list, new_dt: datetime) -> None:
+    """The requester suggests *new_dt*: record it and ask the negotiator."""
+    appt_id = appt["id"]
+    appt["user_counter_datetime"] = new_dt.isoformat()
+    _replace_appt(appts, appt)
+    await storage.save_appointments(appts)
+    off = permissions._official_by_id(appt["official_id"])
+    target_chat = appt.get("negotiator_chat_id") or (off.get("chat_id") if off else None)
+    if not target_chat:
+        return
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "✅ Accept",
+                callback_data=f"{CB_APPT_PREFIX}accept_user_counter:{appt_id}"),
+            InlineKeyboardButton(
+                "❌ Decline",
+                callback_data=f"{CB_APPT_PREFIX}decline_user_counter:{appt_id}"),
+        ]
+    ])
+    await send_markdown(context.bot, target_chat,
+        f"The user has suggested a new time for appointment `{appt_id}`:\n"
+        f"{format_dt(new_dt)}",
+        reply_markup=kb)
+
+
+# ---------------------------------------------------------------------------
+# The picker for an EXISTING appointment: suggest a time, or reschedule
+# ---------------------------------------------------------------------------
+#
+# Replaced three typed "YYYY-MM-DD HH:MM" prompts (2026-11-23): the official's
+# "Suggest time", the requester's "Suggest different", and /reschedule.
+#
+# STATELESS, unlike /appointment's picker. Every button carries the mode and
+# the appointment id — appick:<mode>:<id>:<verb>[:<arg>] — so a picker keeps
+# working across a restart, and nothing is held in memory between taps. The
+# typed prompts kept a module-level dict of who was mid-reply, which a deploy
+# emptied silently; the reply then fell through to nothing.
+#
+# Everything is re-checked on every tap from the stored record: who may act,
+# whether the appointment can still change, and whether the slot is free.
+
+CB_APPICK_PREFIX = "appick:"
+PICK_OFFICIAL = "o"     # the official side suggests a time (from "counter")
+PICK_REQUESTER = "u"    # the requester suggests one (from "decline_counter")
+PICK_RESCHEDULE = "r"   # /reschedule, by either party
+
+
+def _pick_prefix(mode: str, appt_id: str) -> str:
+    return f"{CB_APPICK_PREFIX}{mode}:{appt_id}:"
+
+
+def _picker_counterparty(appt: dict, actor_id: int) -> str:
+    """Who the meeting is WITH, seen by the person picking."""
+    if actor_id == appt.get("user_chat_id"):
+        return appt.get("official_name") or "the official"
+    return appt.get("user_display_name") or appt.get("user_username") or "the requester"
+
+
+def _picker_refusal(mode: str, appt: dict, actor_id: int, actor_uname: str | None,
+                    lang: str) -> str | None:
+    """Why this person may not pick a time for *appt* now, or None if they may."""
+    status = appt.get("status")
+    if mode == PICK_RESCHEDULE:
+        if status not in ACTIVE_APPT_STATUSES or _appt_is_past(appt):
+            return t("resched_no_longer", lang)
+        if (actor_id != appt.get("user_chat_id")
+                and not permissions._user_can_act_for_appt(appt, actor_id, actor_uname)):
+            return "⚠️ You're not authorized to act on this appointment."
+        return None
+    if status in TERMINAL_APPT_STATUSES:
+        return (f"ℹ️ Appointment {appt['id']} has already been {status}. "
+                "No further action taken.")
+    if mode == PICK_OFFICIAL:
+        off = permissions._official_by_id(appt.get("official_id"))
+        if not permissions._user_can_act_for_official(off, actor_id, actor_uname):
+            return "⚠️ You're not authorized to act on this appointment."
+        negotiator = appt.get("negotiator_chat_id")
+        if negotiator is not None and negotiator != actor_id:
+            return (f"ℹ️ This appointment is already being handled by "
+                    f"{appt.get('negotiator_name', 'someone')}.")
+        return None
+    if mode == PICK_REQUESTER:
+        if actor_id != appt.get("user_chat_id"):
+            return "⚠️ You're not authorized to act on this appointment."
+        return None
+    return "⚠️ That button no longer works."
+
+
+async def _open_appt_picker(render, mode: str, appt: dict, appts: list,
+                            actor_id: int) -> None:
+    """Show the month calendar for re-timing *appt*.
+
+    The busy times are the official's and the requester's, LESS this
+    appointment itself, so its current slot stays on offer.
+    """
+    tz, lang = await get_user_prefs(actor_id)
+    rules = _slot_rules(appts, appt["official_id"], appt["user_chat_id"],
+                        exclude_id=appt["id"])
+    name = _picker_counterparty(appt, actor_id)
+    month = _first_bookable_month(tz, rules)
+    if month is None:
+        await render(t("appt_no_days", lang, official=md(name),
+                       months=APPOINTMENT_HORIZON_MONTHS), None)
+        return
+    await _show_calendar(render, name, month, tz, lang, rules,
+                         prefix=_pick_prefix(mode, appt["id"]))
+
+
+async def appt_picker_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Every tap on an existing appointment's picker. See the section comment."""
+    query = update.callback_query
+    await _answer_cb(query)
+    actor_id = query.from_user.id
+    actor_uname = query.from_user.username
+    tz, lang = await get_user_prefs(actor_id)
+
+    parts = query.data[len(CB_APPICK_PREFIX):].split(":", 3)
+    if len(parts) < 3:
+        await _unknown_appt_callback(query, query.data)
+        return
+    mode, appt_id, verb = parts[:3]
+    arg = parts[3] if len(parts) > 3 else ""
+
+    if verb == "n":
+        return
+    if verb == "x":
+        await query.edit_message_text(t("appt_picker_closed", lang))
+        return
 
     appts = await storage.get_appointments()
     appt = next((a for a in appts if a["id"] == appt_id), None)
     if not appt:
+        await query.edit_message_text("⚠️ Appointment not found.")
+        return
+    refusal = _picker_refusal(mode, appt, actor_id, actor_uname, lang)
+    if refusal:
+        await query.edit_message_text(refusal)
         return
 
-    role = _counter_propose_state[appt_id]["role"]
-    del _counter_propose_state[appt_id]
-
-    if role == "user" and text.lower() == "cancel":
-        appt["status"] = "cancelled"
-        _stamp_appt_action(appt)
-        _replace_appt(appts, appt)
-        await storage.save_appointments(appts)
-        await update.message.reply_text("Request cancelled.")
+    if verb == "open":
+        # From /myappointments: a new message, so the list stays on screen.
+        await _open_appt_picker(_reply_render(query.message), mode, appt, appts,
+                                actor_id)
         return
 
-    # Parse "YYYY-MM-DD HH:MM"
-    m = re.match(r"(\d{4}-\d{2}-\d{2})\s+(\d{1,2}:\d{2})", text)
-    if not m:
-        await update.message.reply_text(
-            "Couldn't parse date/time. Please use: YYYY-MM-DD HH:MM"
-        )
-        _counter_propose_state[appt_id] = {"chat_id": chat_id, "role": role}
+    rules = _slot_rules(appts, appt["official_id"], appt["user_chat_id"],
+                        exclude_id=appt["id"])
+    outcome, slot = await _picker_step(
+        query, verb, arg, _picker_counterparty(appt, actor_id), tz, lang, rules,
+        _pick_prefix(mode, appt_id))
+    if outcome != "chosen":
         return
 
-    date_s, time_s = m.group(1), m.group(2)
-    parts_d = [int(x) for x in date_s.split("-")]
-    parts_t = [int(x) for x in time_s.split(":")]
-    try:
-        new_dt = TZ.localize(datetime(parts_d[0], parts_d[1], parts_d[2], parts_t[0], parts_t[1]))
-    except ValueError:
-        await update.message.reply_text(
-            "That date/time isn't valid. Please use: YYYY-MM-DD HH:MM"
-        )
-        _counter_propose_state[appt_id] = {"chat_id": chat_id, "role": role}
-        return
-    if new_dt <= now_tz():
-        await update.message.reply_text(
-            "That date/time is in the past. Please suggest a future time: YYYY-MM-DD HH:MM"
-        )
-        _counter_propose_state[appt_id] = {"chat_id": chat_id, "role": role}
-        return
-    new_dt_str = format_dt(new_dt)
-
-    if role == "official":
-        # Official suggests new time → notify user
-        appt["counter_datetime"] = new_dt.isoformat()
-        appt["status"] = "counter_proposed"
-        _replace_appt(appts, appt)
-        await storage.save_appointments(appts)
-        await update.message.reply_text(f"✅ Suggested time sent to the user: {new_dt_str}")
-        kb = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton(
-                    "✅ Accept", callback_data=f"{CB_APPT_PREFIX}accept_counter:{appt_id}"),
-                InlineKeyboardButton(
-                    "📅 Suggest different",
-                    callback_data=f"{CB_APPT_PREFIX}decline_counter:{appt_id}"),
-            ]
-        ])
-        await send_markdown(context.bot, appt["user_chat_id"],
-            f"📅 *New time suggested for appointment `{appt_id}`*\n"
-            f"With: {md(appt['official_name'])}\n"
-            f"Suggested: {new_dt_str}\n"
-            f"Purpose: {md(appt['description'])}"
-            + _requester_proxy_note(appt),
-            reply_markup=kb)
+    when = format_dt(slot, tz, lang)
+    if mode == PICK_OFFICIAL:
+        await _submit_official_counter(context, appt, appts, slot)
+        done = f"✅ Suggested time sent to the user: {when}"
+    elif mode == PICK_REQUESTER:
+        await _submit_user_counter(context, appt, appts, slot)
+        done = f"✅ Your suggested time has been forwarded: {when}"
     else:
-        # User suggests alternative → notify the negotiator (official or their proxy)
-        appt["user_counter_datetime"] = new_dt.isoformat()
-        _replace_appt(appts, appt)
-        await storage.save_appointments(appts)
-        await update.message.reply_text(f"✅ Your suggested time has been forwarded: {new_dt_str}")
-        off = permissions._official_by_id(appt["official_id"])
-        target_chat = appt.get("negotiator_chat_id") or (off.get("chat_id") if off else None)
-        if target_chat:
-            kb = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton(
-                        "✅ Accept",
-                        callback_data=f"{CB_APPT_PREFIX}accept_user_counter:{appt_id}"),
-                    InlineKeyboardButton(
-                        "❌ Decline",
-                        callback_data=f"{CB_APPT_PREFIX}decline_user_counter:{appt_id}"),
-                ]
-            ])
-            await send_markdown(context.bot, target_chat,
-                f"The user has suggested a new time for appointment `{appt_id}`:\n{new_dt_str}",
-                reply_markup=kb)
+        role = "user" if actor_id == appt.get("user_chat_id") else "official"
+        await _submit_reschedule(context, appt, appts, slot, role, actor_id, actor_uname)
+        done = t("resched_sent", lang)
+    # Logged under the commands members know, not a new name: /stats counts
+    # COMMAND entries by name, and "appointment_time" would show up there as
+    # a command nobody can type.
+    activity.log_command("reschedule" if mode == PICK_RESCHEDULE else "appointment",
+                         actor_id, actor_uname, None,
+                         details=f"time picked ({mode}) for {appt_id}")
+    await edit_markdown(query, done)
 
 
 # ---------------------------------------------------------------------------
@@ -1263,15 +1694,91 @@ async def cmd_myappointments(update: Update, context: ContextTypes.DEFAULT_TYPE)
             id=appt["id"],
         )
 
+    # Upcoming appointments the viewer can still change are numbered, and get
+    # a Reschedule and a Cancel button each (2026-11-23), so nobody has to
+    # know /reschedule or /cancelappointment exist. Those commands still work.
+    rows = []
+    rendered_upcoming = []
+    for a, is_off in upcoming:
+        line = _render(a, is_off)
+        if len(rows) < MYAPPTS_MAX_BUTTONS and _can_change_appt(a, uid, uname):
+            n = len(rows) + 1
+            # "• With: …" → "*1.* With: …", so the number matches the buttons.
+            line = f"*{n}.*{line[1:]}" if line.startswith("•") else f"*{n}.* {line}"
+            rows.append([
+                InlineKeyboardButton(t("myappts_btn_reschedule", lang, n=n),
+                                     callback_data=f"{_pick_prefix(PICK_RESCHEDULE, a['id'])}open"),
+                InlineKeyboardButton(t("myappts_btn_cancel", lang, n=n),
+                                     callback_data=f"{CB_MYAPPT_PREFIX}c:{a['id']}"),
+            ])
+        rendered_upcoming.append(line)
+
     lines = [t("myappts_header", lang)]
     if upcoming:
         lines.append(t("section_upcoming", lang))
-        lines.extend(_render(a, is_off) for a, is_off in upcoming)
+        lines.extend(rendered_upcoming)
     if past:
         lines.append(t("section_past", lang))
         lines.extend(_render(a, is_off) for a, is_off in past)
+    if rows:
+        lines.append(t("myappts_actions_hint", lang))
 
-    await reply_markdown(update.message, "\n".join(lines))
+    await reply_markdown(update.message, "\n".join(lines),
+                         reply_markup=InlineKeyboardMarkup(rows) if rows else None)
+
+
+# The buttons on /myappointments. Reschedule opens the stateless picker
+# (appick:r:<id>:open); Cancel is handled here. Stateless too — the id rides in
+# the button, and everything is re-checked from the store on each tap, since
+# the list can sit on screen for days.
+CB_MYAPPT_PREFIX = "apmy:"
+MYAPPTS_MAX_BUTTONS = 8   # rows of buttons; a longer list still shows in full
+
+
+def _can_change_appt(appt: dict, uid: int, uname: str | None) -> bool:
+    """Still upcoming, still active, and this person is a party to it — the
+    same test /cancelappointment and /reschedule apply to their lists."""
+    if appt.get("status") not in ACTIVE_APPT_STATUSES or _appt_is_past(appt):
+        return False
+    return (appt.get("user_chat_id") == uid
+            or permissions._user_can_act_for_appt(appt, uid, uname))
+
+
+async def myappt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Cancel from /myappointments: c = ask (a new message, so the list
+    stays), y = cancel, k = keep."""
+    query = update.callback_query
+    await _answer_cb(query)
+    uid, uname, dname = user_info(update)
+    tz, lang = await get_user_prefs(uid)
+    verb, _, appt_id = query.data[len(CB_MYAPPT_PREFIX):].partition(":")
+
+    if verb == "k":
+        await query.edit_message_text(t("cancel_aborted", lang))
+        return
+    appts = await storage.get_appointments()
+    appt = next((a for a in appts if a["id"] == appt_id), None)
+    if verb not in ("c", "y") or not appt:
+        await _unknown_appt_callback(query, query.data)
+        return
+    if not _can_change_appt(appt, uid, uname):
+        await query.edit_message_text(t("myappts_no_longer", lang)) if verb == "y" \
+            else await query.message.reply_text(t("myappts_no_longer", lang))
+        return
+
+    if verb == "c":
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ " + t("myappts_yes_cancel", lang),
+                                 callback_data=f"{CB_MYAPPT_PREFIX}y:{appt_id}"),
+            InlineKeyboardButton("✖️ " + t("myappts_no_keep", lang),
+                                 callback_data=f"{CB_MYAPPT_PREFIX}k:{appt_id}"),
+        ]])
+        await reply_markdown(query.message, t(
+            "cancel_confirm_prompt", lang, official=md(appt["official_name"]),
+            when=_appt_dt_label(appt, tz, lang)), reply_markup=kb)
+        return
+
+    await _cancel_and_notify(context, query, appt, uid, uname, dname, lang)
 
 
 # ---------------------------------------------------------------------------
@@ -1368,6 +1875,20 @@ async def ca_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await query.edit_message_text(t("cancel_past", lang))
         return ConversationHandler.END
 
+    await _cancel_and_notify(context, query, appt, uid, uname, dname, lang)
+    return ConversationHandler.END
+
+
+async def _cancel_and_notify(context: ContextTypes.DEFAULT_TYPE, query, appt: dict,
+                             uid: int, uname: str | None, dname: str | None,
+                             lang: str) -> None:
+    """Cancel *appt*, tell the other party, send both a removal ICS, and
+    acknowledge by editing the tapped message.
+
+    Shared by /cancelappointment's confirm step and the Cancel button on
+    /myappointments. Callers check first that the appointment may still be
+    cancelled; this only carries it out.
+    """
     appts = await storage.get_appointments()
     for i, a in enumerate(appts):
         if a["id"] == appt["id"]:
@@ -1418,8 +1939,6 @@ async def ca_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         if user_chat_id:
             await _send_cancellation_ics(context, user_chat_id, appt)
 
-    return ConversationHandler.END
-
 
 async def _send_cancellation_ics(
     context: ContextTypes.DEFAULT_TYPE, chat_id: int, appt: dict
@@ -1444,7 +1963,7 @@ async def _send_cancellation_ics(
 # handled early in appt_callback (before the terminal-status guard, since a
 # confirmed appointment is "terminal").
 
-RS_SELECT, RS_NEWTIME = range(2)
+RS_SELECT = 0
 
 CB_RESCHED_PREFIX = "rs:"
 
@@ -1504,55 +2023,33 @@ async def rs_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await query.edit_message_text(t("cancel_aborted", lang))
         return ConversationHandler.END
 
-    appt = reschedulable[int(idx)]
-    # Role of the person rescheduling: the requester, or the official side.
-    context.user_data["rs_appt_id"] = appt["id"]
-    context.user_data["rs_role"] = "user" if appt.get("user_chat_id") == uid else "official"
-    await query.edit_message_text(t("resched_ask_time", lang))
-    return RS_NEWTIME
-
-
-async def rs_newtime(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    uid, uname, dname = user_info(update)
-    tz, lang = await get_user_prefs(uid)
-    text = update.message.text.strip()
-    appt_id = context.user_data.get("rs_appt_id")
-    role = context.user_data.get("rs_role")
-
+    # The picker takes over, and it is stateless (appt_picker_callback), so
+    # the conversation ends here. The record is re-read: the list was built
+    # when /reschedule was sent, and may be stale by the time of this tap.
     appts = await storage.get_appointments()
-    appt = next((a for a in appts if a["id"] == appt_id), None)
-    if not appt or appt.get("status") not in ACTIVE_APPT_STATUSES or _appt_is_past(appt):
-        await update.message.reply_text(t("resched_no_longer", lang))
+    appt = next((a for a in appts if a["id"] == reschedulable[int(idx)]["id"]), None)
+    refusal = (_picker_refusal(PICK_RESCHEDULE, appt, uid, query.from_user.username, lang)
+               if appt else t("resched_no_longer", lang))
+    if refusal:
+        await query.edit_message_text(refusal)
         return ConversationHandler.END
+    await _open_appt_picker(_edit_render(query), PICK_RESCHEDULE, appt, appts, uid)
+    return ConversationHandler.END
 
-    m = re.match(r"(\d{4}-\d{2}-\d{2})\s+(\d{1,2}:\d{2})", text)
-    if not m:
-        await update.message.reply_text(t("resched_bad_format", lang))
-        return RS_NEWTIME
-    parts_d = [int(x) for x in m.group(1).split("-")]
-    parts_t = [int(x) for x in m.group(2).split(":")]
-    try:
-        new_dt = TZ.localize(datetime(parts_d[0], parts_d[1], parts_d[2], parts_t[0], parts_t[1]))
-    except ValueError:
-        await update.message.reply_text(t("resched_bad_format", lang))
-        return RS_NEWTIME
-    if new_dt <= now_tz():
-        await update.message.reply_text(t("resched_past", lang))
-        return RS_NEWTIME
-    # No overlap with the requester's other active appointments.
-    if _overlapping_appt(appts, appt["user_chat_id"], new_dt,
-                         DEFAULT_APPT_DURATION_MIN, exclude_id=appt["id"]):
-        await update.message.reply_text(t("resched_overlap", lang))
-        return RS_NEWTIME
 
-    # Record the proposal WITHOUT touching the confirmed status/time.
+async def _submit_reschedule(context: ContextTypes.DEFAULT_TYPE, appt: dict,
+                             appts: list, new_dt: datetime, role: str,
+                             actor_id: int, actor_uname: str | None) -> None:
+    """Record a proposed new time WITHOUT touching the confirmed one, and ask
+    the other party. The original stands until they accept."""
+    appt_id = appt["id"]
     appt["reschedule_proposed_datetime"] = new_dt.isoformat()
     appt["reschedule_proposed_by"] = role
     _stamp_appt_action(appt)
     off = permissions._official_by_id(appt["official_id"])
     if role == "official" and off:
-        name, is_proxy = permissions._acting_identity(off, uid, uname)
-        appt["negotiator_chat_id"] = uid
+        name, is_proxy = permissions._acting_identity(off, actor_id, actor_uname)
+        appt["negotiator_chat_id"] = actor_id
         appt["negotiator_name"] = name or "The official"
         appt["negotiator_is_proxy"] = is_proxy
     _replace_appt(appts, appt)
@@ -1588,9 +2085,6 @@ async def rs_newtime(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             except TelegramError:
                 pass
 
-    await update.message.reply_text(t("resched_sent", lang))
-    return ConversationHandler.END
-
 
 async def _handle_reschedule_response(
     context: ContextTypes.DEFAULT_TYPE, query, appt: dict, appts: list, action: str
@@ -1599,7 +2093,7 @@ async def _handle_reschedule_response(
     appt_id = appt["id"]
     proposed = appt.get("reschedule_proposed_datetime")
     if not proposed:
-        await query.edit_message_text("ℹ️ This reschedule request has already been handled.")
+        await _edit_tapped(query, "ℹ️ This reschedule request has already been handled.")
         return
 
     proposed_by = appt.get("reschedule_proposed_by")
@@ -1611,7 +2105,7 @@ async def _handle_reschedule_response(
     else:  # proposed by the requester → official side responds
         authorized = permissions._user_can_act_for_appt(appt, actor_id, actor_uname)
     if not authorized:
-        await query.edit_message_text("⚠️ You're not authorized to respond to this reschedule.")
+        await _edit_tapped(query, "⚠️ You're not authorized to respond to this reschedule.")
         return
 
     def _clear_and_store():
@@ -1626,7 +2120,7 @@ async def _handle_reschedule_response(
     if action == "rs_decline":
         _clear_and_store()
         await storage.save_appointments(appts)
-        await query.edit_message_text("❌ Reschedule declined; the original time stands.")
+        await _edit_tapped(query, "❌ Reschedule declined; the original time stands.")
         if proposer_chat:
             await send_markdown(context.bot, proposer_chat,
                 f"❌ Your reschedule request for appointment `{appt_id}` was declined; "
@@ -1635,7 +2129,7 @@ async def _handle_reschedule_response(
 
     # rs_accept
     if _datetime_is_past(proposed):
-        await query.edit_message_text(
+        await _edit_tapped(query,
             "⚠️ That proposed time has already passed; no change was made."
         )
         _clear_and_store()
@@ -1643,16 +2137,24 @@ async def _handle_reschedule_response(
         return
     clash = _confirmed_overlap(appts, appt, proposed)
     if clash:
-        await query.edit_message_text(
+        await _edit_tapped(query,
             f"⚠️ That time now overlaps another appointment (ID: {clash['id']}); "
             "not rescheduled."
+        )
+        return
+    if _official_overlap(appts, appt, proposed):
+        # No id: the one tapping may be the requester, and the clash is
+        # another member's appointment.
+        await _edit_tapped(query,
+            f"⚠️ {appt.get('official_name')} already has a confirmed appointment "
+            "at that time; not rescheduled."
         )
         return
     appt["confirmed_datetime"] = proposed
     appt["status"] = "confirmed"
     _clear_and_store()
     await _finalize_appointment(context, appt, appts)  # new ICS to both, proxy note if any
-    await query.edit_message_text("✅ Reschedule accepted; the new time is confirmed.")
+    await _edit_tapped(query, "✅ Reschedule accepted; the new time is confirmed.")
 
 
 
@@ -1684,13 +2186,18 @@ def _tapped(callback, prefix: str) -> list:
 
 
 def appointment_conversation() -> ConversationHandler:
-    """/appointment — pick an official, then date, time, purpose, confirm."""
+    """/appointment — pick an official, a day, a time, the purpose, confirm.
+
+    The day and time are taps on one picker (ap_pick); typing there gets a
+    pointer to the buttons. Stale picker taps are answered by
+    picker_stale_button_handler(), registered after this in bot.py.
+    """
     return ConversationHandler(
         entry_points=[CommandHandler("appointment", cmd_appointment)],
         states={
             AP_OFFICIAL: _tapped(ap_official, CB_APSEL_PREFIX),
-            AP_DATE: _typed(ap_date),
-            AP_TIME: _typed(ap_time),
+            AP_DATE: _tapped(ap_pick, CB_APCAL_PREFIX) + _typed(ap_typed_instead),
+            AP_TIME: _tapped(ap_pick, CB_APCAL_PREFIX) + _typed(ap_typed_instead),
             AP_DESC: _typed(ap_desc),
             AP_CONFIRM: _typed(ap_confirm),
         },
@@ -1717,12 +2224,11 @@ def cancel_appointment_conversation() -> ConversationHandler:
 
 
 def reschedule_conversation() -> ConversationHandler:
-    """/reschedule — tap the appointment, then type the new time."""
+    """/reschedule — tap the appointment; the stateless picker does the rest."""
     return ConversationHandler(
         entry_points=[CommandHandler("reschedule", cmd_reschedule)],
         states={
             RS_SELECT: _tapped(rs_select, CB_RESCHED_PREFIX),
-            RS_NEWTIME: _typed(rs_newtime),
         },
         fallbacks=[CommandHandler("cancel", cancel_conversation)],
         allow_reentry=True,

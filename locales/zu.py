@@ -45,6 +45,14 @@ STRINGS: dict[str, str] = {
     "myappts_none": "Awunawo ama-aphoyintimenti abhalisiwe.",
     "section_upcoming": "\n*Ezizayo:*",
     "section_past": "\n*Ezedlule:*",
+    "myappts_btn_reschedule": "📅 Hlela kabusha {n}",
+    "myappts_btn_cancel": "❌ Khansela {n}",
+    "myappts_actions_hint": (
+        "Sebenzisa izinkinobho ezingezansi ukuze uhlele kabusha noma ukhansele."
+    ),
+    "myappts_no_longer": "Leyo aphoyintimenti ayisakwazi ukushintshwa.",
+    "myappts_yes_cancel": "Yebo, yikhansele",
+    "myappts_no_keep": "Cha, yigcine",
     "appt_line": "• No: {counterparty}\n   {when} — *{status}*\n   _I-ID: {id}_",
 
     "action_cancelled": "✖️ Kukhanseliwe. Akukho okulondoloziwe noma okuthunyelwe.",
@@ -61,15 +69,6 @@ STRINGS: dict[str, str] = {
     # -- reschedule appointment --
     "resched_none": "Awunawo ama-aphoyintimenti azayo ongawahlela kabusha.",
     "resched_list_header": "*Hlela kabusha i-aphoyintimenti*\nKhetha elilodwa ukulihlela kabusha:",
-    "resched_ask_time": "Faka usuku nesikhathi esisha (YYYY-MM-DD HH:MM):",
-    "resched_bad_format": "Sicela usebenzise ifomethi ethi YYYY-MM-DD HH:MM:",
-    "resched_past": (
-        "Lelo suku/sikhathi seludlulile. Sicela ufake isikhathi esizayo (YYYY-MM-DD HH:MM):"
-    ),
-    "resched_overlap": (
-        "Leso sikhathi sigxubha nelinye lama-aphoyintimenti akho. Sicela ukhethe esinye isikhathi "
-        "(YYYY-MM-DD HH:MM):"
-    ),
     "resched_no_longer": "Lelo aphoyintimenti ngeke lisahlelwa kabusha.",
     "resched_sent": (
         "✅ Isicelo sakho sokuhlela kabusha sithunyeliwe. Uzokwaziswa lapho samukelwa noma "
@@ -96,20 +95,31 @@ STRINGS: dict[str, str] = {
         "Sicela ukhethe usuku olungaphandle kwaleso sikhathi, noma ukhansele "
         "i-aphoyintimenti ekhona nge-/cancelappointment."
     ),
-    "appt_ask_date": "Usuku olufunayo (YYYY-MM-DD):",
-    "appt_bad_date": "Sicela usebenzise ifomethi ethi YYYY-MM-DD:",
-    "appt_ask_time": "Isikhathi osifunayo (HH:MM, ihora elingu-24):",
-    "appt_bad_time": "Sicela usebenzise ifomethi ethi HH:MM:",
-    "appt_bad_datetime": "Lolo suku/sikhathi alulungile. Sicela uphinde ufake usuku (YYYY-MM-DD):",
-    "appt_past": "Lolo suku/sikhathi seludlulile. Sicela ufake usuku oluzayo (YYYY-MM-DD):",
-    "appt_too_far": (
-        "Ama-aphoyintimenti angabhukwa kungakapheli izinyanga ezingu-{months} "
-        "(kuze kube ngu-{until}). Sicela ufake usuku oluseduze (YYYY-MM-DD):"
+    "appt_pick_day": (
+        "Khetha usuku lomhlangano wakho no-*{official}*.\n"
+        "Izikhathi ziboniswa ngesikhathi sendawo yakho ({tz})."
     ),
-    "appt_overlap": (
-        "Leso sikhathi sigxubha ne-aphoyintimenti yakho ekhona no-{official} "
-        "ngo-{when} (I-ID: `{id}`).\n\nSicela ukhethe olunye usuku/isikhathi (YYYY-MM-DD):"
+    "appt_pick_time": "*{official}* — {day}\n\nKhetha isikhathi ({tz}):",
+    "appt_no_days": (
+        "Azikho izikhathi ezitholakalayo no-*{official}* ezinyangeni ezingu-{months} "
+        "ezizayo. Sicela ukhulume nehhovisi lesonto."
     ),
+    "appt_slot_gone": "⚠️ Leso sikhathi asisatholakali. Sicela ukhethe esinye.",
+    "appt_tap_hint": (
+        "Sicela usebenzise izinkinobho ezingenhla ukukhetha usuku nesikhathi, "
+        "noma uthumele /cancel ukuze uyeke."
+    ),
+    "appt_stale_buttons": (
+        "⚠️ Lezo zinkinobho seziphelelwe yisikhathi. "
+        "Thumela /appointment ukuze uqale isicelo esisha."
+    ),
+    "appt_picker_closed": (
+        "Asikho isikhathi esisha esikhethiwe, ngakho akukho okushintshile. "
+        "(/cancelappointment ikhansela i-aphoyintimenti ngokuphelele.)"
+    ),
+    "appt_chosen": "*{official}* — {when}",
+    "appt_btn_calendar": "◀️ Ikhalenda",
+    "appt_btn_cancel": "✖️ Khansela",
     "appt_ask_desc": "Incazelo emfushane yenjongo yomhlangano (izinhlamvu ezingu-128 ubuningi):",
     "appt_summary": (
         "*Isifinyezo sesicelo se-aphoyintimenti:*\n"
