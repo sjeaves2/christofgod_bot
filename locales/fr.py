@@ -221,12 +221,15 @@ STRINGS: dict[str, str] = {
     ),
     "help_appointment": (
         "*/appointment* — Demandez un rendez-vous avec un responsable de l'église.\n\n"
-        "Choisissez le responsable, puis saisissez une date et une heure. Lui (ou son "
-        "délégué) confirmera, refusera ou proposera un autre horaire. Une fois confirmé, "
-        "vous recevez un fichier de calendrier."
+        "Choisissez le responsable, puis touchez un jour dans le calendrier et une heure. "
+        "Les heures sont affichées dans votre fuseau horaire, et seuls les créneaux libres "
+        "des heures de bureau sont proposés ; les jours de fête et les jours fériés "
+        "fédéraux américains sont fermés. Lui (ou son délégué) confirmera, refusera ou "
+        "proposera un autre horaire. Une fois confirmé, vous recevez un fichier de calendrier."
     ),
     "help_myappointments": (
-        "*/myappointments* — Affiche vos rendez-vous à venir et passés ainsi que leur statut."
+        "*/myappointments* — Affiche vos rendez-vous à venir et passés ainsi que leur "
+        "statut. Chaque rendez-vous à venir a des boutons pour le reprogrammer ou l'annuler."
     ),
     "help_cancelappointment": (
         "*/cancelappointment* — Annulez un rendez-vous à venir. Choisissez-le dans la liste "
@@ -234,9 +237,10 @@ STRINGS: dict[str, str] = {
         "pas être annulés."
     ),
     "help_reschedule": (
-        "*/reschedule* — Proposez un nouvel horaire pour un rendez-vous à venir. Choisissez-le, "
-        "saisissez la nouvelle date/heure, et l'autre partie accepte ou refuse. En cas de refus, "
-        "l'horaire d'origine est conservé. Les nouveaux horaires ne peuvent pas être dans le passé."
+        "*/reschedule* — Proposez un nouvel horaire pour un rendez-vous à venir. "
+        "Choisissez-le, touchez un nouveau jour et une heure, et l'autre partie accepte "
+        "ou refuse. En cas de refus, l'horaire d'origine est conservé. (Le bouton "
+        "Reprogrammer de /myappointments fait de même.)"
     ),
     "help_events": (
         "*/events* — Affiche les convocations, services et événements des 30 prochains jours, "
