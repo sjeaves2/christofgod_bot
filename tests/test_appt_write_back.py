@@ -45,17 +45,22 @@ SOURCE = Path(__file__).parent.parent / "handlers" / "appointments.py"
 #: The functions whose inline copies were folded into _replace_appt.
 CONSOLIDATED = {
     "_finalize_appointment",
-    "handle_counter_propose_message",
-    "rs_newtime",
+    # handle_counter_propose_message and rs_newtime until 2026-11-23, when
+    # the typed prompts became the picker and their writes moved here:
+    "_submit_official_counter",
+    "_submit_user_counter",
+    "_submit_reschedule",
     "_handle_reschedule_response",
 }
 
-#: ca_confirm keeps a by-index loop of its own and is NOT a missed site. It
+#: _cancel_and_notify — ca_confirm's body until 2026-11-23, moved out so the
+#: /myappointments Cancel button could share it — keeps a by-index loop of its
+#: own and is NOT a missed site. It
 #: sets `appts[i]["status"]` and stamps the action rather than replacing the
 #: record, and breaks on the first match. Proven below rather than asserted,
 #: so that "consolidate the last one too" fails here instead of quietly
 #: changing cancellation.
-KEEPS_ITS_OWN_LOOP = {"ca_confirm"}
+KEEPS_ITS_OWN_LOOP = {"_cancel_and_notify"}
 
 
 def _tree() -> ast.Module:
@@ -131,16 +136,16 @@ class TestCaConfirmIsDeliberatelyDifferent:
     """The one by-index loop that must NOT become _replace_appt."""
 
     def test_it_does_not_call_the_helper(self):
-        assert "_replace_appt" not in _segment("ca_confirm"), (
-            "ca_confirm was consolidated into _replace_appt, but it sets "
+        assert "_replace_appt" not in _segment("_cancel_and_notify"), (
+            "_cancel_and_notify was consolidated into _replace_appt, but it sets "
             "fields on the existing record rather than replacing it — "
             "see its loop and _replace_appt's docstring"
         )
 
     def test_it_sets_the_status_in_place(self):
-        body = _segment("ca_confirm")
+        body = _segment("_cancel_and_notify")
         assert 'appts[i]["status"] = "cancelled"' in body, (
-            "ca_confirm no longer cancels by setting the status on the record "
+            "_cancel_and_notify no longer cancels by setting the status on the record "
             "in place; if that was intentional, update KEEPS_ITS_OWN_LOOP and "
             "this test together"
         )
@@ -158,10 +163,10 @@ class TestCaConfirmIsDeliberatelyDifferent:
             return any(isinstance(n, ast.Break)
                        for n in ast.walk(_functions()[name]))
 
-        assert _breaks("ca_confirm"), (
-            "ca_confirm no longer stops at the first match"
+        assert _breaks("_cancel_and_notify"), (
+            "_cancel_and_notify no longer stops at the first match"
         )
         assert not _breaks("_replace_appt"), (
             "_replace_appt grew a break; it deliberately scans the whole "
-            "list, and the difference from ca_confirm is the point"
+            "list, and the difference from _cancel_and_notify is the point"
         )

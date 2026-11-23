@@ -70,6 +70,10 @@ DEFAULT_PRIVACY_URL = "https://github.com/sjeaves2/christofgod_bot/blob/main/PRI
 PRIVACY_URL: str = (
     ((_CFG.get("privacy") or {}).get("url") or "").strip() or DEFAULT_PRIVACY_URL)
 
+# Optional office hours for appointment booking. None means the defaults in
+# appointment_slots.DEFAULT_HOURS; appointment_slots.parse_hours() reads it.
+APPOINTMENT_HOURS_RAW = (_CFG.get("appointments") or {}).get("hours")
+
 for _d in (DATA_DIR, LOGS_DIR, GEN_DIR):
     _d.mkdir(parents=True, exist_ok=True)
 

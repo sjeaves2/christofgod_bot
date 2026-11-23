@@ -854,7 +854,10 @@ class TestTheWiring:
             if any(getattr(getattr(e, "callback", None), "__name__", "")
                    == "cmd_songlist"
                    for e in getattr(h, "entry_points", []) or []))
-        catch_all_at = names.index("handle_counter_propose_message")
+        # The free-text catch-all this was written against went on
+        # 2026-11-23; cmd_unknown is what is left, and it would swallow
+        # /end mid-list if the conversation came after it.
+        catch_all_at = names.index("cmd_unknown")
         assert songlist_at < catch_all_at
 
 

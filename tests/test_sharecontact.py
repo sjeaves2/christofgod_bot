@@ -182,7 +182,7 @@ def _commands(handler) -> set:
 #: Same reasoning as tests/test_board_wiring.py: named explicitly, because
 #: MessageHandler(filters.CONTACT) is also a group-0 MessageHandler sitting
 #: near the top, so a type-based sweep finds it first.
-CATCH_ALL_CALLBACKS = {"handle_counter_propose_message", "cmd_unknown"}
+CATCH_ALL_CALLBACKS = {"cmd_unknown"}
 
 
 class TestItIsReachable:

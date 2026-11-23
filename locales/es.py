@@ -42,6 +42,12 @@ STRINGS: dict[str, str] = {
     "myappts_none": "No tienes citas registradas.",
     "section_upcoming": "\n*Próximas:*",
     "section_past": "\n*Pasadas:*",
+    "myappts_btn_reschedule": "📅 Reprogramar {n}",
+    "myappts_btn_cancel": "❌ Cancelar {n}",
+    "myappts_actions_hint": "Usa los botones de abajo para reprogramar o cancelar.",
+    "myappts_no_longer": "Esa cita ya no se puede cambiar.",
+    "myappts_yes_cancel": "Sí, cancelarla",
+    "myappts_no_keep": "No, mantenerla",
     "appt_line": "• Con: {counterparty}\n   {when} — *{status}*\n   _ID: {id}_",
 
     "action_cancelled": "✖️ Cancelado. No se guardó ni se envió nada.",
@@ -58,12 +64,6 @@ STRINGS: dict[str, str] = {
     # -- reschedule appointment --
     "resched_none": "No tienes citas próximas para reprogramar.",
     "resched_list_header": "*Reprogramar una cita*\nElige una para reprogramar:",
-    "resched_ask_time": "Ingresa la nueva fecha y hora (YYYY-MM-DD HH:MM):",
-    "resched_bad_format": "Usa el formato YYYY-MM-DD HH:MM:",
-    "resched_past": "Esa fecha/hora ya pasó. Ingresa una hora futura (YYYY-MM-DD HH:MM):",
-    "resched_overlap": (
-        "Esa hora se solapa con otra de tus citas. Elige otra hora (YYYY-MM-DD HH:MM):"
-    ),
     "resched_no_longer": "Esa cita ya no se puede reprogramar.",
     "resched_sent": (
         "✅ Tu solicitud de reprogramación ha sido enviada. Se te notificará cuando sea aceptada o "
@@ -90,20 +90,31 @@ STRINGS: dict[str, str] = {
         "Elige una fecha fuera de ese período, o cancela una cita "
         "existente con /cancelappointment."
     ),
-    "appt_ask_date": "Fecha deseada (YYYY-MM-DD):",
-    "appt_bad_date": "Usa el formato YYYY-MM-DD:",
-    "appt_ask_time": "Hora deseada (HH:MM, formato 24 horas):",
-    "appt_bad_time": "Usa el formato HH:MM:",
-    "appt_bad_datetime": "Esa fecha/hora no es válida. Vuelve a ingresar la fecha (YYYY-MM-DD):",
-    "appt_past": "Esa fecha/hora ya pasó. Ingresa una fecha futura (YYYY-MM-DD):",
-    "appt_too_far": (
-        "Las citas se pueden reservar con un máximo de {months} meses de antelación "
-        "(hasta {until}). Ingresa una fecha más cercana (YYYY-MM-DD):"
+    "appt_pick_day": (
+        "Elige un día para tu reunión con *{official}*.\n"
+        "Las horas se muestran en tu zona horaria ({tz})."
     ),
-    "appt_overlap": (
-        "Esa hora se solapa con tu cita existente con {official} "
-        "el {when} (ID: `{id}`).\n\nElige otra fecha/hora (YYYY-MM-DD):"
+    "appt_pick_time": "*{official}* — {day}\n\nElige una hora ({tz}):",
+    "appt_no_days": (
+        "No hay horarios libres con *{official}* en los próximos {months} meses. "
+        "Habla con la oficina de la iglesia."
     ),
+    "appt_slot_gone": "⚠️ Esa hora ya no está disponible. Elige otra.",
+    "appt_tap_hint": (
+        "Usa los botones de arriba para elegir un día y una hora, "
+        "o envía /cancel para salir."
+    ),
+    "appt_stale_buttons": (
+        "⚠️ Esos botones ya no están vigentes. "
+        "Envía /appointment para empezar una nueva solicitud."
+    ),
+    "appt_picker_closed": (
+        "No se eligió una nueva hora, así que no ha cambiado nada. "
+        "(/cancelappointment cancela una cita por completo.)"
+    ),
+    "appt_chosen": "*{official}* — {when}",
+    "appt_btn_calendar": "◀️ Calendario",
+    "appt_btn_cancel": "✖️ Cancelar",
     "appt_ask_desc": "Breve descripción del motivo de la reunión (máximo 128 caracteres):",
     "appt_summary": (
         "*Resumen de la solicitud de cita:*\n"

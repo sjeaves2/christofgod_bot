@@ -83,11 +83,13 @@ def _index_of_command(handlers, name) -> int:
     raise AssertionError(f"/{name} is not registered at all")
 
 
-#: The two handlers at the end of group 0 that match almost anything. Named
+#: The handler at the end of group 0 that matches almost anything. Named
 #: explicitly rather than detected by type: MessageHandler(filters.CONTACT) is
 #: also a group-0 MessageHandler and sits near the TOP, so a type-based sweep
 #: finds it first and the ordering assertion becomes nonsense.
-CATCH_ALL_CALLBACKS = {"handle_counter_propose_message", "cmd_unknown"}
+#: There were two until 2026-11-23: the free-text handler for typed
+#: counter-proposals went when those became the time picker.
+CATCH_ALL_CALLBACKS = {"cmd_unknown"}
 
 
 def _catch_all_indices(handlers) -> list[int]:
@@ -119,8 +121,8 @@ class TestBoardCommandsAreRegistered:
             _index_of_command(handlers, name)   # raises if missing
 
     def test_they_come_before_the_catch_alls(self):
-        """A handler after the free-text or unknown-command catch-all is
-        unreachable — registered, inert, and silent about it."""
+        """A handler after the unknown-command catch-all is unreachable for
+        commands — registered, inert, and silent about it."""
         handlers = _handlers()
         first_catch_all = min(_catch_all_indices(handlers))
         for name in ("boarditems", "addboarditem", "setboardofficer"):

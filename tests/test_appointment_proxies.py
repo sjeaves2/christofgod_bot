@@ -49,6 +49,8 @@ def _cb_update(data, from_id, from_username=None):
     q.from_user.id = from_id
     q.from_user.username = from_username
     q.message.chat_id = from_id
+    # "Suggest time" answers with a NEW message holding the picker.
+    q.message.reply_text = AsyncMock()
     upd.callback_query = q
     return upd, q
 

@@ -240,14 +240,17 @@ class TestEveryCallbackIsAwaitable:
 class TestHandlerOrdering:
     """Registration order is load-bearing and invisible in review.
 
-    PTB runs only the FIRST matching handler per group. bot.py registers a
-    catch-all `filters.TEXT & ~filters.COMMAND` handler for counter-propose
-    replies; any ConversationHandler registered AFTER it never receives the
-    member's text, because the catch-all matches first and — finding no pending
-    counter-proposal — returns silently.
+    PTB runs only the FIRST matching handler per group. Until 2026-11-23
+    bot.py registered a catch-all `filters.TEXT & ~filters.COMMAND` handler
+    for typed counter-proposals, and any ConversationHandler registered AFTER
+    it never received the member's text: the catch-all matched first and,
+    finding no pending counter-proposal, returned silently. That is not a
+    crash, so nothing appeared in errors.log. /prayer shipped this way in
+    v0.17.0: the member typed their request and the bot said nothing.
 
-    That is not a crash, so nothing appears in errors.log. /prayer shipped this
-    way in v0.17.0: the member typed their request and the bot said nothing.
+    The typed counter-proposal is now the time picker, and the catch-all went
+    with it. These tests now pin its ABSENCE, and that any text catch-all
+    added later still comes after every conversation.
     """
 
     @staticmethod
@@ -277,14 +280,19 @@ class TestHandlerOrdering:
             return False
         return "TEXT" in str(h.filters) and "COMMAND" in str(h.filters)
 
-    def test_every_conversation_is_registered_before_the_text_catch_all(self):
+    def test_there_is_no_text_catch_all_any_more(self):
+        """If one is ever re-added deliberately, delete this test — and the
+        one below then does the work it used to."""
+        found = [h for h in self._group0() if self._is_text_catch_all(h)]
+        assert not found, (
+            "a group-0 text catch-all is back; every conversation must be "
+            f"registered before it: {found}")
+
+    def test_every_conversation_is_registered_before_any_text_catch_all(self):
         handlers = self._group0()
         first_catch_all = next(
-            (i for i, h in enumerate(handlers) if self._is_text_catch_all(h)), None)
-        assert first_catch_all is not None, (
-            "no catch-all text handler found — this test is no longer checking "
-            "anything; update it if the handler was removed"
-        )
+            (i for i, h in enumerate(handlers) if self._is_text_catch_all(h)),
+            len(handlers))
         late = []
         for i, h in enumerate(handlers[first_catch_all + 1:], first_catch_all + 1):
             if isinstance(h, ConversationHandler):
@@ -295,8 +303,9 @@ class TestHandlerOrdering:
             f"handler and will never receive their own replies: {late}"
         )
 
-    def test_the_catch_all_is_actually_found(self):
-        """Guard the guard: if the detector stops matching, the test above
-        would pass while checking nothing."""
-        handlers = self._group0()
-        assert sum(1 for h in handlers if self._is_text_catch_all(h)) >= 1
+    def test_the_detector_still_recognises_a_catch_all(self):
+        """Guard the guard: with nothing live to find, prove the detector
+        would still find the shape that broke /prayer."""
+        from telegram.ext import MessageHandler, filters
+        h = MessageHandler(filters.TEXT & ~filters.COMMAND, lambda u, c: None)
+        assert self._is_text_catch_all(h)

@@ -21,8 +21,10 @@ WHAT EACH FIELD IS FOR
 Per path: what was sent, how many times the store was SAVED, the appointment's
 status afterwards, and which side effects fired — finalize (calendar invite and
 confirmations), notify (a message to the requester), negotiate (the "you are
-handling this" notice), reschedule (the rs_* handler), plus any
-_counter_propose_state and user_data keys set.
+handling this" notice), reschedule (the rs_* handler), picker (a NEW message
+carrying the time picker — "Suggest time" and "Suggest different" answer that
+way since 2026-11-23, instead of setting the module-level typed-reply state
+this field used to record), plus any user_data keys set.
 
 `status` and `saved` are what separate a guard from a verb. A tap stopped by a
 guard must leave the record untouched; several of the branches differ from one
@@ -120,14 +122,24 @@ def _clashing(**over) -> dict:
     return base
 
 
+def _officials_booking(**over) -> dict:
+    """ANOTHER member's confirmed appointment with the SAME official, at the
+    same time — what the official-side double-booking check (2026-11-23)
+    exists to catch. _clashing() is the requester's calendar; this is the
+    official's."""
+    base = _appt(id="BOOKED", user_chat_id=222, user_display_name="Other",
+                 status="confirmed")
+    base["confirmed_datetime"] = base["requested_datetime"]
+    base.update(over)
+    return base
+
+
 def _normalize(text: str) -> str:
     return " ".join(_ISO_DT.sub("<WHEN>", text).split())
 
 
 async def _run_one(label: str, suffix: str, appts: list,
                    actor: int = OFFICIAL_CHAT_ID) -> str:
-    ha._counter_propose_state.clear()
-
     ctx = MagicMock()
     ctx.bot = MagicMock()
     ctx.user_data = {}
@@ -137,6 +149,7 @@ async def _run_one(label: str, suffix: str, appts: list,
     query.answer = AsyncMock()
     query.edit_message_text = AsyncMock()
     query.message.chat_id = actor
+    query.message.reply_text = AsyncMock()
     query.from_user.id = actor
     query.from_user.username = None
     upd = MagicMock()
@@ -202,7 +215,7 @@ async def _run_one(label: str, suffix: str, appts: list,
             f"status={target['status'] if target else '-'} "
             f"confirmed_from={confirmed_from} "
             f"effects={effects} "
-            f"cp={sorted(ha._counter_propose_state) or '-'} "
+            f"picker={'yes' if query.message.reply_text.await_count else '-'} "
             f"user_data={sorted(ctx.user_data) or '-'} "
             f"text={_normalize(str(text))}")
 
@@ -264,6 +277,8 @@ def _cases() -> list[tuple[str, str, list, int]]:
         ("confirm", "confirm:TARGET", [_appt()], OFFICIAL_CHAT_ID),
         ("confirm-clash", "confirm:TARGET", [_appt(), _clashing()],
          OFFICIAL_CHAT_ID),
+        ("confirm-official-booked", "confirm:TARGET",
+         [_appt(), _officials_booking()], OFFICIAL_CHAT_ID),
         ("decline", "decline:TARGET", [_appt()], OFFICIAL_CHAT_ID),
         ("counter", "counter:TARGET", [_appt()], OFFICIAL_CHAT_ID),
         ("accept_counter", "accept_counter:TARGET",
@@ -272,6 +287,8 @@ def _cases() -> list[tuple[str, str, list, int]]:
          [_appt(counter_datetime=_at(-5))], USER_CHAT_ID),
         ("accept_counter-clash", "accept_counter:TARGET",
          [_appt(counter_datetime=_at(10)), _clashing()], USER_CHAT_ID),
+        ("accept_counter-official-booked", "accept_counter:TARGET",
+         [_appt(counter_datetime=_at(10)), _officials_booking()], USER_CHAT_ID),
         ("decline_counter", "decline_counter:TARGET", [_appt()],
          USER_CHAT_ID),
         ("accept_user_counter", "accept_user_counter:TARGET",
@@ -280,6 +297,9 @@ def _cases() -> list[tuple[str, str, list, int]]:
          [_appt(user_counter_datetime=_at(-5))], OFFICIAL_CHAT_ID),
         ("accept_user_counter-clash", "accept_user_counter:TARGET",
          [_appt(user_counter_datetime=_at(10)), _clashing()],
+         OFFICIAL_CHAT_ID),
+        ("accept_user_counter-official-booked", "accept_user_counter:TARGET",
+         [_appt(user_counter_datetime=_at(10)), _officials_booking()],
          OFFICIAL_CHAT_ID),
         ("decline_user_counter", "decline_user_counter:TARGET", [_appt()],
          OFFICIAL_CHAT_ID),
@@ -383,6 +403,8 @@ _PIPELINE_STOPS = (
 _VERB_REFUSALS = (
     "confirm-clash", "accept_counter-past", "accept_counter-clash",
     "accept_user_counter-past", "accept_user_counter-clash",
+    "confirm-official-booked", "accept_counter-official-booked",
+    "accept_user_counter-official-booked",
 )
 
 
