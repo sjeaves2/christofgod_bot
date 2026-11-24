@@ -58,6 +58,15 @@ need a tap. song_matching.py decides which matches are flagged.
 Nothing provisional can reach a recipient: the review leads to the same
 confirm, recipient and send steps as a list built one song at a time.
 
+A LINK IS A SONG
+----------------
+A message may also hold Apple Music links, or a list this bot sent earlier. A
+link names one exact recording, so it is looked up rather than searched for
+and is not flagged as a guess. That makes any copy of a list in the chat
+something to build the next one from, which is why /list and the review carry
+links and why the sender gets a copy of what was sent. It stands in for saving
+lists, and needs no data store.
+
 THE SEARCHES RUN IN A BACKGROUND TASK, and must. bot.py does not enable
 concurrent updates, so PTB runs one handler at a time for the WHOLE bot: a
 handler awaiting eleven searches, or a minute of throttling, would leave every
@@ -253,6 +262,12 @@ def split_for_telegram(text: str, limit: int = MAX_MESSAGE_CHARS) -> list[str]:
 # Keyboards
 # ---------------------------------------------------------------------------
 
+def render_with_links(songs: list[Song]) -> str:
+    """The picker's detail and each link: what can be pasted back later."""
+    return "\n\n".join(song.detail_with_link(n)
+                       for n, song in enumerate(songs, 1))
+
+
 def render_candidates(results: list[Song]) -> str:
     """The candidates as a numbered block, each with what tells it apart.
 
@@ -323,11 +338,11 @@ def review_keyboard(lines: list[Line], already: list[Song]) -> InlineKeyboardMar
     icons = [icon for icon, _ in song_matching.flags(lines, already)]
     shown = list(range(len(lines)))
     if len(shown) > MAX_NUMBER_BUTTONS:
-        shown = [n for n in shown if icons[n] != song_matching.FINE]
+        shown = [n for n in shown if icons[n] not in song_matching.SETTLED]
         shown = shown[:MAX_NUMBER_BUTTONS]
     buttons = [
         InlineKeyboardButton(
-            str(n + 1) if icons[n] == song_matching.FINE
+            str(n + 1) if icons[n] in song_matching.SETTLED
             else f"{icons[n]} {n + 1}",
             callback_data=f"{CB_SONG_PREFIX}fix:{n}")
         for n in shown
@@ -335,8 +350,7 @@ def review_keyboard(lines: list[Line], already: list[Song]) -> InlineKeyboardMar
     rows = [buttons[n:n + NUMBERS_PER_ROW]
             for n in range(0, len(buttons), NUMBERS_PER_ROW)]
 
-    if any(line.missing or (not line.searched and not line.dropped)
-           for line in lines):
+    if any(line.retryable or _is_pending(line) for line in lines):
         rows.append([InlineKeyboardButton(
             f"🔄 Search again for the {song_matching.MISSING} ones",
             callback_data=f"{CB_SONG_PREFIX}retry")])
@@ -433,12 +447,14 @@ async def cmd_songlist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         "The artist is optional, but it helps: a hymn is often recorded by "
         "several people. I will look it up on Apple Music and show you what "
         "I find.\n\n"
+        "Apple Music song links work too, and so does an earlier list: paste "
+        "it or forward it here, all or part of it, to start from it.\n\n"
         "/list to see the songs chosen so far\n"
         "/end when the list is complete\n"
         "/undo to drop the last song\n"
         "/cancel to abandon the list\n\n"
         "Note: if the bot restarts while you are building the list, the list "
-        "is lost and you will need to start again."
+        "is lost. Start again by pasting back the last /list or review."
     )
     return SL_QUERY
 
@@ -461,7 +477,7 @@ async def sl_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text("Send me a song name, or /end.")
         return SL_QUERY
 
-    if song_matching.is_list(query):
+    if song_matching.is_list(query) or apple_music.find_links(query):
         return await _start_batch(update, context, query)
 
     results = await apple_music.search_songs(query)
@@ -860,6 +876,9 @@ async def sl_list(update: Update,
     /list a second, subtly different claim about the outgoing message would
     devalue that one.
 
+    With links, so that a restart does not lose the list: this message can be
+    pasted back into a new /songlist.
+
     Reported by the user on 2026-11-16: "one can become lost in the list...
     there is no sub-command to let me see all of the list thus far."
     """
@@ -874,7 +893,7 @@ async def sl_list(update: Update,
         )
         return None
 
-    body = render_candidates(songs)
+    body = render_with_links(songs)
     header = (f"📋 {len(songs)} song(s) so far — still building:\n\n")
     # Split for the same reason sl_send does: a long list exceeds Telegram's
     # message limit, and /list is the one view whose length the admin
@@ -984,7 +1003,7 @@ async def _take_off_buttons(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
 async def _start_batch(update: Update, context: ContextTypes.DEFAULT_TYPE,
                        text: str) -> int:
     """Begin reviewing a pasted list. Songs already chosen are kept."""
-    lines = [Line(query) for query in song_matching.parse_lines(text)]
+    lines = song_matching.parse_entries(text)
     if not lines:
         await update.message.reply_text(
             "I could not find a song name in that. Send a song name, or /end.")
@@ -1004,7 +1023,9 @@ async def _begin_search(update: Update, context: ContextTypes.DEFAULT_TYPE,
     chat_id = update.effective_chat.id
     await _take_off_buttons(context, chat_id, batch)
     total = sum(1 for line in batch.lines if _is_pending(line))
-    progress = await send(_progress_text(1, total))
+    progress = await send(
+        (f"🔍 Looking up {total} song(s)…" if total else "🔍 Checking the list…")
+        + "\n\n/cancel to abandon the list.")
     # After the send: if that raised, nothing is running and nothing must
     # claim to be.
     batch.busy = "searching"
@@ -1017,36 +1038,44 @@ def _is_pending(line: Line) -> bool:
     return not line.searched and not line.dropped
 
 
-def _progress_text(n: int, total: int, waiting: float = 0.0) -> str:
-    text = f"🔍 Searching {n} of {total}…"
-    if waiting:
-        text += (f"\n⏳ Waiting about {max(1, round(waiting))} seconds: Apple "
-                 "allows about 20 searches a minute.")
-    return text + "\n\n/cancel to abandon the list."
+def _progress_text(n: int, total: int) -> str:
+    return f"🔍 Searching {n} of {total}…\n\n/cancel to abandon the list."
+
+
+def _waiting_text(doing: str, delay: float) -> str:
+    return (f"{doing}\n⏳ Waiting about {max(1, round(delay))} seconds: Apple "
+            "allows about 20 searches a minute.\n\n"
+            "/cancel to abandon the list.")
 
 
 async def _search_pending(chat_id: int, context: ContextTypes.DEFAULT_TYPE,
                           state: dict[str, Any], batch: Batch,
                           progress) -> None:
-    """The background task: search each pending line, then post the review.
+    """The background task: find each pending line, then post the review.
 
-    One at a time, never gathered, so the throttle means something.
+    Links first, many to a request, then searches one at a time — never
+    gathered, so the throttle means something. A link that is no longer good
+    joins the searches when it came with a title.
     """
     def wanted() -> bool:
         return _still_wanted(context, state, batch)
 
     try:
+        for group in _link_groups(batch.lines):
+            await _wait_for_turn(progress, "🔗 Looking up the links…", wanted)
+            if not wanted():
+                return
+            found = await apple_music.lookup_songs(
+                list(dict.fromkeys(line.link.track_id for line in group)),
+                group[0].link.country)
+            for line in group:
+                line.resolve(found)
+
         pending = [line for line in batch.lines if _is_pending(line)]
         shown_at = time.monotonic()
         for n, line in enumerate(pending, 1):
-            told = False
-            while wanted() and (delay := apple_music.search_delay()) > 0:
-                if not told:
-                    await _edit_quietly(
-                        progress, _progress_text(n, len(pending), delay))
-                    told = True
-                # Short naps, so a cancel or a shutdown is noticed promptly.
-                await asyncio.sleep(min(delay, 1.0))
+            told = await _wait_for_turn(
+                progress, f"🔍 Searching {n} of {len(pending)}…", wanted)
             if not wanted():
                 return
             now = time.monotonic()
@@ -1065,6 +1094,29 @@ async def _search_pending(chat_id: int, context: ContextTypes.DEFAULT_TYPE,
         await _post_review(chat_id, context)
 
 
+def _link_groups(lines: list[Line]) -> list[list[Line]]:
+    """The pending links, grouped into lookups: one country, limited ids."""
+    by_country: dict[str, list[Line]] = {}
+    for line in lines:
+        if line.link and _is_pending(line):
+            by_country.setdefault(line.link.country, []).append(line)
+    size = apple_music.LOOKUP_BATCH
+    return [group[n:n + size] for group in by_country.values()
+            for n in range(0, len(group), size)]
+
+
+async def _wait_for_turn(progress, doing: str, wanted) -> bool:
+    """Hold back while Apple's rate limit asks for it. Whether it did."""
+    told = False
+    while wanted() and (delay := apple_music.search_delay()) > 0:
+        if not told:
+            await _edit_quietly(progress, _waiting_text(doing, delay))
+            told = True
+        # Short naps, so a cancel or a shutdown is noticed promptly.
+        await asyncio.sleep(min(delay, 1.0))
+    return told
+
+
 async def _edit_quietly(message, text: str) -> None:
     """Edit a progress message; a failure is not worth stopping a search for."""
     try:
@@ -1079,6 +1131,9 @@ def render_review(lines: list[Line], already: list[Song]) -> str:
     Every entry carries the same detail as the picker, flagged or not: a ✓
     means the WORDS agree, and only the album, length and year can tell the
     admin whether it is the recording they meant.
+
+    song_matching.parse_entries reads this layout back, so a review can be
+    pasted into a new /songlist. It relies on the link coming last.
     """
     entries = []
     marks = song_matching.flags(lines, already)
@@ -1089,12 +1144,18 @@ def render_review(lines: list[Line], already: list[Song]) -> str:
         else:
             text = f"{icon} {n}. {html.escape(note, quote=False).capitalize()}"
             note = ""
-        typed = line.query
-        if len(typed) > MAX_QUERY_SHOWN:
-            typed = typed[:MAX_QUERY_SHOWN - 1] + "…"
-        text += f"\n    you typed: {html.escape(typed, quote=False)}"
+        # A link's label was not typed as a request; when it matters, the
+        # note quotes it.
+        if not line.linked:
+            typed = line.query
+            if len(typed) > MAX_QUERY_SHOWN:
+                typed = typed[:MAX_QUERY_SHOWN - 1] + "…"
+            text += (f"\n    {song_matching.TYPED}"
+                     f"{html.escape(typed, quote=False)}")
         if note:
-            text += f"\n    {html.escape(note, quote=False)}"
+            text += f"\n    {song_matching.NOTE}{html.escape(note, quote=False)}"
+        if song:
+            text += f"\n{html.escape(song.url, quote=False)}"
         entries.append(text)
     return "\n\n".join(entries)
 
@@ -1102,7 +1163,7 @@ def render_review(lines: list[Line], already: list[Song]) -> str:
 def review_heading(lines: list[Line], already: list[Song]) -> str:
     """The instructions above the review, saying only what applies."""
     kept = [line for line in lines if not line.dropped]
-    if kept and all(line.missing for line in kept):
+    if kept and all(line.retryable for line in kept):
         # search_songs returns [] for "nothing found" and "broken" alike. One
         # line missing is a typo; every line missing is probably not.
         return ("⚠️ I found nothing for any of these. The search itself may be "
@@ -1113,9 +1174,11 @@ def review_heading(lines: list[Line], already: list[Song]) -> str:
         parts.append(f"They follow the {len(already)} song(s) already chosen.")
     parts.append("Tap a number to change that song. ✓ means the words match, "
                  "so check the album, length and year too.")
+    if any(line.linked for line in kept):
+        parts.append("🔗 is the exact recording its link is for.")
     if len(lines) > MAX_NUMBER_BUTTONS:
         parts.append("In a list this long, only songs with a mark other than "
-                     "✓ have a button.")
+                     "✓ or 🔗 have a button.")
     parts.append("Send more songs to add them.")
     return "\n".join(parts)
 
@@ -1154,9 +1217,10 @@ async def sl_review_text(update: Update,
             _busy_reply(batch) + "\n\nSend that again afterwards.")
         return SL_REVIEW
     text = (update.message.text or "").strip()
-    queries = (song_matching.parse_lines(text)
-               if song_matching.is_list(text) else [text])
-    batch.lines += [Line(query) for query in queries if query]
+    if song_matching.is_list(text) or apple_music.find_links(text):
+        batch.lines += song_matching.parse_entries(text)
+    else:
+        batch.lines.append(Line(text))
     await _begin_search(update, context, update.message.reply_text)
     return SL_REVIEW
 
@@ -1183,7 +1247,7 @@ async def sl_review_retry(update: Update,
         return SL_REVIEW
     await query.answer()
     for line in batch.lines:
-        if line.missing:
+        if line.retryable:
             line.searched = False
     await _begin_search(update, context, query.message.reply_text)
     return SL_REVIEW
@@ -1382,14 +1446,27 @@ async def sl_fix_text(update: Update,
                       context: ContextTypes.DEFAULT_TYPE) -> int:
     """The retyped song. Nothing changes until one of its results is picked."""
     text = (update.message.text or "").strip()
-    if song_matching.is_list(text):
+    links = apple_music.find_links(text)
+    if len(links) > 1 or (song_matching.is_list(text) and not links):
         await update.message.reply_text(
             f"Just song {_fixing(context)[0]} here, please, on one line. "
             "More songs can be added from the review.")
         return SL_RETYPE
-    results = await apple_music.search_songs(text)
+    if links:
+        # Text may come with a shared link; the link is the answer.
+        link = links[0]
+        found = (await apple_music.lookup_songs([link.track_id],
+                                                link.country)
+                 if link.kind == "song" else {})
+        results = list((found or {}).values())
+    else:
+        results = await apple_music.search_songs(text)
     if not results:
         await update.message.reply_text(
+            "🔗 I could not find a song with that link. It has to be a song's "
+            "own link, not an album's or a playlist's.\n\n"
+            "Send another, or the song's name, or use the buttons above."
+            if links else
             f"🔍 I could not find anything for “{text}”.\n\n"
             "Check the spelling and send it again, or use the buttons above.")
         return SL_RETYPE
@@ -1525,15 +1602,51 @@ async def sl_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             )
             activity.log_error(
                 f"Song list to {chat_id} failed after {sent} message(s): {exc}")
+            # The list exists nowhere else, and _finish is about to drop it.
+            await _send_own_copy(context, uid, songs, "not delivered")
             return await _finish(context, query.message.chat_id)
 
     activity.log_command("songlist", uid, uname, dname,
                          details=f"{len(songs)} song(s) sent to {chat_id}")
+    # A list sent to oneself is already a copy.
+    copied = (chat_id == uid
+              or await _send_own_copy(context, uid, songs, "as sent"))
     await query.edit_message_text(
         f"✅ Sent {len(songs)} song(s)."
         + ("" if len(chunks) == 1 else f" ({len(chunks)} messages.)")
+        + ("" if copied else "\n\n⚠️ Your own copy could not be delivered. "
+           "Have you started a private chat with the bot?")
     )
     return await _finish(context, query.message.chat_id)
+
+
+async def _send_own_copy(context: ContextTypes.DEFAULT_TYPE, uid: int,
+                         songs: list[Song], what: str) -> bool:
+    """A copy of the list for the admin who sent it. Whether it arrived.
+
+    Asked for by the user on 2026-11-24, so that a past list can start a
+    future one. The same renderer as the recipient's, because it is the links
+    that make it reusable; only the header differs, so that song_matching can
+    recognise it and the admin can see how to use it.
+
+    To the admin PRIVATELY, whose chat id is their user id: /songlist can be
+    run in a group, which did not ask for the list.
+
+    A failure here is reported, never raised. By now the recipient has the
+    list, and an error would say otherwise.
+    """
+    header = (f"📋 Your copy of the song list ({what}) — {len(songs)} "
+              "song(s)\nTo start from it: /songlist, then paste or forward "
+              "this message.\n\n")
+    try:
+        for n, chunk in enumerate(split_for_telegram(render_list(songs))):
+            await context.bot.send_message(
+                uid, header + chunk if n == 0 else chunk,
+                parse_mode=ParseMode.HTML, link_preview_options=NO_PREVIEW)
+    except TelegramError as exc:
+        logger.warning("Could not send the sender their copy: %s", exc)
+        return False
+    return True
 
 
 async def sl_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:

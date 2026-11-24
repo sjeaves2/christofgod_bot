@@ -50,6 +50,17 @@ logger = logging.getLogger(__name__)
 
 SEARCH_URL = "https://itunes.apple.com/search"
 
+# Looks tracks up by id, many at once. Verified from 44.214.123.92 on
+# 2026-11-24, not only from a laptop: same host as the search, but the same
+# reason for checking applies. Eleven ids came back in 0.26s, in order, as
+# exactly the Songs the search had returned; an id that does not exist is
+# simply left out of the answer.
+LOOKUP_URL = "https://itunes.apple.com/lookup"
+
+#: Ids per lookup. Apple's documentation shows lists of ids and gives no
+#: limit; a hundred keeps the URL well short of any.
+LOOKUP_BATCH = 100
+
 # Which Apple Music storefront to search. US matches the bot's timezone, and a
 # music.apple.com/us/... link normally redirects a viewer to their own
 # storefront. Availability still differs by country, so if members report a
@@ -111,6 +122,67 @@ _ARTWORK_SIZE_RE = re.compile(r"/(\d+)x\1bb\.jpg$")
 #: match, and `is1-ssl.mzstatic.com` through `is5-ssl...` all can — Apple
 #: rotates that prefix and pinning the full host would break on their whim.
 MEDIA_HOST_SUFFIXES = (".apple.com", ".mzstatic.com")
+
+
+#: An Apple Music address, with or without https://. Anything longer than the
+#: host is taken up to the next space, quote or bracket.
+_LINK_RE = re.compile(
+    r"""(?:https?://)?(?<![\w.@-])(?:geo\.)?(?:music|itunes)\.apple\.com
+        /[^\s<>"']+""", re.VERBOSE | re.IGNORECASE)
+_TRACK_ID_RE = re.compile(r"[0-9]{1,15}")
+_COUNTRY_RE = re.compile(r"[a-z]{2}", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class AppleLink:
+    """An Apple Music link found in a message.
+
+    `kind` is "song", or else what the link names instead ("album",
+    "playlist", ...). Only a song has a `track_id`.
+
+    THE ADDRESS ITSELF IS NEVER FETCHED. It came from a message, so only a
+    number and a two-letter country are taken from it, and those go to
+    Apple's own lookup.
+    """
+
+    kind: str
+    url: str
+    track_id: str = ""
+    country: str = STOREFRONT
+
+
+def _as_link(raw: str) -> AppleLink:
+    url = raw.rstrip(".,;:!?)]}…")
+    try:
+        parts = urlsplit(url if "://" in url else f"https://{url}")
+        segments = [part for part in parts.path.split("/") if part]
+        query = parse_qs(parts.query)
+    except ValueError:
+        return AppleLink("other", url)
+    country = STOREFRONT
+    if segments and _COUNTRY_RE.fullmatch(segments[0]):
+        country = segments.pop(0).upper()
+    kind = segments[0].lower() if segments else "other"
+
+    # /us/album/<name>/<album id>?i=<track id>, or /us/song/<name>/<track id>.
+    # The name is optional in both.
+    track = query.get("i", [""])[0]
+    if kind == "song":
+        track = track or segments[-1]
+    if _TRACK_ID_RE.fullmatch(track):
+        return AppleLink("song", url, track, country)
+    return AppleLink(kind if kind in ("album", "playlist", "artist")
+                     else "other", url)
+
+
+def find_links(text: str) -> list[AppleLink]:
+    """Every Apple Music link in *text*, in order."""
+    return [_as_link(match.group()) for match in _LINK_RE.finditer(text or "")]
+
+
+def without_links(text: str) -> str:
+    """*text* with its Apple Music links removed."""
+    return _LINK_RE.sub(" ", text or "")
 
 
 @dataclass(frozen=True)
@@ -187,6 +259,15 @@ class Song:
         if kept:
             line += "\n    " + " · ".join(kept)
         return line
+
+    def detail_with_link(self, index: int) -> str:
+        """`detail` and the link, for the screens an admin may paste back.
+
+        A list is not stored anywhere, so a copy in the chat is the only way
+        to rebuild one after a restart — and a copy without links would have
+        to be searched for all over again. See song_matching.parse_entries.
+        """
+        return f"{self.detail(index)}\n{html.escape(self.url, quote=False)}"
 
     def enumerated(self, index: int) -> str:
         """The exact shape asked for: index, title, "by Artist", link below.
@@ -579,3 +660,47 @@ async def search_songs(query: str,
     logger.info("Song search for %r returned %d usable result(s).",
                 term, len(songs))
     return songs[:limit]
+
+
+async def lookup_songs(track_ids: list[str],
+                       country: str = STOREFRONT) -> dict[str, Song] | None:
+    """The songs with these ids, by id, in *country*'s store.
+
+    An id Apple does not know there is absent from the answer. None means
+    Apple did not answer at all, and unlike search_songs the two are told
+    apart: a link that no longer works is worth replacing with a search, and
+    one that could not be checked is worth checking again.
+
+    The country matters. A track's id in one store is often unknown in
+    another (checked 2026-11-24), so a link is looked up in its own.
+
+    One request, so at most LOOKUP_BATCH ids. Never raises.
+    """
+    if not track_ids:
+        return {}
+    now = time.monotonic()
+    _forget_old_searches(now)
+    _recent_searches.append(now)
+
+    params = {"id": ",".join(track_ids), "country": country}
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
+            response = await client.get(LOOKUP_URL, params=params)
+            response.raise_for_status()
+            payload = response.json()
+    except Exception as exc:   # noqa: BLE001 - the contract is never to raise
+        logger.warning("Lookup of %d song(s) failed: %s: %s",
+                       len(track_ids), type(exc).__name__, exc)
+        return None
+
+    results = payload.get("results") if isinstance(payload, dict) else None
+    if not isinstance(results, list):
+        logger.warning("Song lookup returned no usable results field.")
+        return None
+    found = {}
+    for result in results:
+        song = _as_song(result) if isinstance(result, dict) else None
+        if song is not None:
+            found[str(result.get("trackId"))] = song
+    logger.info("Looked up %d link(s): %d found.", len(track_ids), len(found))
+    return found

@@ -1025,8 +1025,10 @@ class TestEndToEnd:
         ctx.bot.send_message.reset_mock()
         result = await w.sl_send(_tap("sl:to:999000001"), ctx)
         assert result == ConversationHandler.END
-        assert ctx.last.args[0] == 999000001
-        assert ctx.said.endswith(w.render_list([GRACE2, WAY]))
+        sent, copy = ctx.bot.send_message.await_args_list
+        assert sent.args[0] == 999000001 and copy.args[0] == 7
+        for call in (sent, copy):
+            assert call.args[1].endswith(w.render_list([GRACE2, WAY]))
         assert w.STATE_KEY not in ctx.user_data
 
 

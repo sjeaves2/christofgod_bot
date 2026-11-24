@@ -20,7 +20,8 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 
-from apple_music import Song
+import apple_music
+from apple_music import AppleLink, Song
 
 #: List numbering and bullets at the start of a pasted line.
 #:
@@ -90,6 +91,150 @@ def is_list(text: str) -> bool:
     the message: more than one line with something on it.
     """
     return sum(1 for line in (text or "").splitlines() if line.strip()) > 1
+
+
+#: The first line of a list this bot sent, which is not a song. Matched by
+#: its own wording: "🎵" alone is also how people decorate the songs.
+_OWN_HEADER_RE = re.compile(
+    r"\s*(?:🎵 Worship song list|📋 Your copy|📋 Please check"
+    r"|📋 \d+ song\(s\))")
+
+#: "3. " or "✓ 3. ": how this bot numbers an entry.
+_OWN_NUMBER_RE = re.compile(r"\s*(?:[^\w\s]{1,3}\s+)?\d{1,3}\.\s+")
+
+#: What worship.render_review writes in front of these lines.
+TYPED = "you typed: "
+NOTE = "↳ "
+
+_NOT_A_SONG = {
+    "album": "this link is to an album; send the song's own link",
+    "playlist": "this link is to a playlist; send each song's own link",
+    "artist": "this link is to an artist; send the song's own link",
+    "other": "I cannot tell which song this link is for",
+}
+
+
+def _is_own_detail(line: str) -> bool:
+    """Whether *line* sits under a title in a list this bot sent."""
+    bare = line.strip()
+    return (line[:1].isspace() or " · " in bare
+            or bare.startswith((TYPED.strip(), NOTE.strip())))
+
+
+def _own_label(line: str) -> str:
+    """A numbered title line from a prior list, as something to search for.
+
+    "by" here is OUR separator (Song.enumerated), not something a person
+    typed, so it goes. The LAST one: "Stand By Me by Ben E. King". /list and
+    the review separate with a dash instead, so there it is in the title.
+    """
+    bare = _OWN_NUMBER_RE.sub("", line, count=1)
+    if " by " in bare and " — " not in bare:
+        bare = " ".join(bare.rsplit(" by ", 1))
+    return " ".join(_DASH_RE.sub(" ", bare).split())
+
+
+def _linked_line(link: AppleLink, label: str) -> Line:
+    line = Line(label or link.url, labelled=bool(label))
+    if link.kind == "song":
+        line.link = link
+    else:
+        line.searched = line.final = True
+        line.note = _NOT_A_SONG[link.kind]
+    return line
+
+
+def _own_entry(paragraph: list[str]) -> list[Line] | None:
+    """A paragraph copied from this bot's own lists, or None if it is not one.
+
+    Deliberately strict: every line after the numbered title must look like
+    ours. Treating a typed song as decoration would drop it unseen, whereas
+    the reverse only puts an extra line in the review.
+    """
+    first, rest = paragraph[0], paragraph[1:]
+    if not rest or not _OWN_NUMBER_RE.match(first) or apple_music.find_links(first):
+        return None
+    links = apple_music.find_links(rest[-1])
+    middle = rest[:-1] if links else rest
+    if len(links) > 1 or not all(
+            _is_own_detail(line) and not _OWN_NUMBER_RE.match(line)
+            and not apple_music.find_links(line) for line in middle):
+        return None
+    if links:
+        return [_linked_line(links[0], _own_label(first))]
+    for line in middle:
+        bare = line.strip()
+        if bare.startswith(TYPED):
+            # A review entry that had no song: search for it again, unless
+            # it had been left out.
+            return ([] if "Left out" in first
+                    else [Line(bare.removeprefix(TYPED))])
+    return None
+
+
+def _paragraphs(text: str) -> list[list[str]]:
+    """The message as groups of non-blank lines that belong together.
+
+    A blank line divides them. So does a numbered line after a header or
+    after the end of one of our own entries, for a copy that lost its blank
+    lines. Other numbered lines do not: a typed list is one paragraph.
+    """
+    groups: list[list[str]] = []
+    joined = False
+    for line in (text or "").splitlines():
+        if not line.strip():
+            joined = False
+            continue
+        if joined and _OWN_NUMBER_RE.match(line):
+            last = groups[-1][-1]
+            if (_OWN_HEADER_RE.match(groups[-1][0])
+                    or apple_music.find_links(last)
+                    or last.strip().startswith((TYPED, NOTE))):
+                joined = False
+        if joined:
+            groups[-1].append(line)
+        else:
+            groups.append([line])
+        joined = True
+    return groups
+
+
+def parse_entries(text: str) -> list[Line]:
+    """The songs in a message: typed lines, Apple Music links, a prior list.
+
+    A link is a song by itself. Text beside it, or on the line directly above
+    it, is its label: not searched for, but compared with what the link turns
+    out to be (see flags), so a song typed just above an unrelated link is
+    noticed rather than lost.
+    """
+    entries: list[Line] = []
+    for lines in _paragraphs(text):
+        if _OWN_HEADER_RE.match(lines[0]):
+            # A header and the instructions under it, up to the first song.
+            continue
+        own = _own_entry(lines)
+        if own is not None:
+            entries += own
+            continue
+        above: Line | None = None
+        above_raw = ""
+        for raw in lines:
+            links = apple_music.find_links(raw)
+            if not links:
+                typed = parse_lines(raw)
+                above = Line(typed[0]) if typed else None
+                above_raw = raw
+                entries += [above] if above else []
+                continue
+            label = " ".join(parse_lines(apple_music.without_links(raw)))
+            if len(links) == 1 and not label and above is not None:
+                entries.pop()
+                label = (_own_label(above_raw)
+                         if _OWN_NUMBER_RE.match(above_raw) else above.query)
+            entries += [_linked_line(link, label if len(links) == 1 else "")
+                        for link in links]
+            above = None
+    return entries
 
 
 def words(text: str) -> list[str]:
@@ -185,6 +330,13 @@ class Line:
 
     `confirmed` means a person picked this result themselves, which answers
     the ❓ and 👥 questions: repeating them afterwards would be nagging.
+
+    `link` is the Apple Music link the line came from, until it is resolved
+    or given up on; `linked` means the match came from it, so it is the exact
+    recording and not a guess. `labelled` means text came with the link.
+
+    `note` explains a line that has no song, or why its song is doubtful, and
+    `final` means searching again would not help.
     """
 
     query: str
@@ -193,6 +345,11 @@ class Line:
     searched: bool = False
     confirmed: bool = False
     dropped: bool = False
+    link: AppleLink | None = None
+    linked: bool = False
+    labelled: bool = False
+    note: str = ""
+    final: bool = False
 
     @property
     def song(self) -> Song | None:
@@ -205,6 +362,35 @@ class Line:
     def missing(self) -> bool:
         """Searched, and nothing came back."""
         return self.searched and not self.dropped and self.chosen is None
+
+    @property
+    def retryable(self) -> bool:
+        """Missing in a way that trying again might change."""
+        return self.missing and not self.final
+
+    def resolve(self, found: dict[str, Song] | None) -> None:
+        """Store a lookup's answer for this line's link.
+
+        Three outcomes: the song; "Apple did not answer", which keeps the link
+        so that 🔄 can try it again; and "not there", which gives the link up
+        and leaves the line to be searched by its label, if it has one.
+        """
+        if found is None:
+            self.record([])
+            self.note = UNANSWERED
+            return
+        link, song = self.link, found.get(self.link.track_id)
+        self.note = ""
+        if song is not None:
+            self.record([song])
+            self.linked = True
+            return
+        self.link = None
+        self.note = f"its link is not in Apple's {link.country} store"
+        if self.labelled:
+            self.searched = False
+        else:
+            self.searched = self.final = True
 
     def record(self, results: list[Song]) -> None:
         """Store a search's answer, provisionally taking the top result."""
@@ -220,6 +406,9 @@ class Line:
         self.searched = True
         self.confirmed = True
         self.dropped = False
+        self.link = None
+        self.linked = self.labelled = self.final = False
+        self.note = ""
 
 
 MISSING = "⚠️"
@@ -229,6 +418,22 @@ DUPLICATE = "🔁"
 DROPPED = "🚫"
 FINE = "✓"
 PENDING = "⏳"
+LINKED = "🔗"
+
+#: Nothing here needs a second look.
+SETTLED = frozenset({FINE, LINKED})
+
+UNANSWERED = "Apple did not answer; try 🔄"
+
+
+def label_agrees(label: str, song: Song) -> bool:
+    """Whether the text beside a link names the song the link is for.
+
+    The title without its brackets must be in the label. A prior list always
+    agrees; a song typed directly above someone else's link does not.
+    """
+    title = words(re.sub(r"[(\[][^)\]]*[)\]]", " ", song.title))
+    return not _absent(title or words(song.title), words(label))
 
 
 def _quoted(some: list[str]) -> str:
@@ -255,17 +460,26 @@ def flags(lines: list[Line],
             out.append((PENDING, "not searched yet"))
             continue
         if song is None:
-            out.append((MISSING, "not found"))
+            out.append((MISSING, line.note or "not found"))
             continue
 
         earlier = seen.get(song.url)
         seen.setdefault(song.url, f"the same recording as number {number}")
-        absent = [] if line.confirmed else missing_words(line.query, song)
-        credited = [] if line.confirmed else credited_words(line.query, song)
+        # A link names one recording, and a person's pick is an answer:
+        # neither is a guess whose words need checking.
+        guessed = not (line.confirmed or line.linked)
+        absent = missing_words(line.query, song) if guessed else []
+        credited = credited_words(line.query, song) if guessed else []
         notes = []
-        icon = FINE
+        icon = LINKED if line.linked else FINE
         if earlier:
             icon, notes = DUPLICATE, [earlier]
+        if line.linked and line.labelled and not label_agrees(line.query, song):
+            icon = DOUBTFUL
+            notes.insert(0, f"the text with this link says “{line.query}”")
+        if guessed and line.note:
+            icon = DOUBTFUL
+            notes.insert(0, f"{line.note}, so this is a search for its title")
         if credited:
             icon = DOUBTFUL
             notes.insert(0, f"{_quoted(credited)} credited in the title, but "
@@ -274,7 +488,7 @@ def flags(lines: list[Line],
             icon = DOUBTFUL
             verb = "is" if len(absent) == 1 else "are"
             notes.insert(0, f"{_quoted(absent)} {verb} not in this match")
-        if (icon != DOUBTFUL and not line.confirmed
+        if (icon != DOUBTFUL and guessed
                 and several_artists(line.query, song, line.results)):
             if not earlier:
                 icon = SEVERAL
