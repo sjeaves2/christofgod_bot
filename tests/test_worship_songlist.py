@@ -606,12 +606,18 @@ class TestSending:
             result = await w.sl_send(update, ctx)
         return result, update, ctx, log_error
 
+    @staticmethod
+    def _delivered(ctx):
+        """The recipient's message, as against the sender's copy after it."""
+        return ctx.bot.send_message.await_args_list[0]
+
     async def test_the_list_reaches_the_chosen_recipient(self):
         result, update, ctx, _ = await self._send()
         assert result == ConversationHandler.END
-        ctx.bot.send_message.assert_awaited_once()
-        assert ctx.bot.send_message.await_args[0][0] == 99
-        assert w.render_list(SONGS) in ctx.bot.send_message.await_args[0][1]
+        # The second message is the sender's copy; see TestTheSendersCopy.
+        to = [c.args[0] for c in ctx.bot.send_message.await_args_list]
+        assert to == [99, 7]
+        assert w.render_list(SONGS) in self._delivered(ctx).args[1]
 
     async def test_the_message_is_sent_as_html(self):
         """Bold titles need parse_mode, and the renderer emits <b>.
@@ -624,9 +630,9 @@ class TestSending:
         the recipient the raw markup.
         """
         _result, _update, ctx, _ = await self._send()
-        assert ctx.bot.send_message.await_args.kwargs["parse_mode"] \
+        assert self._delivered(ctx).kwargs["parse_mode"] \
             == ParseMode.HTML
-        assert "<b>" in ctx.bot.send_message.await_args[0][1]
+        assert "<b>" in self._delivered(ctx).args[1]
 
     async def test_the_preview_and_the_real_send_agree_on_parse_mode(self):
         """_show_confirmation promises the admin sees exactly what is sent.
@@ -641,13 +647,13 @@ class TestSending:
         preview_mode = update.message.reply_text.await_args.kwargs["parse_mode"]
 
         _result, _update, send_ctx, _ = await self._send()
-        send_mode = send_ctx.bot.send_message.await_args.kwargs["parse_mode"]
+        send_mode = self._delivered(send_ctx).kwargs["parse_mode"]
         assert preview_mode == send_mode == ParseMode.HTML
 
     async def test_link_previews_are_suppressed(self):
         """Eleven links would otherwise draw eleven previews."""
         _result, _update, ctx, _ = await self._send()
-        assert ctx.bot.send_message.await_args.kwargs["link_preview_options"] \
+        assert self._delivered(ctx).kwargs["link_preview_options"] \
             is w.NO_PREVIEW
 
     async def test_the_admin_is_told_it_went(self):
@@ -1763,10 +1769,12 @@ class TestTheListSubCommand:
         assert "2 song(s) so far" in said
 
     async def test_it_shows_the_identifying_detail_not_the_delivered_format(self):
-        """Song.detail, not Song.enumerated.
+        """Song.detail with the link, not Song.enumerated.
 
-        The admin is checking that the right RECORDING is in the list, which
-        is what album/duration/year are for — and /end already shows the
+        The link is there so that this message can be pasted back after a
+        restart (asked for on 2026-11-24). The shape is still not the
+        recipient's: the admin is checking that the right RECORDING is in the
+        list, which is what album/duration/year are for — and /end already shows the
         delivered format under a promise that it is exactly what will be
         sent. Two subtly different claims about the outgoing message would
         devalue that one.
@@ -1776,7 +1784,8 @@ class TestTheListSubCommand:
         await w.sl_list(update, ctx)
         said = _said(update.message.reply_text)
         assert "The Hymns · 4:13 · 2026" in said
-        assert "music.apple.com" not in said
+        assert "by CeCe Winans" not in said
+        assert PREVIEWABLE[0].url in said and PREVIEWABLE[1].url in said
 
     async def test_it_is_numbered_so_undo_and_remove_make_sense(self):
         ctx = _context(songs=PREVIEWABLE)
