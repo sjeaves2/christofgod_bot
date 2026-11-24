@@ -110,7 +110,7 @@ from telegram import (
     Update,
 )
 from telegram.constants import ParseMode
-from telegram.error import TelegramError
+from telegram.error import BadRequest, TelegramError
 from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
@@ -123,7 +123,7 @@ from telegram.ext import (
 logger = logging.getLogger(__name__)
 
 (SL_QUERY, SL_PICK, SL_CONFIRM, SL_REMOVE, SL_RECIPIENT,
- SL_REVIEW, SL_FIX, SL_RETYPE) = range(8)
+ SL_REVIEW, SL_FIX, SL_RETYPE, SL_ADD, SL_ADD_PICK, SL_MOVE) = range(11)
 
 CB_SONG_PREFIX = "sl:"
 
@@ -194,6 +194,12 @@ PROGRESS_SECONDS = 1.5
 # rows underneath the numbers.
 MAX_NUMBER_BUTTONS = 90
 NUMBERS_PER_ROW = 5
+
+#: Which message's buttons the pickers and the confirm screen's edits (add,
+#: move, remove) will act on. Their buttons carry POSITIONS, which mean another
+#: song once the results or the list change, so a tap on any other copy is
+#: refused. See _out_of_date. (A review has its own: Batch.live_id.)
+MENU_ID_KEY = "menu_message_id"
 
 #: How much of a typed line the review echoes back.
 MAX_QUERY_SHOWN = 80
@@ -284,7 +290,8 @@ def render_candidates(results: list[Song]) -> str:
 
 
 def results_keyboard(results: list[Song],
-                     fixing: bool = False) -> InlineKeyboardMarkup:
+                     way_out: list[list[InlineKeyboardButton]] | None = None,
+                     ) -> InlineKeyboardMarkup:
     """A numbered button per candidate, plus a way out when none is right.
 
     Numbers, not labels: render_candidates carries the identifying detail in
@@ -295,9 +302,10 @@ def results_keyboard(results: list[Song],
     The preview row is only offered when at least one candidate actually has
     a clip — a button that silently does nothing is worse than no button.
 
-    *fixing* is the same screen opened from the review of a pasted list. Its
-    way out is back to that review: "cancel the whole list" beside a question
-    about one song of eleven would be a costly mis-tap.
+    *way_out* is for the same screen opened from somewhere else: the review of
+    a pasted list, or the confirm screen. It leads back there, because "cancel
+    the whole list" beside a question about one song of eleven would be a
+    costly mis-tap.
     """
     rows = [[
         InlineKeyboardButton(str(n + 1),
@@ -310,8 +318,8 @@ def results_keyboard(results: list[Song],
             callback_data=f"{CB_SONG_PREFIX}preview")])
     rows.append([InlineKeyboardButton("🔁 None of these — search again",
                                       callback_data=f"{CB_SONG_PREFIX}none")])
-    if fixing:
-        rows += _fix_rows()
+    if way_out:
+        rows += way_out
     else:
         rows.append([InlineKeyboardButton(
             "✖ Cancel the whole list",
@@ -326,6 +334,11 @@ def _fix_rows() -> list[list[InlineKeyboardButton]]:
         [InlineKeyboardButton("⬅ Back to the review",
                               callback_data=f"{CB_SONG_PREFIX}review")],
     ]
+
+
+def _add_rows() -> list[list[InlineKeyboardButton]]:
+    return [[InlineKeyboardButton("⬅ Back to the list",
+                                  callback_data=f"{CB_SONG_PREFIX}back")]]
 
 
 def review_keyboard(lines: list[Line], already: list[Song]) -> InlineKeyboardMarkup:
@@ -363,6 +376,12 @@ def review_keyboard(lines: list[Line], already: list[Song]) -> InlineKeyboardMar
         rows.append([InlineKeyboardButton(
             f"✅ Use {used} song(s)" + (f", skip {skipped}" if skipped else ""),
             callback_data=f"{CB_SONG_PREFIX}use")])
+    if already:
+        # Otherwise the only way out of an unwanted paste would be to cancel
+        # the songs chosen before it as well.
+        rows.append([InlineKeyboardButton(
+            f"⬅ Discard these, keep the {len(already)} already chosen",
+            callback_data=f"{CB_SONG_PREFIX}discard")])
     rows.append([InlineKeyboardButton("✖ Cancel the whole list",
                                       callback_data=f"{CB_SONG_PREFIX}cancel")])
     return InlineKeyboardMarkup(rows)
@@ -380,11 +399,49 @@ def _result_label(song: Song) -> str:
 def confirm_keyboard(count: int) -> InlineKeyboardMarkup:
     rows = [[InlineKeyboardButton("✅ Send this list",
                                   callback_data=f"{CB_SONG_PREFIX}send")]]
+    edits = [InlineKeyboardButton("➕ Add",
+                                  callback_data=f"{CB_SONG_PREFIX}add")]
+    if count > 1:
+        edits.append(InlineKeyboardButton(
+            "↕️ Move", callback_data=f"{CB_SONG_PREFIX}move"))
+    rows.append(edits)
     if count:
         rows.append([InlineKeyboardButton("🗑 Remove a song",
                                           callback_data=f"{CB_SONG_PREFIX}remove")])
     rows.append([InlineKeyboardButton("✖ Cancel",
                                       callback_data=f"{CB_SONG_PREFIX}cancel")])
+    return InlineKeyboardMarkup(rows)
+
+
+def move_keyboard(songs: list[Song]) -> InlineKeyboardMarkup:
+    """Which song to move."""
+    rows = [
+        [InlineKeyboardButton(f"{n}. {_result_label(song)}",
+                              callback_data=f"{CB_SONG_PREFIX}mv:{n - 1}")]
+        for n, song in enumerate(songs, 1)
+    ]
+    rows.append([InlineKeyboardButton("⬅ Back",
+                                      callback_data=f"{CB_SONG_PREFIX}back")])
+    return InlineKeyboardMarkup(rows)
+
+
+def position_keyboard(count: int, moving: int) -> InlineKeyboardMarkup:
+    """Where the song at index *moving* should go.
+
+    Every position but its own. Two taps reach any place in the list; arrows
+    would take nine to bring song eleven to second.
+    """
+    buttons = [
+        InlineKeyboardButton(str(n + 1),
+                             callback_data=f"{CB_SONG_PREFIX}mvto:{moving}:{n}")
+        for n in range(count) if n != moving
+    ]
+    rows = [buttons[n:n + NUMBERS_PER_ROW]
+            for n in range(0, len(buttons), NUMBERS_PER_ROW)]
+    rows.append([InlineKeyboardButton("🔢 Move a different song",
+                                      callback_data=f"{CB_SONG_PREFIX}move")])
+    rows.append([InlineKeyboardButton("⬅ Back",
+                                      callback_data=f"{CB_SONG_PREFIX}back")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -496,12 +553,13 @@ async def sl_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     # Kept so sl_preview can re-post the picker with the same heading. Cleared
     # alongside `results` wherever those are dropped.
     state["query"] = query
-    await _show_candidates(update.message.reply_text, query, results)
+    message = await _show_candidates(update.message.reply_text, query, results)
+    _open_menu(context, message)
     return SL_PICK
 
 
 async def _show_candidates(send, query: str, results: list[Song],
-                           fixing: bool = False):
+                           way_out: list | None = None):
     """The picker: the numbered detail block and its keyboard.
 
     One function because sl_preview re-posts the same screen BELOW the clips
@@ -517,13 +575,14 @@ async def _show_candidates(send, query: str, results: list[Song],
         f"🔍 {len(results)} match(es) for "
         f"“{html.escape(query, quote=False)}”. Which one?\n\n"
         f"{render_candidates(results)}",
-        reply_markup=results_keyboard(results, fixing),
+        reply_markup=results_keyboard(results, way_out),
         parse_mode=ParseMode.HTML,
         link_preview_options=NO_PREVIEW,
     )
 
 
-async def sl_preview(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def sl_preview(update: Update,
+                     context: ContextTypes.DEFAULT_TYPE) -> int | None:
     """Send a thirty-second clip of each candidate, then re-post the picker.
 
     WHY A BUTTON AND NOT AUTOMATIC
@@ -544,6 +603,9 @@ async def sl_preview(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     buttons mean exactly what the old ones meant.
     """
     query = update.callback_query
+    if _out_of_date(query, context):
+        await query.answer(OUT_OF_DATE)
+        return None
     await query.answer()
     results: list[Song] = _state(context).get("results") or []
     if not results:
@@ -551,13 +613,14 @@ async def sl_preview(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await query.edit_message_text(
             "Those results are no longer on offer. Send the song name again.")
         return SL_QUERY
-    await _preview_and_repost(query, context, results)
+    message = await _preview_and_repost(query, context, results)
+    _open_menu(context, message)
     return SL_PICK
 
 
 async def _preview_and_repost(query, context: ContextTypes.DEFAULT_TYPE,
                               results: list[Song],
-                              fixing: bool = False):
+                              way_out: list | None = None):
     """The work of sl_preview, shared with the review's picker.
 
     Returns the re-posted picker.
@@ -579,7 +642,7 @@ async def _preview_and_repost(query, context: ContextTypes.DEFAULT_TYPE,
         )
     return await _show_candidates(query.message.reply_text,
                                   state.get("query") or "those", results,
-                                  fixing)
+                                  way_out)
 
 
 async def _send_previews(chat_id: int, context: ContextTypes.DEFAULT_TYPE,
@@ -810,8 +873,12 @@ async def sl_cancel_command(update: Update,
     return await cancel_conversation(update, context)
 
 
-async def sl_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def sl_pick(update: Update,
+                  context: ContextTypes.DEFAULT_TYPE) -> int | None:
     query = update.callback_query
+    if _out_of_date(query, context):
+        await query.answer(OUT_OF_DATE)
+        return None
     await query.answer()
     state = _state(context)
     results: list[Song] = state.get("results") or []
@@ -835,8 +902,11 @@ async def sl_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def sl_search_again(update: Update,
-                          context: ContextTypes.DEFAULT_TYPE) -> int:
+                          context: ContextTypes.DEFAULT_TYPE) -> int | None:
     query = update.callback_query
+    if _out_of_date(query, context):
+        await query.answer(OUT_OF_DATE)
+        return None
     await query.answer()
     state = _state(context)
     state.pop("results", None)
@@ -1323,6 +1393,23 @@ async def sl_review_end(update: Update,
     return await _use_batch(update, context, update.message.reply_text)
 
 
+async def sl_review_discard(update: Update,
+                            context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Drop the paste under review and keep the songs chosen before it."""
+    query = update.callback_query
+    state, batch = _state(context), _batch(context)
+    if batch.busy or not state["songs"]:
+        # An old review can carry this button into a list with no other songs.
+        await query.answer(_busy_reply(batch) if batch.busy
+                           else "There are no other songs to go back to.")
+        return SL_REVIEW
+    await query.answer()
+    await _take_off_buttons(context, update.effective_chat.id, batch)
+    state.pop("batch")
+    await _show_confirmation(query.message.reply_text, state["songs"])
+    return SL_CONFIRM
+
+
 async def _use_batch(update: Update, context: ContextTypes.DEFAULT_TYPE,
                      send) -> int:
     state, batch = _state(context), _batch(context)
@@ -1388,7 +1475,7 @@ async def sl_review_fix(update: Update,
         return await _ask_again(context, query.message.reply_text)
     state["results"], state["query"] = line.results, line.query
     message = await _show_candidates(query.message.reply_text, line.query,
-                                     line.results, fixing=True)
+                                     line.results, way_out=_fix_rows())
     batch.live_id = message.message_id
     return SL_FIX
 
@@ -1425,7 +1512,8 @@ async def sl_fix_preview(update: Update,
     query = update.callback_query
     await query.answer()
     message = await _preview_and_repost(
-        query, context, _state(context).get("results") or [], fixing=True)
+        query, context, _state(context).get("results") or [],
+        way_out=_fix_rows())
     _batch(context).live_id = message.message_id
     return SL_FIX
 
@@ -1475,7 +1563,7 @@ async def sl_fix_text(update: Update,
     state = _state(context)
     state["results"], state["query"] = results, text
     message = await _show_candidates(update.message.reply_text, text, results,
-                                     fixing=True)
+                                     way_out=_fix_rows())
     batch.live_id = message.message_id
     return SL_FIX
 
@@ -1503,6 +1591,20 @@ async def sl_fix_back(update: Update,
 # Confirming, editing, sending
 # ---------------------------------------------------------------------------
 
+def _open_menu(context: ContextTypes.DEFAULT_TYPE, message) -> None:
+    """Make *message* the one whose edit buttons are acted on."""
+    _state(context)[MENU_ID_KEY] = message.message_id
+
+
+def _out_of_date(query, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Whether a tap came from an edit screen that is no longer the open one."""
+    live = _state(context).get(MENU_ID_KEY)
+    return live is not None and query.message.message_id != live
+
+
+OUT_OF_DATE = ("Those buttons are out of date. Use the most recent message.")
+
+
 async def sl_remove_menu(update: Update,
                          context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
@@ -1513,11 +1615,16 @@ async def sl_remove_menu(update: Update,
         return await _finish(context, query.message.chat_id)
     await query.edit_message_text("Which song should come off the list?",
                                   reply_markup=remove_keyboard(songs))
+    _open_menu(context, query.message)
     return SL_REMOVE
 
 
-async def sl_remove(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def sl_remove(update: Update,
+                    context: ContextTypes.DEFAULT_TYPE) -> int | None:
     query = update.callback_query
+    if _out_of_date(query, context):
+        await query.answer(OUT_OF_DATE)
+        return None
     await query.answer()
     songs = _songs(context)
     index = int(query.data.rsplit(":", 1)[1])
@@ -1532,9 +1639,183 @@ async def sl_remove(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def sl_back_to_confirm(update: Update,
                              context: ContextTypes.DEFAULT_TYPE) -> int:
+    """⬅ Back, from any of the edits: nothing changes.
+
+    The message is edited so that its buttons go: they are for a list that may
+    be different by the time anybody scrolls back to them.
+    """
     query = update.callback_query
     await query.answer()
+    await query.edit_message_text("Nothing changed.")
+    _drop_search(context)
     return await _back_to_confirm(query, context, _songs(context))
+
+
+def _drop_search(context: ContextTypes.DEFAULT_TYPE) -> None:
+    for key in ("results", "query"):
+        _state(context).pop(key, None)
+
+
+# -- Moving a song ------------------------------------------------------------
+
+async def sl_move_menu(update: Update,
+                       context: ContextTypes.DEFAULT_TYPE) -> int | None:
+    """Ask which song. Also "a different song", from the positions screen."""
+    query = update.callback_query
+    songs = _songs(context)
+    if len(songs) < 2:
+        await query.answer("There is nothing to move it past.")
+        return None
+    await query.answer()
+    await query.edit_message_text("Which song should move?",
+                                  reply_markup=move_keyboard(songs))
+    _open_menu(context, query.message)
+    return SL_MOVE
+
+
+async def sl_move_again(update: Update,
+                        context: ContextTypes.DEFAULT_TYPE) -> int | None:
+    query = update.callback_query
+    if _out_of_date(query, context):
+        await query.answer(OUT_OF_DATE)
+        return None
+    return await sl_move_menu(update, context)
+
+
+async def sl_move_pick(update: Update,
+                       context: ContextTypes.DEFAULT_TYPE) -> int | None:
+    """A song to move: ask where to. The list is shown to count against."""
+    query = update.callback_query
+    songs = _songs(context)
+    index = int(query.data.rsplit(":", 1)[1])
+    if _out_of_date(query, context) or index >= len(songs):
+        await query.answer(OUT_OF_DATE)
+        return None
+    await query.answer()
+    listing = "\n".join(f"{n}. {_result_label(song)}"
+                        for n, song in enumerate(songs, 1))
+    question = (f"Song {index + 1} is “{songs[index].title}”. Which number "
+                "should it be?")
+    # One message, because it is edited in place and only one may be live.
+    text = f"{listing}\n\n{question}"
+    try:
+        await query.edit_message_text(
+            text if len(text) <= MAX_MESSAGE_CHARS else question,
+            reply_markup=position_keyboard(len(songs), index))
+    except BadRequest as exc:
+        # A double tap edits the message to what it already says.
+        if "not modified" not in str(exc).lower():
+            raise
+    return SL_MOVE
+
+
+async def sl_move_to(update: Update,
+                     context: ContextTypes.DEFAULT_TYPE) -> int | None:
+    query = update.callback_query
+    songs = _songs(context)
+    start, end = (int(part) for part in query.data.rsplit(":", 2)[1:])
+    if _out_of_date(query, context) or max(start, end) >= len(songs):
+        await query.answer(OUT_OF_DATE)
+        return None
+    await query.answer()
+    song = songs.pop(start)
+    songs.insert(end, song)
+    await query.edit_message_text(
+        f"↕️ “{song.title}” is now number {end + 1}.")
+    return await _back_to_confirm(query, context, songs)
+
+
+# -- Adding from the confirm screen -------------------------------------------
+
+async def sl_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Ask for more songs: anything the first prompt takes.
+
+    The confirm message becomes the prompt, so its Send button cannot be
+    tapped for a list that is about to change.
+    """
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(
+        "Send the song to add: its name, and the artist if you know it, or an "
+        "Apple Music link. Several at once work too, one per line, or part of "
+        "an earlier list.\n\nNew songs go at the end; ↕️ Move can place them.",
+        reply_markup=InlineKeyboardMarkup(_add_rows()))
+    _open_menu(context, query.message)
+    return SL_ADD
+
+
+async def sl_add_text(update: Update,
+                      context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = (update.message.text or "").strip()
+    if song_matching.is_list(text) or apple_music.find_links(text):
+        # The review takes over, and its ✅ leads back to the confirm screen.
+        # SL_QUERY means it found no song in the message and said so.
+        started = await _start_batch(update, context, text)
+        return SL_ADD if started == SL_QUERY else started
+    results = await apple_music.search_songs(text)
+    if not results:
+        await update.message.reply_text(
+            f"🔍 I could not find anything for “{text}”.\n\n"
+            "Check the spelling and send it again, or /end to go back to the "
+            "list without adding anything.")
+        return SL_ADD
+    state = _state(context)
+    state["results"], state["query"] = results, text
+    message = await _show_candidates(update.message.reply_text, text, results,
+                                     way_out=_add_rows())
+    _open_menu(context, message)
+    return SL_ADD_PICK
+
+
+async def sl_add_pick(update: Update,
+                      context: ContextTypes.DEFAULT_TYPE) -> int | None:
+    query = update.callback_query
+    songs = _songs(context)
+    results: list[Song] = _state(context).get("results") or []
+    index = int(query.data.rsplit(":", 1)[1])
+    if _out_of_date(query, context) or index >= len(results):
+        await query.answer(OUT_OF_DATE)
+        return None
+    await query.answer()
+    song = results[index]
+    songs.append(song)
+    _drop_search(context)
+    await query.edit_message_text(
+        f"✅ Added {len(songs)}. {song.title} by {song.artist}")
+    return await _back_to_confirm(query, context, songs)
+
+
+async def sl_add_preview(update: Update,
+                         context: ContextTypes.DEFAULT_TYPE) -> int | None:
+    query = update.callback_query
+    if _out_of_date(query, context):
+        await query.answer(OUT_OF_DATE)
+        return None
+    await query.answer()
+    message = await _preview_and_repost(
+        query, context, _state(context).get("results") or [],
+        way_out=_add_rows())
+    _open_menu(context, message)
+    return SL_ADD_PICK
+
+
+async def sl_add_again(update: Update,
+                       context: ContextTypes.DEFAULT_TYPE) -> int | None:
+    """None of these: back to the prompt, in the same message."""
+    query = update.callback_query
+    if _out_of_date(query, context):
+        await query.answer(OUT_OF_DATE)
+        return None
+    _drop_search(context)
+    return await sl_add(update, context)
+
+
+async def sl_add_end(update: Update,
+                     context: ContextTypes.DEFAULT_TYPE) -> int:
+    """/end, typed from habit: back to the list as it stands."""
+    _drop_search(context)
+    await _show_confirmation(update.message.reply_text, _songs(context))
+    return SL_CONFIRM
 
 
 async def _back_to_confirm(query, context: ContextTypes.DEFAULT_TYPE,
@@ -1712,6 +1993,13 @@ def _cb_indexed(callback, verb: str) -> CallbackQueryHandler:
         callback, pattern=f"^{re.escape(CB_SONG_PREFIX + verb + ':')}\\d+$")
 
 
+def _cb_two_indexes(callback, verb: str) -> CallbackQueryHandler:
+    """A handler for a button carrying two, e.g. `sl:mvto:10:1`."""
+    return CallbackQueryHandler(
+        callback,
+        pattern=f"^{re.escape(CB_SONG_PREFIX + verb + ':')}\\d+:\\d+$")
+
+
 def stale_button_handler() -> CallbackQueryHandler:
     """Replies to any `sl:` tap the conversation did not handle.
 
@@ -1771,6 +2059,8 @@ def song_list_conversation() -> ConversationHandler:
             SL_CONFIRM: [
                 _cb(sl_choose_recipient, "send"),
                 _cb(sl_remove_menu, "remove"),
+                _cb(sl_add, "add"),
+                _cb(sl_move_menu, "move"),
                 _cb(sl_cancel, "cancel"),
             ],
             SL_REMOVE: [
@@ -1791,6 +2081,7 @@ def song_list_conversation() -> ConversationHandler:
                 _cb(sl_review_retry, "retry"),
                 _cb(sl_review_hear, "hear"),
                 _cb(sl_review_use, "use"),
+                _cb(sl_review_discard, "discard"),
                 _cb(sl_cancel, "cancel"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND,
                                sl_review_text),
@@ -1808,6 +2099,28 @@ def song_list_conversation() -> ConversationHandler:
                 _cb(sl_fix_drop, "drop"),
                 _cb(sl_fix_back, "review"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, sl_fix_text),
+            ],
+            # The confirm screen's edits. "back" is harmless in all of them.
+            SL_ADD: [
+                CommandHandler("end", sl_add_end),
+                CommandHandler("list", sl_list),
+                _cb(sl_back_to_confirm, "back"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, sl_add_text),
+            ],
+            SL_ADD_PICK: [
+                CommandHandler("end", sl_add_end),
+                CommandHandler("list", sl_list),
+                _cb_indexed(sl_add_pick, "pick"),
+                _cb(sl_add_preview, "preview"),
+                _cb(sl_add_again, "none"),
+                _cb(sl_back_to_confirm, "back"),
+            ],
+            SL_MOVE: [
+                CommandHandler("list", sl_list),
+                _cb_indexed(sl_move_pick, "mv"),
+                _cb_two_indexes(sl_move_to, "mvto"),
+                _cb(sl_move_again, "move"),
+                _cb(sl_back_to_confirm, "back"),
             ],
         },
         fallbacks=[CommandHandler("cancel", sl_cancel_command)],

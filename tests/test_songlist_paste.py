@@ -663,7 +663,7 @@ class TestFixingALine:
                 "sl:review"} == set(data)
 
     async def test_there_is_no_cancel_the_whole_list_beside_one_song(self):
-        assert "sl:cancel" not in _buttons(w.results_keyboard([GRACE], True))
+        assert "sl:cancel" not in _buttons(w.results_keyboard([GRACE], w._fix_rows()))
         assert "sl:cancel" in _buttons(w.results_keyboard([GRACE]))
 
     async def test_picking_replaces_only_that_line(self):
@@ -972,7 +972,7 @@ class TestPtbReachesTheReviewHandlers:
         found.record([GRACE])
         for state, markup in (
                 (w.SL_REVIEW, w.review_keyboard([missing, found], [])),
-                (w.SL_FIX, w.results_keyboard([GRACE], True))):
+                (w.SL_FIX, w.results_keyboard([GRACE], w._fix_rows()))):
             conv = self._mid_conversation(state)
             for data in _buttons(markup):
                 assert self._chosen(conv, self._tap(data)), (state, data)

@@ -2,7 +2,7 @@
 #
 # Pull the latest code and restart the bot. Run ON THE SERVER:
 #
-#   cd ~/christofgod_bot && ./deploy/update.sh
+#   cd ~/repos/christofgod_bot && ./deploy/update.sh
 #
 # Optionally pin a release:  ./deploy/update.sh v0.9.0
 #

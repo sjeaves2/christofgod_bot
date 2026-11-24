@@ -48,10 +48,16 @@ def _context(songs=None, **state):
     return ctx
 
 
+#: One message id for whatever these fakes send and whatever is tapped, so that
+#: a tap is on the newest picker. tests/test_songlist_edit.py has the others.
+PICKER_ID = 1
+
+
 def _message_update(text="", uid=7):
     update = MagicMock()
     update.message.text = text
-    update.message.reply_text = AsyncMock()
+    update.message.reply_text = AsyncMock(
+        return_value=MagicMock(message_id=PICKER_ID))
     update.effective_user.id = uid
     update.effective_user.username = "bishop"
     update.effective_user.full_name = "The Bishop"
@@ -63,7 +69,9 @@ def _callback_update(data, uid=7):
     update.callback_query.data = data
     update.callback_query.answer = AsyncMock()
     update.callback_query.edit_message_text = AsyncMock()
-    update.callback_query.message.reply_text = AsyncMock()
+    update.callback_query.message.message_id = PICKER_ID
+    update.callback_query.message.reply_text = AsyncMock(
+        return_value=MagicMock(message_id=PICKER_ID))
     update.effective_user.id = uid
     update.effective_user.username = "bishop"
     update.effective_user.full_name = "The Bishop"
