@@ -39,6 +39,8 @@ from __future__ import annotations
 import html
 import logging
 import re
+import time
+from collections import deque
 from dataclasses import dataclass
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 
@@ -61,8 +63,17 @@ STOREFRONT = "US"
 MAX_RESULTS = 5
 
 # Apple documents a soft limit around 20 calls a minute. One admin typing song
-# titles cannot approach that, so there is no throttling here; if this is ever
-# driven by anything other than a human, add some.
+# titles cannot approach that, so search_songs() itself never waits. A pasted
+# list can, so its caller asks search_delay() before each line and waits that
+# long. Eighteen rather than twenty leaves room for a person searching by hand
+# while a list is running, since the limit is per IP and they share it.
+PASTED_SEARCHES_PER_MINUTE = 18
+_WINDOW_SECONDS = 60.0
+
+#: When recent searches were made, oldest first (time.monotonic). EVERY search
+#: is recorded, typed or pasted, because Apple counts them all.
+_recent_searches: deque[float] = deque()
+
 TIMEOUT_SECONDS = 10.0
 
 # Artwork size to request, in pixels. The API only ever returns 30, 60 and 100,
@@ -492,6 +503,28 @@ def _as_song(result: dict) -> Song | None:
                 release_year=_release_year(result.get("releaseDate")))
 
 
+def _forget_old_searches(now: float) -> None:
+    while _recent_searches and now - _recent_searches[0] >= _WINDOW_SECONDS:
+        _recent_searches.popleft()
+
+
+def search_delay() -> float:
+    """Seconds a pasted list should wait before its next search; 0.0 if none.
+
+    Answers rather than sleeps, so the caller can show the wait, and abandon
+    it when the list is cancelled.
+    """
+    now = time.monotonic()
+    _forget_old_searches(now)
+    if len(_recent_searches) < PASTED_SEARCHES_PER_MINUTE:
+        return 0.0
+    # The search that has to age out before one more fits. Not simply the
+    # oldest: typed searches are never held back, so the window can hold more
+    # than the limit.
+    blocking = _recent_searches[-PASTED_SEARCHES_PER_MINUTE]
+    return max(0.0, blocking + _WINDOW_SECONDS - now)
+
+
 async def search_songs(query: str,
                        limit: int = MAX_RESULTS) -> list[Song]:
     """Candidate songs for the free-text *query*.
@@ -518,6 +551,10 @@ async def search_songs(query: str,
     term = (query or "").strip()
     if not term:
         return []
+
+    now = time.monotonic()
+    _forget_old_searches(now)
+    _recent_searches.append(now)
 
     params = {"term": term, "entity": "song", "limit": limit,
               "country": STOREFRONT}

@@ -4,6 +4,9 @@ An admin types a song — name and, if known, artist, in ONE message — and pic
 from Apple Music search results. Repeat until /end, confirm the list, choose a
 recipient, send. Typically ten or eleven songs.
 
+Or they paste the whole list, one song per line, and check every match on ONE
+review screen. See "PASTING A LIST" below.
+
 ONE PROMPT, NOT TWO
 -------------------
 The first version asked for the title and then the artist separately, on the
@@ -44,6 +47,29 @@ here caused a production bug, because with allow_reentry=True PTB checks entry
 points BEFORE state handlers, so the broad pattern swallowed every live tap.
 See song_list_conversation() and stale_button_handler() for the full reason.
 
+PASTING A LIST
+--------------
+One song at a time cost about twenty-two messages and taps for eleven songs,
+most of them confirming a top result that was right. A message of two or more
+lines is searched line by line, the top result is taken PROVISIONALLY, and one
+review screen shows what was typed beside what was found. Only the wrong ones
+need a tap. song_matching.py decides which matches are flagged.
+
+Nothing provisional can reach a recipient: the review leads to the same
+confirm, recipient and send steps as a list built one song at a time.
+
+THE SEARCHES RUN IN A BACKGROUND TASK, and must. bot.py does not enable
+concurrent updates, so PTB runs one handler at a time for the WHOLE bot: a
+handler awaiting eleven searches, or a minute of throttling, would leave every
+member unanswered and the admin's own /cancel waiting behind it. The handler
+returns SL_REVIEW at once and the task posts the review when it is ready.
+
+A task outlives the handler, so it can also outlive the conversation. Every
+step asks _still_wanted() first: a cancelled or restarted list must not go on
+searching, or post a review or a clip nobody will clean up. It also stops when
+the bot is shutting down, because Application.stop() WAITS for these tasks and
+a deploy must not sit out a throttled search.
+
 A part-built list is NOT persisted. That was a deliberate choice: the
 alternative is a tenth YAML store to create, gitignore, keep out of the backup
 globs and garbage-collect, for something a restart interrupts a few times a
@@ -52,16 +78,22 @@ year. The cost is a lost list, so the first message says so plainly.
 
 from __future__ import annotations
 
+import asyncio
+import html
 import logging
 import re
+import time
+from dataclasses import dataclass
 from typing import Any
 
 import apple_music
+import song_matching
 import storage
 from apple_music import Song
 from handlers.shared import cancel_conversation
 from permissions import admin_only, user_info
 from settings import activity
+from song_matching import Line
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -81,7 +113,8 @@ from telegram.ext import (
 
 logger = logging.getLogger(__name__)
 
-SL_QUERY, SL_PICK, SL_CONFIRM, SL_REMOVE, SL_RECIPIENT = range(5)
+(SL_QUERY, SL_PICK, SL_CONFIRM, SL_REMOVE, SL_RECIPIENT,
+ SL_REVIEW, SL_FIX, SL_RETYPE) = range(8)
 
 CB_SONG_PREFIX = "sl:"
 
@@ -142,6 +175,33 @@ MAX_MESSAGE_CHARS = 3900
 # scrubber is wrong and nothing else is, which is why a value is hardcoded
 # rather than the file downloaded to measure it.
 PREVIEW_SECONDS = 30
+
+# Least time between edits of the "Searching 3 of 11" message. Telegram limits
+# how fast one chat may be written to, and the search outruns anyone's reading.
+PROGRESS_SECONDS = 1.5
+
+# Telegram allows about a hundred buttons on one keyboard and rejects the whole
+# message past that, which would lose the review. Ten are kept back for the
+# rows underneath the numbers.
+MAX_NUMBER_BUTTONS = 90
+NUMBERS_PER_ROW = 5
+
+#: How much of a typed line the review echoes back.
+MAX_QUERY_SHOWN = 80
+
+
+@dataclass
+class Batch:
+    """A pasted list under review.
+
+    `busy` says what the background task is doing, or is "" when it is idle.
+    `live_id` is the one message currently carrying this batch's buttons, the
+    review or a picker opened from it; see _take_off_buttons.
+    """
+
+    lines: list[Line]
+    busy: str = ""
+    live_id: int | None = None
 
 
 def _state(context: ContextTypes.DEFAULT_TYPE) -> dict[str, Any]:
@@ -208,7 +268,8 @@ def render_candidates(results: list[Song]) -> str:
     return "\n\n".join(song.detail(n) for n, song in enumerate(results, 1))
 
 
-def results_keyboard(results: list[Song]) -> InlineKeyboardMarkup:
+def results_keyboard(results: list[Song],
+                     fixing: bool = False) -> InlineKeyboardMarkup:
     """A numbered button per candidate, plus a way out when none is right.
 
     Numbers, not labels: render_candidates carries the identifying detail in
@@ -218,6 +279,10 @@ def results_keyboard(results: list[Song]) -> InlineKeyboardMarkup:
 
     The preview row is only offered when at least one candidate actually has
     a clip — a button that silently does nothing is worse than no button.
+
+    *fixing* is the same screen opened from the review of a pasted list. Its
+    way out is back to that review: "cancel the whole list" beside a question
+    about one song of eleven would be a costly mis-tap.
     """
     rows = [[
         InlineKeyboardButton(str(n + 1),
@@ -230,6 +295,60 @@ def results_keyboard(results: list[Song]) -> InlineKeyboardMarkup:
             callback_data=f"{CB_SONG_PREFIX}preview")])
     rows.append([InlineKeyboardButton("🔁 None of these — search again",
                                       callback_data=f"{CB_SONG_PREFIX}none")])
+    if fixing:
+        rows += _fix_rows()
+    else:
+        rows.append([InlineKeyboardButton(
+            "✖ Cancel the whole list",
+            callback_data=f"{CB_SONG_PREFIX}cancel")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _fix_rows() -> list[list[InlineKeyboardButton]]:
+    return [
+        [InlineKeyboardButton("🚫 Leave this song out",
+                              callback_data=f"{CB_SONG_PREFIX}drop")],
+        [InlineKeyboardButton("⬅ Back to the review",
+                              callback_data=f"{CB_SONG_PREFIX}review")],
+    ]
+
+
+def review_keyboard(lines: list[Line], already: list[Song]) -> InlineKeyboardMarkup:
+    """A number per song, then what can be done with the whole list.
+
+    The ✅ label states how many songs go in AND how many do not, so a song
+    that was never found cannot be dropped without being read. It is absent
+    when there is nothing to use.
+    """
+    icons = [icon for icon, _ in song_matching.flags(lines, already)]
+    shown = list(range(len(lines)))
+    if len(shown) > MAX_NUMBER_BUTTONS:
+        shown = [n for n in shown if icons[n] != song_matching.FINE]
+        shown = shown[:MAX_NUMBER_BUTTONS]
+    buttons = [
+        InlineKeyboardButton(
+            str(n + 1) if icons[n] == song_matching.FINE
+            else f"{icons[n]} {n + 1}",
+            callback_data=f"{CB_SONG_PREFIX}fix:{n}")
+        for n in shown
+    ]
+    rows = [buttons[n:n + NUMBERS_PER_ROW]
+            for n in range(0, len(buttons), NUMBERS_PER_ROW)]
+
+    if any(line.missing or (not line.searched and not line.dropped)
+           for line in lines):
+        rows.append([InlineKeyboardButton(
+            f"🔄 Search again for the {song_matching.MISSING} ones",
+            callback_data=f"{CB_SONG_PREFIX}retry")])
+    if any(line.song and line.song.preview_url for line in lines):
+        rows.append([InlineKeyboardButton(
+            "🔊 Hear my picks", callback_data=f"{CB_SONG_PREFIX}hear")])
+    used = sum(1 for line in lines if line.song)
+    if used:
+        skipped = len(lines) - used
+        rows.append([InlineKeyboardButton(
+            f"✅ Use {used} song(s)" + (f", skip {skipped}" if skipped else ""),
+            callback_data=f"{CB_SONG_PREFIX}use")])
     rows.append([InlineKeyboardButton("✖ Cancel the whole list",
                                       callback_data=f"{CB_SONG_PREFIX}cancel")])
     return InlineKeyboardMarkup(rows)
@@ -300,11 +419,16 @@ async def recipient_keyboard() -> InlineKeyboardMarkup | None:
 async def cmd_songlist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     uid, uname, dname = user_info(update)
     activity.log_command("songlist", uid, uname, dname, details="started")
+    # Starting again abandons whatever was being built, so its clips go too —
+    # their ids live in the state this replaces.
+    await _clear_previews(update.effective_chat.id, context, _state(context))
     context.user_data[STATE_KEY] = {"songs": []}
     await update.message.reply_text(
         "🎵 Building a worship song list.\n\n"
-        "Send me the first song — the name, and the artist too if you know "
-        "it, in one message. For example:\n\n"
+        "Paste the whole list, one song per line, and check every match on "
+        "one screen — or send one song at a time.\n\n"
+        "Give each song's name, and the artist too if you know it, side by "
+        "side. For example:\n\n"
         "    Amazing Grace CeCe Winans\n\n"
         "The artist is optional, but it helps: a hymn is often recorded by "
         "several people. I will look it up on Apple Music and show you what "
@@ -337,6 +461,9 @@ async def sl_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text("Send me a song name, or /end.")
         return SL_QUERY
 
+    if song_matching.is_list(query):
+        return await _start_batch(update, context, query)
+
     results = await apple_music.search_songs(query)
     if not results:
         # search_songs never raises and returns [] for "nothing found" and for
@@ -357,19 +484,24 @@ async def sl_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return SL_PICK
 
 
-async def _show_candidates(send, query: str, results: list[Song]) -> None:
+async def _show_candidates(send, query: str, results: list[Song],
+                           fixing: bool = False):
     """The picker: the numbered detail block and its keyboard.
 
     One function because sl_preview re-posts the same screen BELOW the clips
     it just sent, and a picker that differed between the two routes would be
     two things to keep in step. parse_mode must stay HTML: Song.detail emits
     <b> tags and escapes for HTML, so plain text would show the admin the raw
-    markup.
+    markup. The query is escaped for the same reason: a stray "<" in it would
+    make Telegram reject the whole picker.
+
+    Returns the message sent, so a review can take its buttons off later.
     """
-    await send(
-        f"🔍 {len(results)} match(es) for “{query}”. Which one?\n\n"
+    return await send(
+        f"🔍 {len(results)} match(es) for "
+        f"“{html.escape(query, quote=False)}”. Which one?\n\n"
         f"{render_candidates(results)}",
-        reply_markup=results_keyboard(results),
+        reply_markup=results_keyboard(results, fixing),
         parse_mode=ParseMode.HTML,
         link_preview_options=NO_PREVIEW,
     )
@@ -397,14 +529,24 @@ async def sl_preview(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     query = update.callback_query
     await query.answer()
-    state = _state(context)
-    results: list[Song] = state.get("results") or []
+    results: list[Song] = _state(context).get("results") or []
     if not results:
         # Only reachable from a keyboard that outlived its search.
         await query.edit_message_text(
             "Those results are no longer on offer. Send the song name again.")
         return SL_QUERY
+    await _preview_and_repost(query, context, results)
+    return SL_PICK
 
+
+async def _preview_and_repost(query, context: ContextTypes.DEFAULT_TYPE,
+                              results: list[Song],
+                              fixing: bool = False):
+    """The work of sl_preview, shared with the review's picker.
+
+    Returns the re-posted picker.
+    """
+    state = _state(context)
     try:
         await query.edit_message_reply_markup(reply_markup=None)
     except TelegramError as exc:
@@ -419,14 +561,16 @@ async def sl_preview(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             "⚠️ I could not fetch any previews just now. "
             "The details below should still help, or search again."
         )
-    await _show_candidates(query.message.reply_text,
-                           state.get("query") or "those", results)
-    return SL_PICK
+    return await _show_candidates(query.message.reply_text,
+                                  state.get("query") or "those", results,
+                                  fixing)
 
 
 async def _send_previews(chat_id: int, context: ContextTypes.DEFAULT_TYPE,
                          results: list[Song],
-                         state: dict[str, Any]) -> int:
+                         state: dict[str, Any],
+                         numbers: list[int] | None = None,
+                         wanted=lambda: True) -> int:
     """Clips for every candidate that has one. Returns how many were sent.
 
     Sequential, not gathered: five concurrent sends to one chat invite
@@ -484,6 +628,14 @@ async def _send_previews(chat_id: int, context: ContextTypes.DEFAULT_TYPE,
         is1-ssl.mzstatic.com         200, 22442 bytes, 0.05s
         audio-ssl.itunes.apple.com   200, 1075543 bytes, 1.01s
 
+    *numbers* labels the clips when they are not simply 1, 2, 3: a pasted list
+    with a song missing from the middle must still match its review numbers.
+
+    *wanted* is asked before each clip and again after it. When this runs as a
+    background task the admin can cancel mid-send, and _clear_previews has
+    then already been and gone: a clip sent after that would stay in the chat
+    for good, so the one in flight is deleted here and the rest are not sent.
+
     Keep that check in any change here. Five candidates now cost about 5 MB
     down and 5 MB up, one clip held in memory at a time; the box had 189 MB
     free. The $5 plan's transfer allowance makes 10 MB irrelevant.
@@ -491,9 +643,11 @@ async def _send_previews(chat_id: int, context: ContextTypes.DEFAULT_TYPE,
     sent = 0
     uploaded = 0
     with_artwork = 0
-    for index, song in enumerate(results, 1):
+    for index, song in zip(numbers or range(1, len(results) + 1), results):
         if not song.preview_url:
             continue
+        if not wanted():
+            break
         # Clip FIRST, then artwork only if the clip arrived. Telegram ignores
         # a thumbnail sent beside a linked file, so artwork fetched for a
         # fallback send would be downloaded and then discarded — 22 kB of
@@ -534,6 +688,10 @@ async def _send_previews(chat_id: int, context: ContextTypes.DEFAULT_TYPE,
             if artwork:
                 with_artwork += 1
             message_id = getattr(message, "message_id", None)
+            if not wanted():
+                await context.bot.delete_message(chat_id=chat_id,
+                                                 message_id=message_id)
+                break
             if message_id is not None:
                 state.setdefault(PREVIEW_IDS_KEY, []).append(message_id)
         except TelegramError as exc:
@@ -785,6 +943,486 @@ async def _show_confirmation(send, songs: list[Song]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# A pasted list: search it, review it, fix a line
+# ---------------------------------------------------------------------------
+
+def _batch(context: ContextTypes.DEFAULT_TYPE) -> Batch:
+    return _state(context).setdefault("batch", Batch([]))
+
+
+def _still_wanted(context: ContextTypes.DEFAULT_TYPE, state: dict[str, Any],
+                  batch: Batch) -> bool:
+    """Whether a background task's list is still the one being built.
+
+    Compared by identity: /cancel and /songlist replace or drop the state, so
+    a task holding the old one must stop. `running` goes False at the START of
+    Application.stop(), which then waits for these tasks.
+    """
+    return (context.application.running
+            and context.user_data.get(STATE_KEY) is state
+            and state.get("batch") is batch)
+
+
+async def _take_off_buttons(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
+                            batch: Batch) -> None:
+    """Strip the buttons from whichever review or picker last carried them.
+
+    Only ONE keyboard of a batch is live at a time. The buttons say `pick:2`
+    and `drop`, not which song they were drawn for, so a leftover keyboard
+    from song 3 would otherwise act on song 7.
+    """
+    message_id, batch.live_id = batch.live_id, None
+    if message_id is None:
+        return
+    try:
+        await context.bot.edit_message_reply_markup(
+            chat_id=chat_id, message_id=message_id, reply_markup=None)
+    except TelegramError as exc:
+        logger.warning("Could not clear a song-list keyboard: %s", exc)
+
+
+async def _start_batch(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                       text: str) -> int:
+    """Begin reviewing a pasted list. Songs already chosen are kept."""
+    lines = [Line(query) for query in song_matching.parse_lines(text)]
+    if not lines:
+        await update.message.reply_text(
+            "I could not find a song name in that. Send a song name, or /end.")
+        return SL_QUERY
+    uid, uname, dname = user_info(update)
+    activity.log_command("songlist", uid, uname, dname,
+                         details=f"pasted {len(lines)} line(s)")
+    _state(context)["batch"] = Batch(lines)
+    await _begin_search(update, context, update.message.reply_text)
+    return SL_REVIEW
+
+
+async def _begin_search(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                        send) -> None:
+    """Search the batch's unsearched lines, in the background."""
+    state, batch = _state(context), _batch(context)
+    chat_id = update.effective_chat.id
+    await _take_off_buttons(context, chat_id, batch)
+    total = sum(1 for line in batch.lines if _is_pending(line))
+    progress = await send(_progress_text(1, total))
+    # After the send: if that raised, nothing is running and nothing must
+    # claim to be.
+    batch.busy = "searching"
+    context.application.create_task(
+        _search_pending(chat_id, context, state, batch, progress),
+        update=update)
+
+
+def _is_pending(line: Line) -> bool:
+    return not line.searched and not line.dropped
+
+
+def _progress_text(n: int, total: int, waiting: float = 0.0) -> str:
+    text = f"🔍 Searching {n} of {total}…"
+    if waiting:
+        text += (f"\n⏳ Waiting about {max(1, round(waiting))} seconds: Apple "
+                 "allows about 20 searches a minute.")
+    return text + "\n\n/cancel to abandon the list."
+
+
+async def _search_pending(chat_id: int, context: ContextTypes.DEFAULT_TYPE,
+                          state: dict[str, Any], batch: Batch,
+                          progress) -> None:
+    """The background task: search each pending line, then post the review.
+
+    One at a time, never gathered, so the throttle means something.
+    """
+    def wanted() -> bool:
+        return _still_wanted(context, state, batch)
+
+    try:
+        pending = [line for line in batch.lines if _is_pending(line)]
+        shown_at = time.monotonic()
+        for n, line in enumerate(pending, 1):
+            told = False
+            while wanted() and (delay := apple_music.search_delay()) > 0:
+                if not told:
+                    await _edit_quietly(
+                        progress, _progress_text(n, len(pending), delay))
+                    told = True
+                # Short naps, so a cancel or a shutdown is noticed promptly.
+                await asyncio.sleep(min(delay, 1.0))
+            if not wanted():
+                return
+            now = time.monotonic()
+            if told or now - shown_at >= PROGRESS_SECONDS:
+                shown_at = now
+                await _edit_quietly(progress, _progress_text(n, len(pending)))
+            line.record(await apple_music.search_songs(line.query))
+    finally:
+        batch.busy = ""
+        try:
+            await progress.delete()
+        except TelegramError as exc:
+            logger.warning("Could not delete the progress message: %s", exc)
+
+    if wanted():
+        await _post_review(chat_id, context)
+
+
+async def _edit_quietly(message, text: str) -> None:
+    """Edit a progress message; a failure is not worth stopping a search for."""
+    try:
+        await message.edit_text(text)
+    except TelegramError as exc:
+        logger.warning("Could not update the progress message: %s", exc)
+
+
+def render_review(lines: list[Line], already: list[Song]) -> str:
+    """What was typed beside what was found, one entry per line. HTML.
+
+    Every entry carries the same detail as the picker, flagged or not: a ✓
+    means the WORDS agree, and only the album, length and year can tell the
+    admin whether it is the recording they meant.
+    """
+    entries = []
+    marks = song_matching.flags(lines, already)
+    for n, (line, (icon, note)) in enumerate(zip(lines, marks), 1):
+        song = line.song
+        if song:
+            text = f"{icon} {song.detail(n)}"
+        else:
+            text = f"{icon} {n}. {html.escape(note, quote=False).capitalize()}"
+            note = ""
+        typed = line.query
+        if len(typed) > MAX_QUERY_SHOWN:
+            typed = typed[:MAX_QUERY_SHOWN - 1] + "…"
+        text += f"\n    you typed: {html.escape(typed, quote=False)}"
+        if note:
+            text += f"\n    {html.escape(note, quote=False)}"
+        entries.append(text)
+    return "\n\n".join(entries)
+
+
+def review_heading(lines: list[Line], already: list[Song]) -> str:
+    """The instructions above the review, saying only what applies."""
+    kept = [line for line in lines if not line.dropped]
+    if kept and all(line.missing for line in kept):
+        # search_songs returns [] for "nothing found" and "broken" alike. One
+        # line missing is a typo; every line missing is probably not.
+        return ("⚠️ I found nothing for any of these. The search itself may be "
+                "down: try 🔄 in a few minutes, or tap a number to type that "
+                "song again.")
+    parts = ["📋 Please check these matches. Nothing has been sent."]
+    if already:
+        parts.append(f"They follow the {len(already)} song(s) already chosen.")
+    parts.append("Tap a number to change that song. ✓ means the words match, "
+                 "so check the album, length and year too.")
+    if len(lines) > MAX_NUMBER_BUTTONS:
+        parts.append("In a list this long, only songs with a mark other than "
+                     "✓ have a button.")
+    parts.append("Send more songs to add them.")
+    return "\n".join(parts)
+
+
+async def _post_review(chat_id: int,
+                       context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send the review, with the buttons under its last message."""
+    batch, already = _batch(context), _songs(context)
+    await _take_off_buttons(context, chat_id, batch)
+    body = (review_heading(batch.lines, already) + "\n\n"
+            + render_review(batch.lines, already))
+    chunks = split_for_telegram(body)
+    for n, chunk in enumerate(chunks):
+        is_last = n == len(chunks) - 1
+        message = await context.bot.send_message(
+            chat_id, chunk,
+            reply_markup=(review_keyboard(batch.lines, already)
+                          if is_last else None),
+            parse_mode=ParseMode.HTML,
+            link_preview_options=NO_PREVIEW)
+        if is_last:
+            batch.live_id = message.message_id
+
+
+def _busy_reply(batch: Batch) -> str:
+    return (f"Still {batch.busy}. The review will appear here when that is "
+            "done, or /cancel to abandon the list.")
+
+
+async def sl_review_text(update: Update,
+                         context: ContextTypes.DEFAULT_TYPE) -> int:
+    """More songs sent while reviewing: add them to the review."""
+    batch = _batch(context)
+    if batch.busy:
+        await update.message.reply_text(
+            _busy_reply(batch) + "\n\nSend that again afterwards.")
+        return SL_REVIEW
+    text = (update.message.text or "").strip()
+    queries = (song_matching.parse_lines(text)
+               if song_matching.is_list(text) else [text])
+    batch.lines += [Line(query) for query in queries if query]
+    await _begin_search(update, context, update.message.reply_text)
+    return SL_REVIEW
+
+
+async def sl_review_list(update: Update,
+                         context: ContextTypes.DEFAULT_TYPE) -> int:
+    """/list while a pasted list is open: show the review again."""
+    batch = _batch(context)
+    if batch.busy:
+        await update.message.reply_text(_busy_reply(batch))
+        return SL_REVIEW
+    _leave_fix(context)
+    await _post_review(update.effective_chat.id, context)
+    return SL_REVIEW
+
+
+async def sl_review_retry(update: Update,
+                          context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Search again for the lines that came back empty."""
+    query = update.callback_query
+    batch = _batch(context)
+    if batch.busy:
+        await query.answer(_busy_reply(batch))
+        return SL_REVIEW
+    await query.answer()
+    for line in batch.lines:
+        if line.missing:
+            line.searched = False
+    await _begin_search(update, context, query.message.reply_text)
+    return SL_REVIEW
+
+
+async def sl_review_hear(update: Update,
+                         context: ContextTypes.DEFAULT_TYPE) -> int:
+    """One clip per chosen song, in the background like the search.
+
+    About a second and a megabyte each, so eleven of them inside a handler
+    would hold up the whole bot.
+    """
+    query = update.callback_query
+    state, batch = _state(context), _batch(context)
+    if batch.busy:
+        await query.answer(_busy_reply(batch))
+        return SL_REVIEW
+    await query.answer()
+    chat_id = update.effective_chat.id
+    await _take_off_buttons(context, chat_id, batch)
+    progress = await query.message.reply_text(
+        "🔊 Fetching a clip of each song…\n\n/cancel to abandon the list.")
+    batch.busy = "fetching the clips"
+    context.application.create_task(
+        _play_picks(chat_id, context, state, batch, progress), update=update)
+    return SL_REVIEW
+
+
+async def _play_picks(chat_id: int, context: ContextTypes.DEFAULT_TYPE,
+                      state: dict[str, Any], batch: Batch, progress) -> None:
+    def wanted() -> bool:
+        return _still_wanted(context, state, batch)
+
+    picks = [(n, line.song) for n, line in enumerate(batch.lines, 1)
+             if line.song]
+    try:
+        sent = await _send_previews(
+            chat_id, context, [song for _, song in picks], state,
+            numbers=[n for n, _ in picks], wanted=wanted)
+    finally:
+        batch.busy = ""
+        try:
+            await progress.delete()
+        except TelegramError as exc:
+            logger.warning("Could not delete the progress message: %s", exc)
+
+    if not wanted():
+        return
+    if sent < len(picks):
+        await context.bot.send_message(
+            chat_id, f"⚠️ {len(picks) - sent} of {len(picks)} song(s) had no "
+                     "clip I could fetch.")
+    await _post_review(chat_id, context)
+
+
+async def sl_review_use(update: Update,
+                        context: ContextTypes.DEFAULT_TYPE) -> int:
+    """✅ — the review is right, so go on to the usual confirmation."""
+    query = update.callback_query
+    if _batch(context).busy:
+        await query.answer(_busy_reply(_batch(context)))
+        return SL_REVIEW
+    await query.answer()
+    return await _use_batch(update, context, query.message.reply_text)
+
+
+async def sl_review_end(update: Update,
+                        context: ContextTypes.DEFAULT_TYPE) -> int:
+    """/end, which an admin will type here from habit, means the same."""
+    if _batch(context).busy:
+        await update.message.reply_text(_busy_reply(_batch(context)))
+        return SL_REVIEW
+    return await _use_batch(update, context, update.message.reply_text)
+
+
+async def _use_batch(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                     send) -> int:
+    state, batch = _state(context), _batch(context)
+    chosen = [line.song for line in batch.lines if line.song]
+    if not chosen and not state["songs"]:
+        await send("None of these lines has a song yet. Tap a number in the "
+                   "review to type one again, or /cancel. /list shows the "
+                   "review.")
+        return SL_REVIEW
+    await _take_off_buttons(context, update.effective_chat.id, batch)
+    state["songs"].extend(chosen)
+    state.pop("batch")
+    await _show_confirmation(send, state["songs"])
+    return SL_CONFIRM
+
+
+# -- Fixing one line ---------------------------------------------------------
+#
+# The picker and its previews are the ones used for a single song. `fixing`
+# holds which line is open, beside the `results` and `query` the picker reads.
+
+def _leave_fix(context: ContextTypes.DEFAULT_TYPE) -> None:
+    state = _state(context)
+    for key in ("fixing", "results", "query"):
+        state.pop(key, None)
+
+
+def _fixing(context: ContextTypes.DEFAULT_TYPE) -> tuple[int, Line]:
+    index = _state(context)["fixing"]
+    return index + 1, _batch(context).lines[index]
+
+
+async def _back_to_review(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                          said: str) -> int:
+    """Close the picker with a word on what happened, and show the review."""
+    await update.callback_query.edit_message_text(said)
+    # The edit above already removed that message's buttons.
+    _batch(context).live_id = None
+    _leave_fix(context)
+    await _post_review(update.effective_chat.id, context)
+    return SL_REVIEW
+
+
+async def sl_review_fix(update: Update,
+                        context: ContextTypes.DEFAULT_TYPE) -> int:
+    """A number in the review: open that song's results, or ask for it again."""
+    query = update.callback_query
+    batch = _batch(context)
+    if batch.busy:
+        await query.answer(_busy_reply(batch))
+        return SL_REVIEW
+    await query.answer()
+    index = int(query.data.rsplit(":", 1)[1])
+    if index >= len(batch.lines):
+        # Only reachable from the review of an earlier, longer list.
+        await query.message.reply_text(
+            "That song is not in this list. /list shows the current review.")
+        return SL_REVIEW
+    await _take_off_buttons(context, update.effective_chat.id, batch)
+    state, line = _state(context), batch.lines[index]
+    state["fixing"] = index
+    if not line.results:
+        return await _ask_again(context, query.message.reply_text)
+    state["results"], state["query"] = line.results, line.query
+    message = await _show_candidates(query.message.reply_text, line.query,
+                                     line.results, fixing=True)
+    batch.live_id = message.message_id
+    return SL_FIX
+
+
+async def _ask_again(context: ContextTypes.DEFAULT_TYPE, send) -> int:
+    number, line = _fixing(context)
+    message = await send(
+        f"Send song {number} again — adding the artist, or part of the title, "
+        f"usually helps.\n\nYou typed: {line.query[:MAX_QUERY_SHOWN]}",
+        reply_markup=InlineKeyboardMarkup(_fix_rows()))
+    _batch(context).live_id = message.message_id
+    return SL_RETYPE
+
+
+async def sl_fix_pick(update: Update,
+                      context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    state = _state(context)
+    results: list[Song] = state.get("results") or []
+    index = int(query.data.rsplit(":", 1)[1])
+    if index >= len(results):
+        return await _back_to_review(
+            update, context, "That result is no longer on offer.")
+    number, line = _fixing(context)
+    line.settle(state["query"], results, index)
+    song = results[index]
+    return await _back_to_review(
+        update, context, f"✅ Song {number} is {song.title} by {song.artist}")
+
+
+async def sl_fix_preview(update: Update,
+                         context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    message = await _preview_and_repost(
+        query, context, _state(context).get("results") or [], fixing=True)
+    _batch(context).live_id = message.message_id
+    return SL_FIX
+
+
+async def sl_fix_retype(update: Update,
+                        context: ContextTypes.DEFAULT_TYPE) -> int:
+    """None of these: ask for this one song again."""
+    query = update.callback_query
+    await query.answer()
+    state = _state(context)
+    state.pop("results", None)
+    state.pop("query", None)
+    await _take_off_buttons(context, update.effective_chat.id, _batch(context))
+    return await _ask_again(context, query.message.reply_text)
+
+
+async def sl_fix_text(update: Update,
+                      context: ContextTypes.DEFAULT_TYPE) -> int:
+    """The retyped song. Nothing changes until one of its results is picked."""
+    text = (update.message.text or "").strip()
+    if song_matching.is_list(text):
+        await update.message.reply_text(
+            f"Just song {_fixing(context)[0]} here, please, on one line. "
+            "More songs can be added from the review.")
+        return SL_RETYPE
+    results = await apple_music.search_songs(text)
+    if not results:
+        await update.message.reply_text(
+            f"🔍 I could not find anything for “{text}”.\n\n"
+            "Check the spelling and send it again, or use the buttons above.")
+        return SL_RETYPE
+    batch = _batch(context)
+    await _take_off_buttons(context, update.effective_chat.id, batch)
+    state = _state(context)
+    state["results"], state["query"] = results, text
+    message = await _show_candidates(update.message.reply_text, text, results,
+                                     fixing=True)
+    batch.live_id = message.message_id
+    return SL_FIX
+
+
+async def sl_fix_drop(update: Update,
+                      context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Leave this song out. Its results are kept, so it can be put back."""
+    await update.callback_query.answer()
+    number, line = _fixing(context)
+    line.dropped = True
+    return await _back_to_review(
+        update, context, f"🚫 Song {number} is left out. Tap its number in "
+                         "the review to put it back.")
+
+
+async def sl_fix_back(update: Update,
+                      context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.callback_query.answer()
+    number, _ = _fixing(context)
+    return await _back_to_review(update, context,
+                                 f"Song {number} is unchanged.")
+
+
+# ---------------------------------------------------------------------------
 # Confirming, editing, sending
 # ---------------------------------------------------------------------------
 
@@ -1030,6 +1668,33 @@ def song_list_conversation() -> ConversationHandler:
             SL_RECIPIENT: [
                 _cb_indexed(sl_send, "to"),
                 _cb(sl_cancel, "cancel"),
+            ],
+            # A pasted list. SL_FIX and SL_RETYPE have no "cancel" button;
+            # they go back to the review, which does.
+            SL_REVIEW: [
+                CommandHandler("end", sl_review_end),
+                CommandHandler("list", sl_review_list),
+                _cb_indexed(sl_review_fix, "fix"),
+                _cb(sl_review_retry, "retry"),
+                _cb(sl_review_hear, "hear"),
+                _cb(sl_review_use, "use"),
+                _cb(sl_cancel, "cancel"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND,
+                               sl_review_text),
+            ],
+            SL_FIX: [
+                CommandHandler("list", sl_review_list),
+                _cb_indexed(sl_fix_pick, "pick"),
+                _cb(sl_fix_preview, "preview"),
+                _cb(sl_fix_retype, "none"),
+                _cb(sl_fix_drop, "drop"),
+                _cb(sl_fix_back, "review"),
+            ],
+            SL_RETYPE: [
+                CommandHandler("list", sl_review_list),
+                _cb(sl_fix_drop, "drop"),
+                _cb(sl_fix_back, "review"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, sl_fix_text),
             ],
         },
         fallbacks=[CommandHandler("cancel", sl_cancel_command)],
